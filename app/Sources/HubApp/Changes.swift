@@ -309,7 +309,7 @@ struct DiffFileHeader: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Ledger.band)
+            .background(Ledger.band, in: Rectangle())
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

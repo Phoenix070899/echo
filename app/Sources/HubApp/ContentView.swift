@@ -923,7 +923,7 @@ struct PanelHeader<Content: View>: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Ledger.band)
+            .background(Ledger.band, in: Rectangle())
     }
 }
 
@@ -1018,7 +1018,7 @@ struct WorkerHeader: View {
                 Text(worker.title).foregroundStyle(Ledger.ink2).lineLimit(1)
                 HStack(spacing: 6) {
                     StateMark(color: worker.markColor)
-                    Text(worker.isActive ? "Running" : worker.phaseLabel)
+                    Text(worker.phaseLabel)
                 }
                 .font(.system(size: 12.5))
                 .foregroundStyle(worker.markColor)
@@ -1058,7 +1058,7 @@ struct WorkerHeader: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Ledger.band)
+        .background(Ledger.band, in: Rectangle())
     }
 }
 
@@ -1256,6 +1256,8 @@ struct LedgerRow: View {
 
     private var detailLine: String? {
         if let progress = worker.progress { return progress }
+        if worker.state == .waiting { return "Waiting on background work" }
+        if worker.state == .ended { return "Ended, no Final Report" }
         // Under Done, "Done" says nothing; Failed or Blocked does.
         if !worker.isActive && worker.isTrouble { return worker.phaseLabel }
         return nil

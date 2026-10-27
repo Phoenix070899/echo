@@ -1,5 +1,5 @@
 //! The Hub Daemon: owns every Worker's terminal, worktree, and messages.
-//! It never writes into the Orchestrator's terminal; the Orchestrator reads with `hub wait`.
+//! It never writes into the Orchestrator's terminal; the Orchestrator reads with `echoctl wait`.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -31,8 +31,10 @@ const START_TIMEOUT: Duration = Duration::from_secs(90);
 const IDLE_BLOCKER: Duration = Duration::from_secs(60);
 /// Settled Workers stay on the Dashboard this long.
 const KEEP_SETTLED_SECONDS: i64 = 10 * 60;
-/// Echo's Done list keeps a Final Report this long, unless the human dismisses it first.
-const KEEP_REPORTS_SECONDS: i64 = 7 * 24 * 60 * 60;
+/// Echo's Done list keeps a done, ended, or failed Worker this long, read or not (features/0030).
+const KEEP_REPORTS_SECONDS: i64 = 5 * 60;
+/// A blocked or lost Worker still needs the human, so Echo keeps it this long unless dismissed.
+const KEEP_NEEDS_SECONDS: i64 = 7 * 24 * 60 * 60;
 const SCREEN_LINES: usize = 25;
 
 pub struct Hub {
@@ -53,7 +55,14 @@ pub struct Hub {
     test_agent: Option<String>,
     /// Echo Remote, the phone web app (ADR 0008).
     remote: Remote,
+    /// What agents asked Echo to show with `echoctl ui`, newest last; each stays `UI_KEEP` seconds.
+    ui: Mutex<Vec<Value>>,
+    /// How many of Echo's event streams follow each repo, so `echoctl ui` can tell no one is looking.
+    watchers: Mutex<HashMap<String, usize>>,
 }
+
+/// How long a request from `echoctl ui` stays in the snapshot for Echo to act on.
+const UI_KEEP: i64 = 30;
 
 /// How often account usage is re-read while someone watches the events stream.
 const USAGE_EVERY: Duration = Duration::from_secs(5 * 60);
@@ -135,7 +144,7 @@ fn parse_usage(text: &str) -> Vec<Value> {
 
 pub fn run() -> Result<()> {
     std::fs::create_dir_all(paths::state_dir())?;
-    // One daemon per state folder: two `hub` commands at once may both start one, and the second
+    // One daemon per state folder: two `echoctl` commands at once may both start one, and the second
     // must not take the socket from the first. The lock lives as long as this process.
     let lock = std::fs::File::create(paths::state_dir().join("hubd.lock"))?;
     if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&lock), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
@@ -163,6 +172,8 @@ pub fn run() -> Result<()> {
         hub_dir: paths::hub_dir(),
         test_agent: std::env::var("HUB_TEST_AGENT").ok(),
         remote: Remote::load(),
+        ui: Mutex::new(Vec::new()),
+        watchers: Mutex::new(HashMap::new()),
     });
     hub.recover()?;
     remote::start_if_enabled(&hub);
@@ -400,7 +411,7 @@ impl Hub {
         }
     }
 
-    /// `session.open`, as `hub` and older clients call it: starts the Orchestrator working in
+    /// `session.open`, as `echoctl` and older clients call it: starts the Orchestrator working in
     /// `checkout` (a worktree, or the repo's own folder), else the repo's first, or a new one when
     /// the repo has none.
     fn open_session(self: &Arc<Self>, p: &Value) -> Result<Value> {
@@ -479,7 +490,7 @@ impl Hub {
                 id
             }
         };
-        // A model picked now is kept, so a later start or `hub` resumes with it.
+        // A model picked now is kept, so a later start or `echoctl` resumes with it.
         if let Some(model) = picked("model") {
             db::set_agent_model(&self.db(), id, &model)?;
         }
@@ -533,7 +544,7 @@ impl Hub {
             ),
             None => (
                 "claude".to_string(),
-                launch::claude_args(&agent, resume, request.as_deref(), &extra),
+                launch::claude_args(&self.hub_dir, &agent, resume, request.as_deref(), &extra),
             ),
         };
         let spawn = Spawn {
@@ -621,9 +632,9 @@ impl Hub {
     }
 
     /// The human's multiplexer around one agent's or Worker's terminal, as the line an Echo pane
-    /// runs in a login shell (`hub mux`): `command` (e.g.
+    /// runs in a login shell (`echoctl mux`): `command` (e.g.
     /// `tmux new-session -A -s {session} -c {dir} {command}`) with `{session}` a stable name for
-    /// the target, `{dir}` where it works, and `{command}` a `hub attach --follow` that shows the
+    /// the target, `{dir}` where it works, and `{command}` a `echoctl attach --follow` that shows the
     /// target in the multiplexer's first pane. The pane runs it itself, so no daemon shell and no
     /// relay sit between Echo and the multiplexer.
     fn mux_command(&self, p: &Value) -> Result<Value> {
@@ -665,7 +676,7 @@ impl Hub {
         let db = self.db();
         for worker in db::mark_lost(&db)? {
             let body = format!(
-                "The Hub Daemon restarted while w{} was live; its terminal is gone. Resume it: hub worker resume w{}",
+                "The Hub Daemon restarted while w{} was live; its terminal is gone. Resume it: echoctl worker resume w{}",
                 worker.id, worker.id
             );
             db::insert_message(&db, &worker, kind::LOST, &body)?;
@@ -696,7 +707,7 @@ impl Hub {
 
     fn dispatch(self: &Arc<Self>, method: &str, p: &Value, stream: &UnixStream) -> Result<Value> {
         match method {
-            // `exe` is the `hub` that Echo's terminal panes run (`hub attach --echo`).
+            // `exe` is the `echoctl` that Echo's terminal panes run (`echoctl attach --echo`).
             "ping" => Ok(json!({
                 "pid": std::process::id(),
                 "exe": std::env::current_exe()?.display().to_string(),
@@ -786,6 +797,7 @@ impl Hub {
                 Ok(json!({}))
             }
             "agent.open" => self.open_agent(p),
+            "ui" => self.ui(p),
             "agent.close" => {
                 self.stop_agent(id_param(p, "agent")?);
                 Ok(json!({}))
@@ -862,7 +874,7 @@ impl Hub {
                 let worker = db::worker(&self.db(), id_param(p, "worker")?)?;
                 let message_kind = str_param(p, "kind")?;
                 if ![kind::ESCALATION, kind::STATUS].contains(&message_kind) {
-                    bail!("send --type must be escalation or status (use hub ask, hub done for the rest)");
+                    bail!("send --type must be escalation or status (use echoctl ask, echoctl done for the rest)");
                 }
                 let id = db::insert_message(&self.db(), &worker, message_kind, str_param(p, "body")?)?;
                 self.notify();
@@ -944,7 +956,7 @@ impl Hub {
                 for live in &killed {
                     let worker = db::worker(&db, live.id)?;
                     if state::is_live(&worker.state) {
-                        db::settle(&db, live.id, state::EXITED, "stopped by hub shutdown --force")?;
+                        db::settle(&db, live.id, state::EXITED, "stopped by echoctl shutdown --force")?;
                     }
                     db::mark_closed(&db, live.id)?;
                 }
@@ -990,7 +1002,7 @@ impl Hub {
         })
     }
 
-    /// Environment for an agent terminal. This `hub` comes first on PATH, so the agent's `hub`
+    /// Environment for an agent terminal. This `echoctl` comes first on PATH, so the agent's `echoctl`
     /// commands and its Notification hook reach this daemon.
     fn agent_env(&self, worker: Option<i64>, agent: Option<i64>) -> Result<Vec<(String, String)>> {
         let exe_dir = std::env::current_exe()?
@@ -1000,7 +1012,7 @@ impl Hub {
         let path = format!("{}:{}", exe_dir.display(), std::env::var("PATH").unwrap_or_default());
         let mut env = vec![
             ("PATH".to_string(), path),
-            ("AGENT_HUB".into(), self.hub_dir.display().to_string()),
+            ("ECHO_REPO".into(), self.hub_dir.display().to_string()),
             ("HUB_STATE".into(), paths::state_dir().display().to_string()),
             ("TERM".into(), "xterm-256color".into()),
             ("COLORTERM".into(), "truecolor".into()),
@@ -1008,7 +1020,7 @@ impl Hub {
         if let Some(id) = worker {
             env.push(("HUB_WORKER".into(), id.to_string()));
         }
-        // An Orchestrator's `hub worker start` and `hub wait` name it, so Workers and their
+        // An Orchestrator's `echoctl worker start` and `echoctl wait` name it, so Workers and their
         // messages stay with the Orchestrator that started them.
         if let Some(id) = agent {
             env.push(("HUB_AGENT".into(), id.to_string()));
@@ -1042,7 +1054,7 @@ impl Hub {
             Some(title) if !title.trim().is_empty() => title.to_string(),
             _ => title_from_spec(spec),
         };
-        // The Orchestrator starting it (`HUB_AGENT` via `hub worker start`), else the repo's first.
+        // The Orchestrator starting it (`HUB_AGENT` via `echoctl worker start`), else the repo's first.
         let agent = match p.get("agent").and_then(Value::as_i64) {
             Some(agent) => Some(agent),
             None => db::first_orchestrator(&self.db(), &repo_root.display().to_string())?.map(|a| a.id),
@@ -1104,7 +1116,7 @@ impl Hub {
                 bail!("w{id} exited before starting its turn:\n{}", screen::tail(&screen, SCREEN_LINES))
             }
             Some(_) => Ok(view),
-            None => bail!("w{id} never started its turn; read it with `hub worker read w{id}`, stop it with `hub worker close w{id}`"),
+            None => bail!("w{id} never started its turn; read it with `echoctl worker read w{id}`, stop it with `echoctl worker close w{id}`"),
         }
     }
 
@@ -1113,8 +1125,8 @@ impl Hub {
             bail!("w{id} is already live");
         }
         let worker = db::worker(&self.db(), id)?;
-        if worker.state != state::LOST && worker.state != state::EXITED {
-            bail!("w{id} is {}; only lost or exited Workers resume", worker.state);
+        if ![state::LOST, state::EXITED, state::ENDED].contains(&worker.state.as_str()) {
+            bail!("w{id} is {}; only lost, exited, or ended Workers resume", worker.state);
         }
         db::set_state(&self.db(), id, state::STARTING)?;
         let worker = db::worker(&self.db(), id)?;
@@ -1264,10 +1276,24 @@ impl Hub {
         let db = self.db();
         let worker = db::worker(&db, id)?;
         if state::is_live(&worker.state) {
-            let tail = screen::tail(&live.screen(), SCREEN_LINES);
-            db::settle(&db, id, state::EXITED, "exited without a Final Report")?;
+            let screen = live.screen();
+            let tail = screen::tail(&screen, SCREEN_LINES);
+            // A Worker that finished its turn and then was closed or quit did its work; it only
+            // skipped `echoctl done`. Its last screen is the report the human reads.
+            let ended = worker.state == state::RUNNING && screen::turn_ended(&screen);
+            let (final_state, verb) = if ended {
+                (state::ENDED, "ended")
+            } else {
+                (state::EXITED, "exited")
+            };
+            let report = if ended {
+                format!("Ended at its input box without a Final Report. Its last screen:\n\n```\n{tail}\n```")
+            } else {
+                "exited without a Final Report".to_string()
+            };
+            db::settle(&db, id, final_state, &report)?;
             if !closing {
-                let body = format!("w{id} exited without a Final Report.\n\nLast screen:\n{tail}");
+                let body = format!("w{id} {verb} without a Final Report.\n\nLast screen:\n{tail}");
                 db::insert_message(&db, &worker, kind::EXITED, &body)?;
             }
         }
@@ -1316,6 +1342,10 @@ impl Hub {
                 changed_at = Instant::now();
             }
             let look = screen::look(&screen);
+            let waiting = look == Look::Waiting;
+            if live.waiting.swap(waiting, std::sync::atomic::Ordering::SeqCst) != waiting {
+                self.notify();
+            }
             let Ok(worker) = db::worker(&self.db(), live.id) else {
                 break;
             };
@@ -1462,10 +1492,11 @@ impl Hub {
         Ok(json!({ "workers": self.rows(repo, false)? }))
     }
 
-    /// One row per recent Worker, ordered needs you, running, failed, done. `state` is the
+    /// One row per recent Worker, ordered needs you, running or waiting, failed, then done or
+    /// ended. `state` is the
     /// Dashboard state; `phase` is the Worker's lifecycle state. For Echo (`for_echo`), settled
-    /// Workers stay until dismissed or a week old, so a Final Report waits to be read; the
-    /// Orchestrator's `hub status` drops them after ten minutes.
+    /// Workers stay until dismissed or five minutes old (a week when blocked or lost); the
+    /// Orchestrator's `echoctl status` drops them after ten minutes.
     fn rows(&self, repo: &str, for_echo: bool) -> Result<Vec<Value>> {
         let db = self.db();
         let now = db::now();
@@ -1473,7 +1504,15 @@ impl Hub {
         for worker in db::workers(&db, repo)? {
             let recent = match worker.settled_at {
                 None => true,
-                Some(at) if for_echo => worker.dismissed_at.is_none() && now - at < KEEP_REPORTS_SECONDS,
+                Some(at) if for_echo => {
+                    let needs_human = matches!(worker.state.as_str(), state::BLOCKED | state::LOST);
+                    let keep = if needs_human {
+                        KEEP_NEEDS_SECONDS
+                    } else {
+                        KEEP_REPORTS_SECONDS
+                    };
+                    worker.dismissed_at.is_none() && now - at < keep
+                }
                 Some(at) => now - at < KEEP_SETTLED_SECONDS,
             };
             if !recent {
@@ -1483,14 +1522,21 @@ impl Hub {
             let blocker = live.as_ref().and_then(|live| live.blocker.lock().unwrap().clone());
             let open: Vec<i64> = db::open_questions(&db, worker.id)?.iter().map(|m| m.id).collect();
             let profile = profile::load(&self.hub_dir, &worker.profile).ok();
-            // The Worker's latest `hub send --type status`, first line only: the ledger's progress line.
+            // The Worker's latest `echoctl send --type status`, first line only: the ledger's progress line.
             let progress = db::last_message(&db, worker.id, kind::STATUS)?
                 .and_then(|m| m.body.lines().map(str::trim).find(|l| !l.is_empty()).map(String::from));
             let row_state = match worker.state.as_str() {
                 state::DONE => "done",
+                state::ENDED => "ended",
                 state::BLOCKED | state::LOST => "needs you",
                 state::EXITED => "failed",
                 _ if blocker.is_some() || !open.is_empty() => "needs you",
+                _ if live
+                    .as_ref()
+                    .is_some_and(|l| l.waiting.load(std::sync::atomic::Ordering::SeqCst)) =>
+                {
+                    "waiting"
+                }
                 _ => "running",
             };
             let quiet_since = worker.last_message_at.unwrap_or(worker.created_at);
@@ -1525,7 +1571,7 @@ impl Hub {
         }
         let order = |row: &Value| match row["state"].as_str() {
             Some("needs you") => 0,
-            Some("running") => 1,
+            Some("running" | "waiting") => 1,
             Some("failed") => 2,
             _ => 3,
         };
@@ -1612,7 +1658,120 @@ impl Hub {
             "workers": self.rows(repo, true)?,
             "needs": self.needs(repo)?,
             "usage": self.usage.lock().unwrap().view(),
+            "ui": self.ui_requests(repo),
         }))
+    }
+
+    /// This repo's requests from `echoctl ui` that are still fresh.
+    fn ui_requests(&self, repo: &str) -> Vec<Value> {
+        let fresh = db::now() - UI_KEEP;
+        let ui = self.ui.lock().unwrap();
+        ui.iter()
+            .filter(|r| r["repo"] == repo && r["at"].as_i64().is_some_and(|at| at > fresh))
+            .cloned()
+            .collect()
+    }
+
+    /// `echoctl ui`: an agent asks Echo to open a file, show a Worker or agent or a Worker's diff,
+    /// post a notification, or start an Orchestrator and show it. Echo acts on it from the
+    /// snapshot and never comes to the front for it (features/0033).
+    fn ui(self: &Arc<Self>, p: &Value) -> Result<Value> {
+        let action = str_param(p, "action")?;
+        let mut request = json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "at": db::now(),
+            "action": action,
+            "from": p.get("from").cloned().unwrap_or(Value::Null),
+        });
+        let mut result = json!({});
+        let repo = match action {
+            "open" => {
+                let path = Path::new(str_param(p, "path")?);
+                let path = path
+                    .canonicalize()
+                    .with_context(|| format!("{} does not exist", path.display()))?;
+                if !path.is_file() {
+                    bail!("{} is not a file", path.display());
+                }
+                let dir = path.parent().context("a file is in a folder")?;
+                let root = repo::toplevel(dir)?;
+                let root = root.canonicalize().unwrap_or(root);
+                let relative = path.strip_prefix(&root).context("the file is outside its checkout")?;
+                request["root"] = json!(root.display().to_string());
+                request["path"] = json!(relative.display().to_string());
+                request["line"] = p.get("line").cloned().unwrap_or(Value::Null);
+                repo::root(dir)?.display().to_string()
+            }
+            "show" | "diff" => {
+                let repo = repo::root(Path::new(str_param(p, "repo")?))?.display().to_string();
+                let target = str_param(p, "target")?;
+                if let Some(id) = target.strip_prefix('a').and_then(|id| id.parse::<i64>().ok()) {
+                    if action == "diff" {
+                        bail!("only a Worker has a diff to show; {target} is an agent");
+                    }
+                    if !db::agents(&self.db(), Some(&repo))?.iter().any(|a| a.id == id) {
+                        bail!("no agent {target} in this repo");
+                    }
+                    request["agent"] = json!(id);
+                } else {
+                    let id: i64 = target
+                        .trim_start_matches(['w', '#'])
+                        .parse()
+                        .with_context(|| format!("{target:?} is not a Worker like w12 or an agent like a3"))?;
+                    if db::worker(&self.db(), id).map_or(true, |w| w.repo != repo) {
+                        bail!("no Worker w{id} in this repo");
+                    }
+                    request["worker"] = json!(format!("w{id}"));
+                }
+                repo
+            }
+            "notify" => {
+                let text = str_param(p, "text")?.trim();
+                if text.is_empty() {
+                    bail!("a notification needs some text");
+                }
+                request["text"] = json!(text);
+                repo::root(Path::new(str_param(p, "repo")?))?.display().to_string()
+            }
+            "orchestrator" => {
+                let repo = repo::root(Path::new(str_param(p, "repo")?))?.display().to_string();
+                let mut open = json!({ "repo": repo, "kind": db::agent_kind::ORCHESTRATOR });
+                for key in ["branch", "new_branch", "base", "name", "request"] {
+                    if let Some(value) = p.get(key).filter(|v| !v.is_null()) {
+                        open[key] = value.clone();
+                    }
+                }
+                result = self.open_agent(&open)?;
+                request["action"] = json!("show");
+                request["agent"] = result["agent"].clone();
+                // It runs whether or not Echo is open; Echo just shows it when it is.
+                if !self.watched(&repo) {
+                    return Ok(result);
+                }
+                repo
+            }
+            other => bail!("unknown ui action {other:?}"),
+        };
+        if !self.watched(&repo) {
+            let name = Path::new(&repo)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or(repo);
+            bail!("Echo is not open on {name}, so there is nothing to show this in");
+        }
+        request["repo"] = json!(repo);
+        {
+            let fresh = db::now() - UI_KEEP;
+            let mut ui = self.ui.lock().unwrap();
+            ui.retain(|r| r["at"].as_i64().is_some_and(|at| at > fresh));
+            ui.push(request);
+        }
+        self.notify();
+        Ok(result)
+    }
+
+    fn watched(&self, repo: &str) -> bool {
+        self.watchers.lock().unwrap().get(repo).is_some_and(|count| *count > 0)
     }
 
     fn refresh_usage(self: &Arc<Self>) {
@@ -1666,6 +1825,8 @@ impl Hub {
             Err(error) => return proto::write_line(&mut stream, &proto::err(&error)),
         };
         proto::write_line(&mut stream, &proto::ok(json!({ "repo": repo })))?;
+        *self.watchers.lock().unwrap().entry(repo.clone()).or_default() += 1;
+        let _watching = Watching { hub: self, repo: &repo };
         let mut last = None;
         loop {
             let stale = self
@@ -1726,7 +1887,9 @@ impl Hub {
                 .get("note")
                 .and_then(Value::as_str)
                 .filter(|note| !note.trim().is_empty())
-                .unwrap_or("Do not run it. Continue another way within your Task, or finish blocked with hub done.");
+                .unwrap_or(
+                    "Do not run it. Continue another way within your Task, or finish blocked with echoctl done.",
+                );
             live.write(format!("The human denied that command. {note}").as_bytes())?;
             std::thread::sleep(Duration::from_millis(150));
             live.write(b"\r")?;
@@ -1989,7 +2152,7 @@ fn place(repo: &Path, cwd: &Path) -> String {
     }
 }
 
-/// Keys `hub worker key` understands, as terminal input.
+/// Keys `echoctl worker key` understands, as terminal input.
 pub fn key_bytes(key: &str) -> Result<Vec<u8>> {
     Ok(match key {
         "enter" => b"\r".to_vec(),
@@ -2022,7 +2185,7 @@ mod tests {
 
     #[test]
     fn shell_words_are_quoted_only_when_needed() {
-        assert_eq!(shell_quote("/usr/local/bin/hub"), "/usr/local/bin/hub");
+        assert_eq!(shell_quote("/usr/local/bin/echoctl"), "/usr/local/bin/echoctl");
         assert_eq!(shell_quote("HUB_STATE=/tmp/x"), "HUB_STATE=/tmp/x");
         assert_eq!(shell_quote("a b"), "'a b'");
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
@@ -2098,5 +2261,19 @@ mod tests {
     fn place_names_worktrees() {
         assert_eq!(place(Path::new("/r"), Path::new("/r")), "in place");
         assert_eq!(place(Path::new("/r"), Path::new("/w/r/feat-x")), "feat-x");
+    }
+}
+
+/// One of Echo's event streams on a repo, counted while it lasts.
+struct Watching<'a> {
+    hub: &'a Hub,
+    repo: &'a str,
+}
+
+impl Drop for Watching<'_> {
+    fn drop(&mut self) {
+        if let Some(count) = self.hub.watchers.lock().unwrap().get_mut(self.repo) {
+            *count = count.saturating_sub(1);
+        }
     }
 }

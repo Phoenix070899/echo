@@ -325,6 +325,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "echoctl"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "base64",
+ "clap",
+ "hkdf",
+ "libc",
+ "p256",
+ "portable-pty",
+ "rand_core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tiny_http",
+ "uuid",
+ "vt100",
+]
+
+[[package]]
 name = "elliptic-curve"
 version = "0.13.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -515,28 +537,6 @@ name = "httpdate"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
-
-[[package]]
-name = "hub"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "base64",
- "clap",
- "hkdf",
- "libc",
- "p256",
- "portable-pty",
- "rand_core",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tiny_http",
- "uuid",
- "vt100",
-]
 
 [[package]]
 name = "inout"

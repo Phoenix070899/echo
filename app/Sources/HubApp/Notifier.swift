@@ -49,6 +49,22 @@ enum Notifier {
         UNUserNotificationCenter.current().add(request)
     }
 
+    /// An agent's `echoctl ui notify`; clicking it opens Echo on that agent or Worker.
+    static func post(message: String, id: String, repo: String, from: String?, worker: String?, agent: Int?) {
+        guard isAvailable else { return }
+        let content = UNMutableNotificationContent()
+        let repoName = URL(fileURLWithPath: repo).lastPathComponent
+        content.title = from ?? repoName
+        if from != nil { content.subtitle = repoName }
+        content.body = message
+        content.sound = .default
+        var info: [String: Any] = ["repo": repo]
+        if let worker { info["worker"] = worker }
+        if let agent { info["agent"] = agent }
+        content.userInfo = info
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
     static func summary(of need: Need) -> String {
         switch need.kind {
         case .question: return need.body

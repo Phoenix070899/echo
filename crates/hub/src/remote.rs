@@ -190,7 +190,7 @@ pub fn new_pairing(hub: &Arc<Hub>) -> Result<Value> {
     Ok(status(hub))
 }
 
-/// `remote.status`: what Echo's settings and `hub remote` show.
+/// `remote.status`: what Echo's settings and `echoctl remote` show.
 pub fn status(hub: &Arc<Hub>) -> Value {
     let remote = hub.remote();
     let config = remote.config();
@@ -753,12 +753,14 @@ fn alerts(world: &Value) -> Vec<(String, Value)> {
         }
         for worker in repo["workers"].as_array().into_iter().flatten() {
             let state = worker["state"].as_str().unwrap_or("");
-            if !matches!(state, "done" | "failed") {
-                continue;
-            }
+            let verb = match state {
+                "done" => "finished",
+                "ended" => "ended",
+                "failed" => "stopped",
+                _ => continue,
+            };
             let id = worker["id"].as_str().unwrap_or("");
             let key = format!("report-{id}-{}", worker["settledAt"]);
-            let verb = if state == "done" { "finished" } else { "stopped" };
             let report = first_line(worker["finalReport"].as_str().unwrap_or("No Final Report."));
             let title = format!("{id} {verb}: {}", worker["title"].as_str().unwrap_or(""));
             let url = format!("/#worker={}", id.trim_start_matches('w'));
@@ -967,7 +969,7 @@ mod tests {
             "repo": "/src/lanh",
             "agents": [{ "id": 1, "kind": "orchestrator", "name": "auth fix" }],
             "needs": [
-                { "kind": "permission_prompt", "message": 7, "agent": 1, "worker": "w3", "profile": "bash",
+                { "kind": "permission_prompt", "message": 7, "agent": 1, "worker": "w3", "profile": "lee",
                   "title": "t", "body": "", "prompt": "Bash command\n rm -rf junk\nDo you want to proceed?", "at": 5 },
                 { "kind": "permission_prompt", "message": 0, "agent": 1, "worker": null, "profile": "orchestrator",
                   "title": "auth fix", "body": "", "prompt": "Bash command\n ls\nDo you want to proceed?", "at": 9 },
@@ -983,7 +985,7 @@ mod tests {
             keys,
             ["permission_prompt-7", "permission_prompt-agent-1-9", "report-w2-100"]
         );
-        assert_eq!(alerts[0].1["title"], "w3 bash wants to run");
+        assert_eq!(alerts[0].1["title"], "w3 lee wants to run");
         assert_eq!(alerts[0].1["body"], "rm -rf junk\nlanh, auth fix");
         assert_eq!(alerts[1].1["title"], "The Orchestrator wants to run");
         assert_eq!(alerts[2].1["title"], "w2 finished: Write tests");

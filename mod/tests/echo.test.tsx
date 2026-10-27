@@ -27,17 +27,17 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const call = { tool: 'Read', input: {}, isRunning: false, isErrored: false, isInterrupted: false }
     const group = { calls: [call, call, call], isActive: false, isExpanded: false }
 
-    const folded = await $.ui.mount({ plugin: 'hub', surface, component: 'ToolGroup', props: group })
+    const folded = await $.ui.mount({ plugin: 'echo', surface, component: 'ToolGroup', props: group })
     expect(await folded.find({ type: 'Text', text: '⋯ 3 tool calls' })).toBeDefined()
-    const expanded = await $.ui.mount({ plugin: 'hub', surface, component: 'ToolGroup', props: { ...group, isExpanded: true } })
+    const expanded = await $.ui.mount({ plugin: 'echo', surface, component: 'ToolGroup', props: { ...group, isExpanded: true } })
     expect(await expanded.find({ type: 'Text', text: 'Read 3 files' })).toBeDefined()
 
     const use = { tool_use_id: 't1', tool: 'Bash', input: { command: 'ls' }, isRunning: false, isErrored: false, isInterrupted: false }
-    const hidden = await $.ui.mount({ plugin: 'hub', surface, component: 'ToolUse', props: use })
+    const hidden = await $.ui.mount({ plugin: 'echo', surface, component: 'ToolUse', props: use })
     expect(await hidden.find({ type: 'Text', text: 'Bash(ls)' })).toBeUndefined()
 
     await $.command.run({ command: 'tools', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } })
-    const shown = await $.ui.mount({ plugin: 'hub', surface, component: 'ToolUse', props: use })
+    const shown = await $.ui.mount({ plugin: 'echo', surface, component: 'ToolUse', props: use })
     expect(await shown.find({ type: 'Text', text: 'Bash(ls)' })).toBeDefined()
   })
 }
@@ -58,7 +58,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       return <Text>{e.props.text}</Text>
     })
     const reply = (text: string) =>
-      $.ui.mount({ plugin: 'hub', surface, component: 'AssistantMessage', props: { text, isFirstOfReply: true } })
+      $.ui.mount({ plugin: 'echo', surface, component: 'AssistantMessage', props: { text, isFirstOfReply: true } })
     const calm = await reply('Needs you\n- Nothing.\nDone\n- ok')
     expect((await calm.find({ type: 'Box' }))?.props.backgroundColor).toBe('#0f161e')
     expect((await calm.find({ type: 'Box' }))?.props.borderStyle).toBe('round')
@@ -74,7 +74,7 @@ test('background rows are one dim line; the human prompt is untouched', async ($
     return <Text>{e.props.text}</Text>
   })
   const message = (text: string, kind: 'composer' | 'task-notification') =>
-    $.ui.mount({ plugin: 'hub', surface: 'terminal', component: 'UserMessage', props: { text, origin: { kind }, isExpanded: false } as never })
+    $.ui.mount({ plugin: 'echo', surface: 'terminal', component: 'UserMessage', props: { text, origin: { kind }, isExpanded: false } as never })
   const mine = await message('run the tests', 'composer')
   const plain = await mine.find({ type: 'Text', text: /run the tests/ })
   expect(plain?.props.dimColor).toBeUndefined()

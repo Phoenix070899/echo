@@ -103,6 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Closing the window keeps the app in the menu bar, so notifications keep coming.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    /// Unsaved edits to a previewed file are saved or let go first.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        AppModel.shared.settleDrafts() ? .terminateNow : .terminateCancel
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if Notifier.isAvailable {
             UNUserNotificationCenter.current().delegate = self

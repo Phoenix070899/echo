@@ -271,7 +271,7 @@ struct TryColumn: View {
                 Spacer(minLength: 4)
                 HStack(spacing: 6) {
                     StateMark(color: worker.markColor)
-                    Text(worker.isActive ? "Running" : worker.phaseLabel)
+                    Text(worker.phaseLabel)
                 }
                 .font(.system(size: 12))
                 .foregroundStyle(worker.markColor)

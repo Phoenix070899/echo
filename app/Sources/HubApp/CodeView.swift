@@ -12,13 +12,14 @@ struct Code: @unchecked Sendable {
 
 /// The keys a previewed file answers, whether SwiftUI or the code view holds the keyboard.
 enum CodeKey {
-    case up, down, `return`, escape, backtab
+    case up, down, `return`, escape, backtab, edit, save
 }
 
 /// Code with line numbers in a gutter, drawn by a text view so only what is on screen is laid
 /// out and scrolling stays smooth however long the file. Lines an agent just changed glow for a
 /// moment. Each line takes a note for the agent: + in the gutter, or the keyboard cursor and
-/// Return; notes and the note being written sit under their line.
+/// Return; notes and the note being written sit under their line. While the human edits the
+/// file, it is plain editable text: no notes, line numbers kept up as lines come and go.
 /// It does not watch the app's model, so a change elsewhere in the app does not draw it again.
 struct CodeView: NSViewRepresentable, Equatable {
     let code: Code
@@ -38,10 +39,16 @@ struct CodeView: NSViewRepresentable, Equatable {
     let key: (CodeKey) -> Bool
     /// This file's tab is the one shown; AppKit views ignore SwiftUI's opacity, so it hides itself.
     let active: Bool
+    /// When ⌘F last asked for the find bar from the preview (say, on rendered Markdown).
+    let find: Date?
+    let editing: Bool
+    /// The text after each edit.
+    let edited: (String) -> Void
 
     static func == (a: CodeView, b: CodeView) -> Bool {
         a.version == b.version && a.changed == b.changed && a.focus == b.focus && a.file == b.file
-            && a.fileNotes == b.fileNotes && a.notes === b.notes && a.active == b.active
+            && a.fileNotes == b.fileNotes && a.notes === b.notes && a.active == b.active && a.find == b.find
+            && a.editing == b.editing
     }
 
     func makeCoordinator() -> CodeCoordinator { CodeCoordinator() }
@@ -94,6 +101,18 @@ final class CodeCoordinator {
         text = CodeTextView(frame: .zero, textContainer: container)
         text.isEditable = false
         text.isSelectable = true
+        text.allowsUndo = true
+        // Typed code stays as typed.
+        text.isAutomaticQuoteSubstitutionEnabled = false
+        text.isAutomaticDashSubstitutionEnabled = false
+        text.isAutomaticTextReplacementEnabled = false
+        text.isAutomaticSpellingCorrectionEnabled = false
+        text.isContinuousSpellCheckingEnabled = false
+        text.isGrammarCheckingEnabled = false
+        text.smartInsertDeleteEnabled = false
+        // ⌘F: the system find bar over the code, with every match marked (ui-ux/0038).
+        text.usesFindBar = true
+        text.isIncrementalSearchingEnabled = true
         text.drawsBackground = true
         text.backgroundColor = NSColor(Ledger.paper)
         text.isHorizontallyResizable = true
@@ -110,6 +129,8 @@ final class CodeCoordinator {
         text.coordinator = self
     }
 
+    private var findSeen: Date?
+
     private func redrawGutter() {
         let visible = text.visibleRect
         text.setNeedsDisplay(NSRect(x: 0, y: visible.minY, width: gutter, height: visible.height))
@@ -118,15 +139,37 @@ final class CodeCoordinator {
     func update(_ new: CodeView) {
         view = new
         scroll.isHidden = !new.active
+        // A request made just now, as when ⌘F on rendered Markdown switched to the source; an old
+        // one is not replayed when the source shows again later.
+        if let find = new.find, find != findSeen {
+            findSeen = find
+            if new.active, Date().timeIntervalSince(find) < 2 {
+                DispatchQueue.main.async { self.text.showFindBar() }
+            }
+        }
         if new.version != version {
             version = new.version
             starts = new.code.starts
             hosts.values.forEach { $0.removeFromSuperview() }
             hosts = [:]
             spacing = [:]
-            gutter = CGFloat(max(3, String(new.code.lines.count).count)) * 8 + 32
-            text.textContainerInset = NSSize(width: gutter, height: 8)
+            fitGutter()
+            // A new read while editing (after a save) keeps the caret where it was.
+            let selection = text.selectedRange()
             text.textStorage?.setAttributedString(new.code.text)
+            text.undo.removeAllActions()
+            if new.editing {
+                let length = text.textStorage?.length ?? 0
+                text.setSelectedRange(NSRange(location: min(selection.location, length), length: 0))
+            }
+        }
+        if new.editing != text.isEditable {
+            text.isEditable = new.editing
+            hover = nil
+            if new.editing {
+                text.typingAttributes = [.font: Self.font, .paragraphStyle: Self.base, .foregroundColor: NSColor.labelColor]
+                if new.active { DispatchQueue.main.async { self.text.window?.makeFirstResponder(self.text) } }
+            }
         }
         layoutNotes()
         glowFor(new.changed)
@@ -141,6 +184,23 @@ final class CodeCoordinator {
             cursor = marked
             if let line = marked { reveal(line) }
         }
+    }
+
+    private func fitGutter() {
+        gutter = CGFloat(max(3, String(starts.count).count)) * 8 + 32
+        if text.textContainerInset.width != gutter { text.textContainerInset = NSSize(width: gutter, height: 8) }
+    }
+
+    /// The human typed: the lines move, so the gutter is drawn from the text as it now is.
+    fileprivate func textChanged() {
+        guard let view, let storage = text.textStorage else { return }
+        let string = storage.string
+        var starts = [0]
+        for (offset, unit) in string.utf16.enumerated() where unit == 0x0A { starts.append(offset + 1) }
+        self.starts = starts
+        fitGutter()
+        text.needsDisplay = true
+        view.edited(string)
     }
 
     // MARK: Lines
@@ -248,7 +308,7 @@ final class CodeCoordinator {
             let size = label.size(withAttributes: number)
             label.draw(at: NSPoint(x: left + width - 16 - size.width, y: top), withAttributes: number)
             let marked = view.notes.cursor == line || view.notes.editing == line
-            if hover == line || marked, let plus = Self.plus {
+            if !view.editing, hover == line || marked, let plus = Self.plus {
                 plus.draw(in: NSRect(x: left + 4 + (16 - plus.size.width) / 2, y: top + (min(rect.height, 18) - plus.size.height) / 2,
                                      width: plus.size.width, height: plus.size.height))
             }
@@ -302,7 +362,7 @@ final class CodeCoordinator {
                               by: { $0.element.lines.upperBound - 1 })
         var lines = Set(mine.keys)
         if let editing = view.notes.editing { lines.insert(editing) }
-        lines = lines.filter { $0 >= 0 && $0 < starts.count }
+        lines = view.editing ? [] : lines.filter { $0 >= 0 && $0 < starts.count }
         for (line, host) in hosts where !lines.contains(line) {
             host.removeFromSuperview()
             hosts[line] = nil
@@ -396,6 +456,33 @@ final class CodeCoordinator {
 /// The text view: draws each line's background and the gutter under its text, tracks the line under the pointer for the gutter's +, and hands the preview's keys to it.
 final class CodeTextView: NSTextView {
     weak var coordinator: CodeCoordinator?
+    /// This file's own undo history, not the window's, so a new read of the file can drop it.
+    let undo = UndoManager()
+
+    override var undoManager: UndoManager? { undo }
+
+    /// The Edit menu's Undo and Redo, sent here as the first responder; the window's would find nothing.
+    @objc func undo(_ sender: Any?) { undo.undo() }
+
+    @objc func redo(_ sender: Any?) { undo.redo() }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)): isEditable && undo.canUndo
+        case #selector(redo(_:)): isEditable && undo.canRedo
+        default: super.validateUserInterfaceItem(item)
+        }
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        MainActor.assumeIsolated { coordinator?.textChanged() }
+    }
+
+    /// Code takes text, never another app's fonts and colours.
+    override func paste(_ sender: Any?) {
+        pasteAsPlainText(sender)
+    }
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
@@ -418,7 +505,7 @@ final class CodeTextView: NSTextView {
         let x = point.x
         let handled = MainActor.assumeIsolated { () -> Bool in
             guard let coordinator, x < coordinator.gutter else { return false }
-            if x < 24, let line = coordinator.line(atY: point.y) { coordinator.startNote(on: line) }
+            if x < 24, !isEditable, let line = coordinator.line(atY: point.y) { coordinator.startNote(on: line) }
             return true
         }
         if !handled { super.mouseDown(with: event) }
@@ -436,8 +523,48 @@ final class CodeTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if let key = CodeKey(event), MainActor.assumeIsolated({ coordinator?.key(key) ?? false }) { return }
+        // Esc closes the find bar first, then the preview.
+        if event.keyCode == 53, enclosingScrollView?.isFindBarVisible == true {
+            finder(.hideFindInterface)
+            return
+        }
+        // While editing only Esc is the preview's; the other keys type.
+        if let key = CodeKey(event), !isEditable || key == .escape,
+           MainActor.assumeIsolated({ coordinator?.key(key) ?? false }) { return }
         super.keyDown(with: event)
+    }
+
+    /// ⌘F finds, ⌘G and ⇧⌘G go to the next and previous match.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // Only for the file shown, with the keyboard in it or in its find bar.
+        guard let scroll = enclosingScrollView, !scroll.isHidden,
+              let responder = window?.firstResponder as? NSView, responder.isDescendant(of: scroll) else {
+            return super.performKeyEquivalent(with: event)
+        }
+        switch (event.charactersIgnoringModifiers?.lowercased(), flags) {
+        case ("f", [.command]): showFindBar()
+        case ("g", [.command]): finder(.nextMatch)
+        case ("g", [.command, .shift]): finder(.previousMatch)
+        case ("e", [.command]): return MainActor.assumeIsolated { coordinator?.key(.edit) ?? false }
+        case ("s", [.command]) where isEditable: return MainActor.assumeIsolated { coordinator?.key(.save) ?? false }
+        // Ahead of the Edit menu, so ⌘Z undoes in this file's history.
+        case ("z", [.command]) where isEditable: undo.undo()
+        case ("z", [.command, .shift]) where isEditable: undo.redo()
+        default: return super.performKeyEquivalent(with: event)
+        }
+        return true
+    }
+
+    func showFindBar() {
+        window?.makeFirstResponder(self)
+        finder(.showFindInterface)
+    }
+
+    private func finder(_ action: NSTextFinder.Action) {
+        let item = NSMenuItem()
+        item.tag = action.rawValue
+        performTextFinderAction(item)
     }
 }
 

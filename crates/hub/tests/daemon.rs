@@ -1,4 +1,4 @@
-//! End-to-end tests of the Hub Daemon through the `hub` binary, with a fake agent for `claude`.
+//! End-to-end tests of the Hub Daemon through the `echoctl` binary, with a fake agent for `claude`.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -43,7 +43,7 @@ impl Hub {
     }
 
     fn run_with(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
-        let bin = Path::new(env!("CARGO_BIN_EXE_hub"));
+        let bin = Path::new(env!("CARGO_BIN_EXE_echoctl"));
         let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake-agent.sh");
         Command::new(bin)
             .args(args)
@@ -64,7 +64,7 @@ impl Hub {
         let out = self.run(args);
         assert!(
             out.status.success(),
-            "hub {args:?} failed: {}",
+            "echoctl {args:?} failed: {}",
             String::from_utf8_lossy(&out.stderr)
         );
         String::from_utf8_lossy(&out.stdout).into_owned()
@@ -72,7 +72,7 @@ impl Hub {
 
     fn fails(&self, args: &[&str]) -> String {
         let out = self.run(args);
-        assert!(!out.status.success(), "hub {args:?} should fail");
+        assert!(!out.status.success(), "echoctl {args:?} should fail");
         String::from_utf8_lossy(&out.stderr).into_owned()
     }
 
@@ -119,16 +119,16 @@ impl Drop for Hub {
 fn question_reply_and_final_report() {
     let hub = Hub::new("ask");
     assert!(hub
-        .ok(&["worker", "start", "bash", "--spec", "ask about color"])
+        .ok(&["worker", "start", "lee", "--spec", "ask about color"])
         .starts_with("Started w1"));
 
     let question = hub.wait();
     assert!(
-        question.contains("#1 question from w1 (bash: ask about color)"),
+        question.contains("#1 question from w1 (lee: ask about color)"),
         "{question}"
     );
     assert!(question.contains("Which color?"));
-    assert!(question.contains("hub reply 1"));
+    assert!(question.contains("echoctl reply 1"));
     assert_eq!(hub.status()[0]["state"], "needs you");
     assert!(hub.ok(&["inbox"]).contains("#1 from w1"));
 
@@ -136,7 +136,7 @@ fn question_reply_and_final_report() {
     let done = hub.wait();
     assert!(done.contains("done (done) from w1"), "{done}");
     assert!(done.contains("answer was blue"));
-    assert!(done.contains("hub worker close w1"));
+    assert!(done.contains("echoctl worker close w1"));
     assert_eq!(hub.status()[0]["state"], "done");
     assert!(hub.fails(&["reply", "1", "again"]).contains("already answered"));
 
@@ -154,11 +154,33 @@ fn question_reply_and_final_report() {
 #[test]
 fn an_exit_without_a_final_report_is_reported() {
     let hub = Hub::new("exit");
-    hub.ok(&["worker", "start", "bash", "--spec", "exit early"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "exit early"]);
     let exited = hub.wait();
     assert!(exited.contains("exited from w1"), "{exited}");
     assert!(exited.contains("fake agent giving up"));
     assert_eq!(hub.status()[0]["state"], "failed");
+}
+
+#[test]
+fn a_worker_closed_at_its_input_box_without_a_report_ended() {
+    let hub = Hub::new("finish");
+    hub.ok(&["worker", "start", "lee", "--spec", "finish quietly"]);
+    hub.eventually("the turn to end on screen", || {
+        hub.ok(&["worker", "read", "w1"]).contains("Brewed for 18s")
+    });
+    hub.ok(&["worker", "close", "w1"]);
+    hub.eventually("w1 to settle", || hub.status()[0]["state"] != "running");
+    let row = &hub.status()[0];
+    assert_eq!(row["state"], "ended", "{row}");
+    let report = row["finalReport"].as_str().unwrap_or("");
+    assert!(report.contains("Both databases are dropped."), "{report}");
+}
+
+#[test]
+fn a_worker_waiting_on_a_monitor_is_waiting_not_needs_you() {
+    let hub = Hub::new("monitor");
+    hub.ok(&["worker", "start", "lee", "--spec", "monitor the server"]);
+    hub.eventually("w1 to show waiting", || hub.status()[0]["state"] == "waiting");
 }
 
 #[test]
@@ -167,7 +189,7 @@ fn new_worktrees_get_a_typed_branch() {
     let started = hub.ok(&[
         "worker",
         "start",
-        "bash",
+        "lee",
         "--spec",
         "sleep",
         "--worktree",
@@ -180,7 +202,7 @@ fn new_worktrees_get_a_typed_branch() {
     let refused = hub.fails(&[
         "worker",
         "start",
-        "bash",
+        "lee",
         "--spec",
         "sleep",
         "--worktree",
@@ -192,7 +214,7 @@ fn new_worktrees_get_a_typed_branch() {
 #[test]
 fn attach_streams_the_screen_and_types_input() {
     let hub = Hub::new("attach");
-    hub.ok(&["worker", "start", "bash", "--spec", "echo back"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "echo back"]);
     let mut stream = UnixStream::connect(hub.state.join("hubd.sock")).unwrap();
     stream
         .write_all(b"{\"method\":\"attach\",\"params\":{\"id\":1,\"rows\":30,\"cols\":100}}\n")
@@ -221,7 +243,7 @@ fn attach_streams_the_screen_and_types_input() {
 #[test]
 fn a_daemon_crash_marks_workers_lost_and_they_resume() {
     let hub = Hub::new("lost");
-    hub.ok(&["worker", "start", "bash", "--spec", "sleep"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "sleep"]);
     let pid = Command::new("lsof")
         .arg("-t")
         .arg(hub.state.join("hubd.sock"))
@@ -234,7 +256,7 @@ fn a_daemon_crash_marks_workers_lost_and_they_resume() {
 
     let lost = hub.wait();
     assert!(lost.contains("lost from w1"), "{lost}");
-    assert!(lost.contains("hub worker resume w1"));
+    assert!(lost.contains("echoctl worker resume w1"));
     assert_eq!(hub.status()[0]["state"], "needs you");
 
     assert!(hub.ok(&["worker", "resume", "w1"]).contains("Resumed w1"));
@@ -251,7 +273,7 @@ fn worker_commands_need_a_worker() {
 #[test]
 fn a_forced_shutdown_closes_workers_instead_of_losing_them() {
     let hub = Hub::new("shut");
-    hub.ok(&["worker", "start", "bash", "--spec", "sleep"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "sleep"]);
     hub.ok(&["shutdown", "--force"]);
     std::thread::sleep(Duration::from_millis(500));
     assert!(hub.ok(&["worker", "list"]).contains("No open Workers."));
@@ -332,7 +354,7 @@ fn worker_rows_carry_model_effort_and_progress() {
     stream.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
     let mut lines = BufReader::new(stream).lines();
     lines.next();
-    hub.ok(&["worker", "start", "bash", "--spec", "status then wait"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "status then wait"]);
     loop {
         let snapshot: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
         let Some(row) = snapshot["workers"].as_array().and_then(|rows| rows.first()) else {
@@ -359,9 +381,37 @@ fn snapshot(hub: &Hub) -> serde_json::Value {
 }
 
 #[test]
+fn a_done_worker_leaves_echo_after_five_minutes() {
+    let hub = Hub::new("expire");
+    hub.ok(&["worker", "start", "lee", "--spec", "done quickly"]);
+    hub.eventually("w1 to finish", || snapshot(&hub)["workers"][0]["phase"] == "done");
+    let db = rusqlite::Connection::open(hub.state.join("hub.db")).unwrap();
+    db.execute("update workers set settled_at = settled_at - 4 * 60 where id = 1", [])
+        .unwrap();
+    assert_eq!(
+        snapshot(&hub)["workers"].as_array().unwrap().len(),
+        1,
+        "kept within five minutes"
+    );
+    db.execute("update workers set settled_at = settled_at - 2 * 60 where id = 1", [])
+        .unwrap();
+    assert!(
+        snapshot(&hub)["workers"].as_array().unwrap().is_empty(),
+        "gone after five minutes, read or not"
+    );
+    db.execute("update workers set state = 'blocked' where id = 1", [])
+        .unwrap();
+    assert_eq!(
+        snapshot(&hub)["workers"].as_array().unwrap().len(),
+        1,
+        "a blocked Worker still needs the human"
+    );
+}
+
+#[test]
 fn a_final_report_stays_in_echo_until_dismissed() {
     let hub = Hub::new("dismiss");
-    hub.ok(&["worker", "start", "bash", "--spec", "done quickly"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "done quickly"]);
     hub.eventually("w1 to finish", || snapshot(&hub)["workers"][0]["phase"] == "done");
     let row = snapshot(&hub)["workers"][0].clone();
     assert!(row["settledAt"].is_i64(), "{row}");
@@ -396,9 +446,9 @@ fn a_repo_runs_several_orchestrators_and_each_hears_only_its_workers() {
     assert_eq!(agents[0]["name"], "Rerank");
     assert!(agents.iter().all(|agent| agent["live"] == true));
 
-    // `hub worker start` in b's terminal carries HUB_AGENT=b.
+    // `echoctl worker start` in b's terminal carries HUB_AGENT=b.
     let started = hub.run_with(
-        &["worker", "start", "bash", "--spec", "done quickly"],
+        &["worker", "start", "lee", "--spec", "done quickly"],
         &[("HUB_AGENT", &b.to_string())],
     );
     assert!(started.status.success(), "{}", String::from_utf8_lossy(&started.stderr));
@@ -551,14 +601,14 @@ fn events_stream_a_snapshot_on_every_change() {
     let first: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
     assert_eq!(first["workers"].as_array().unwrap().len(), 0);
 
-    hub.ok(&["worker", "start", "bash", "--spec", "ask about color"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "ask about color"]);
     loop {
         let snapshot: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
         if snapshot["needs"].as_array().is_some_and(|needs| !needs.is_empty()) {
             assert_eq!(snapshot["needs"][0]["kind"], "question");
             assert_eq!(snapshot["needs"][0]["body"], "Which color?");
             assert_eq!(snapshot["workers"][0]["state"], "needs you");
-            // Echo counts the quiet time up from here; `hub status` still gets seconds.
+            // Echo counts the quiet time up from here; `echoctl status` still gets seconds.
             assert!(snapshot["workers"][0]["quietSince"].is_i64(), "{snapshot}");
             assert!(snapshot["workers"][0].get("quietSeconds").is_none(), "{snapshot}");
             break;
@@ -587,7 +637,7 @@ fn events_send_nothing_while_the_repo_is_unchanged() {
 #[test]
 fn approving_a_prompt_presses_it_and_tells_the_orchestrator() {
     let hub = Hub::new("approve");
-    hub.ok(&["worker", "start", "bash", "--spec", "prompt me"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "prompt me"]);
     let blocker = hub.wait();
     assert!(blocker.contains("blocker from w1"), "{blocker}");
     let mut events = UnixStream::connect(hub.state.join("hubd.sock")).unwrap();
@@ -617,7 +667,7 @@ fn approving_a_prompt_presses_it_and_tells_the_orchestrator() {
 #[test]
 fn denying_a_prompt_tells_the_worker_why() {
     let hub = Hub::new("deny");
-    hub.ok(&["worker", "start", "bash", "--spec", "prompt me"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "prompt me"]);
     hub.wait();
     hub.call(
         "decide",
@@ -633,7 +683,7 @@ fn denying_a_prompt_tells_the_worker_why() {
 #[test]
 fn a_human_reply_in_the_app_is_reported() {
     let hub = Hub::new("hreply");
-    hub.ok(&["worker", "start", "bash", "--spec", "ask about color"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "ask about color"]);
     hub.wait();
     let replied = hub.call(
         "reply",
@@ -654,7 +704,7 @@ fn a_worker_diff_shows_its_branch_and_a_review_reaches_it() {
     hub.ok(&[
         "worker",
         "start",
-        "bash",
+        "lee",
         "--spec",
         "echo",
         "--worktree",
@@ -725,7 +775,7 @@ fn a_fan_out_runs_one_task_three_ways_and_the_pick_is_merged() {
     );
     let fanned = hub.call(
         "worker.fanout",
-        serde_json::json!({ "repo": hub.repo_key(), "profile": "bash", "spec": "done", "title": "Try it",
+        serde_json::json!({ "repo": hub.repo_key(), "profile": "lee", "spec": "done", "title": "Try it",
                             "branch": "feat/try", "count": 3 }),
     );
     assert_eq!(
@@ -829,7 +879,7 @@ fn an_orchestrator_in_its_own_worktree_keeps_its_workers_there() {
     let start = |worktree: &str| {
         let started = hub.call(
             "worker.start",
-            serde_json::json!({ "repo": hub.repo_key(), "profile": "bash", "spec": "sleep", "agent": login, "worktree": worktree }),
+            serde_json::json!({ "repo": hub.repo_key(), "profile": "lee", "spec": "sleep", "agent": login, "worktree": worktree }),
         );
         PathBuf::from(started["result"]["cwd"].as_str().unwrap_or_else(|| panic!("{started}")))
     };
@@ -857,7 +907,7 @@ fn simultaneous_starts_leave_one_daemon() {
     let hub = Hub::new("race");
     let starts: Vec<_> = (0..10)
         .map(|_| {
-            Command::new(env!("CARGO_BIN_EXE_hub"))
+            Command::new(env!("CARGO_BIN_EXE_echoctl"))
                 .arg("daemon")
                 .env("HUB_STATE", &hub.state)
                 .stdout(std::process::Stdio::null())
@@ -932,7 +982,9 @@ fn what_echo_types_reaches_the_agent_as_given() {
     });
     let ping = hub.call("ping", serde_json::json!({}));
     assert!(
-        ping["result"]["exe"].as_str().is_some_and(|exe| exe.ends_with("hub")),
+        ping["result"]["exe"]
+            .as_str()
+            .is_some_and(|exe| exe.ends_with("echoctl")),
         "{ping}"
     );
 }
@@ -1000,7 +1052,7 @@ fn an_attached_terminal_passes_its_resize_on() {
     let mut enter = agent.clone();
     enter["text"] = serde_json::json!("\r");
 
-    // `hub attach --echo`, as an Echo pane runs it, in a terminal that grows after it attaches.
+    // `echoctl attach --echo`, as an Echo pane runs it, in a terminal that grows after it attaches.
     let size = |rows, cols| PtySize {
         rows,
         cols,
@@ -1008,7 +1060,7 @@ fn an_attached_terminal_passes_its_resize_on() {
         pixel_height: 0,
     };
     let pair = native_pty_system().openpty(size(16, 47)).unwrap();
-    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_hub"));
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_echoctl"));
     command.args(["attach", "--echo", &format!("a{id}")]);
     command.env("HUB_STATE", &hub.state);
     let mut child = pair.slave.spawn_command(command).unwrap();
@@ -1043,7 +1095,7 @@ fn screen_of(hub: &Hub, target: &serde_json::Value) -> String {
     String::from_utf8_lossy(&seen).into_owned()
 }
 
-/// `hub mux` in a terminal of its own, as an Echo pane runs it: what it prints, and keys to type.
+/// `echoctl mux` in a terminal of its own, as an Echo pane runs it: what it prints, and keys to type.
 struct MuxPane {
     output: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
     keys: Box<dyn Write + Send>,
@@ -1061,7 +1113,7 @@ impl MuxPane {
                 pixel_height: 0,
             })
             .unwrap();
-        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_hub"));
+        let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_echoctl"));
         command.arg("mux");
         command.env("HUB_STATE", &hub.state);
         command.env("HUB_SHELL", "/bin/sh");
@@ -1445,4 +1497,38 @@ fn echo_remote_pairs_a_phone_and_drives_an_agent() {
     hub.eventually("the port to close", || {
         std::net::TcpStream::connect(("127.0.0.1", port)).is_err()
     });
+}
+
+#[test]
+fn ui_requests_need_echo_open_and_reach_its_snapshot() {
+    let hub = Hub::new("ui");
+    hub.ok(&["status"]);
+    let refused = hub.fails(&["ui", "open", "README.md:1"]);
+    assert!(refused.contains("Echo is not open on repo"), "{refused}");
+    // An Orchestrator starts whether or not Echo is open.
+    assert!(hub.ok(&["ui", "orchestrator"]).contains("Started Orchestrator a1"));
+
+    let mut stream = UnixStream::connect(hub.state.join("hubd.sock")).unwrap();
+    let request = serde_json::json!({ "method": "events", "params": { "repo": hub.repo_key() } });
+    stream.write_all(format!("{request}\n").as_bytes()).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+    let mut lines = BufReader::new(stream).lines();
+    lines.next();
+    lines.next();
+    hub.run_with(&["ui", "open", "README.md:1"], &[("HUB_AGENT", "1")]);
+    assert!(hub.fails(&["ui", "show", "w9"]).contains("no Worker w9"));
+    assert!(hub.fails(&["ui", "diff", "a1"]).contains("only a Worker has a diff"));
+    hub.ok(&["ui", "notify", "tests pass"]);
+    let mut seen = Vec::new();
+    while seen.len() < 2 {
+        let snapshot: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        seen = snapshot["ui"].as_array().cloned().unwrap_or_default();
+    }
+    assert_eq!(seen[0]["action"], "open");
+    assert_eq!(seen[0]["path"], "README.md");
+    assert_eq!(seen[0]["line"], 1);
+    assert_eq!(seen[0]["from"], "a1");
+    assert_eq!(seen[0]["root"], hub.repo_key());
+    assert_eq!(seen[1]["action"], "notify");
+    assert_eq!(seen[1]["text"], "tests pass");
 }

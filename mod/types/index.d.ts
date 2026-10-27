@@ -1,6 +1,6 @@
 declare module 'claude-code' {
   interface PluginState {
-    hub: {
+    echo: {
       showTools: boolean
       turnTools: number
     }

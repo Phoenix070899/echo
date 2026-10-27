@@ -89,15 +89,17 @@ enum Ledger {
 }
 
 extension WorkerRow {
-    /// Running blue, done green, anything that settled badly red.
+    /// Running blue, done green, ended grey, anything that settled badly red.
     var markColor: Color {
         if isActive { return Ledger.run }
+        if phase == "ended" { return Ledger.ink3 }
         return isTrouble ? Ledger.fail : Ledger.done
     }
 
-    /// "Running", "Done", "Blocked", "Exited", "Lost".
+    /// "Running", "Waiting", "Done", "Ended", "Blocked", "Exited", "Lost".
     var phaseLabel: String {
-        isActive ? "Running" : phase.prefix(1).uppercased() + phase.dropFirst()
+        if isActive { return state == .waiting ? "Waiting" : "Running" }
+        return phase.prefix(1).uppercased() + phase.dropFirst()
     }
 }
 

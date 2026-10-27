@@ -46,7 +46,7 @@ private struct FilesTree: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Ledger.band)
+                .background(Ledger.band, in: Rectangle())
         }
     }
 
@@ -147,7 +147,7 @@ private struct FilesTree: View {
         .padding(.leading, 14)
         .padding(.trailing, 8)
         .padding(.vertical, 8)
-        .background(Ledger.band)
+        .background(Ledger.band, in: Rectangle())
     }
 
     private func mark(_ entry: FileEntry) -> RowMark? {
@@ -620,7 +620,7 @@ private struct FilesTabBar: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
-        .background(Ledger.band)
+        .background(Ledger.band, in: Rectangle())
         .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: 1) }
     }
 

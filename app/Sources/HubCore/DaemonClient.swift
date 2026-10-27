@@ -1,6 +1,6 @@
 import Foundation
 
-/// Talks to the Hub Daemon the way the `hub` CLI does: one JSON line each way, or a stream.
+/// Talks to the Hub Daemon the way the `echoctl` CLI does: one JSON line each way, or a stream.
 public struct DaemonClient: Sendable {
     public let socketPath: String
 
@@ -8,12 +8,17 @@ public struct DaemonClient: Sendable {
         self.socketPath = socketPath
     }
 
-    /// `$HUB_STATE/hubd.sock`, else `~/.agent-hub/hubd.sock`.
+    /// `$HUB_STATE/hubd.sock`, else `~/.echo/hubd.sock`; until the daemon has moved state from
+    /// before the rename, `~/.agent-hub/hubd.sock`.
     public static func defaultSocketPath() -> String {
         if let state = ProcessInfo.processInfo.environment["HUB_STATE"], !state.isEmpty {
             return state + "/hubd.sock"
         }
-        return NSHomeDirectory() + "/.agent-hub/hubd.sock"
+        let echo = NSHomeDirectory() + "/.echo"
+        if !FileManager.default.fileExists(atPath: echo), FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.agent-hub") {
+            return NSHomeDirectory() + "/.agent-hub/hubd.sock"
+        }
+        return echo + "/hubd.sock"
     }
 
     /// Opens a connection and sends the request line; the caller reads the response.
@@ -73,7 +78,7 @@ public struct DaemonClient: Sendable {
         try call("terminal.write", params)
     }
 
-    /// The `hub` the daemon runs as, which Echo's terminal panes run to attach.
+    /// The `echoctl` the daemon runs as, which Echo's terminal panes run to attach.
     public func hubExecutable() throws -> String {
         guard let exe = (try call("ping") as? [String: Any])?["exe"] as? String else { throw HubError.badResponse }
         return exe
@@ -126,7 +131,7 @@ public struct DaemonClient: Sendable {
     }
 
     /// The human's multiplexer around an agent's or a Worker's terminal: `command` with
-    /// `{session}`, `{dir}` and `{command}` filled in, as the line a pane runs (`hub mux`), and the
+    /// `{session}`, `{dir}` and `{command}` filled in, as the line a pane runs (`echoctl mux`), and the
     /// multiplexer session it opens.
     public func muxCommand(_ target: TerminalTarget, command: String) throws -> (command: String, session: String?) {
         var params = target.params

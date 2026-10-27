@@ -52,7 +52,7 @@ public struct Agent: Decodable, Equatable, Identifiable, Sendable {
     }
 
     /// Its name, or until the first request names it, what it is and its id ("Orchestrator a3",
-    /// as `hub attach a3` reads), so two unnamed ones read apart.
+    /// as `echoctl attach a3` reads), so two unnamed ones read apart.
     public var displayName: String { name ?? "\(kindName) a\(id)" }
 }
 
@@ -67,6 +67,25 @@ public struct AgentGroup: Identifiable, Equatable, Sendable {
 }
 
 /// One repo as the daemon's `events` stream draws it: its agents, their Workers, what needs you.
+/// One `echoctl ui` request: open a file, show a Worker or agent or a Worker's diff, or notify.
+public struct UiRequest: Decodable, Equatable, Sendable {
+    public let id: String
+    /// Unix seconds.
+    public let at: Int
+    public let action: String
+    /// Who asked: `w12` or `a3`, or nil from a plain terminal.
+    public let from: String?
+    /// `open`: the checkout, the path in it, and the 1-based line.
+    public let root: String?
+    public let path: String?
+    public let line: Int?
+    /// `show` and `diff`: the Worker (`w12`) or the agent.
+    public let worker: String?
+    public let agent: Int?
+    /// `notify`.
+    public let text: String?
+}
+
 public struct Snapshot: Decodable, Equatable, Sendable {
     public struct Orchestrator: Decodable, Equatable, Sendable {
         public let live: Bool
@@ -88,10 +107,12 @@ public struct Snapshot: Decodable, Equatable, Sendable {
     public let needs: [Need]
     /// Account-wide; every session's snapshot carries the same.
     public let usage: Usage?
+    /// What agents asked Echo to show with `echoctl ui`, for the last half minute.
+    public let ui: [UiRequest]?
 
     public init(
         repo: String, orchestrator: Orchestrator, agents: [Agent]? = nil, workers: [WorkerRow],
-        needs: [Need], usage: Usage? = nil
+        needs: [Need], usage: Usage? = nil, ui: [UiRequest]? = nil
     ) {
         self.repo = repo
         self.orchestrator = orchestrator
@@ -99,6 +120,7 @@ public struct Snapshot: Decodable, Equatable, Sendable {
         self.workers = workers
         self.needs = needs
         self.usage = usage
+        self.ui = ui
     }
 
     public static func empty(repo: String) -> Snapshot {
@@ -197,8 +219,12 @@ public struct Usage: Decodable, Equatable, Sendable {
 public enum WorkerState: String, Decodable, Sendable {
     case needsYou = "needs you"
     case running
+    /// Live at its input box while background work it started runs: a shell, a monitor.
+    case waiting
     case failed
     case done
+    /// Stopped at its input box after a finished turn with no Final Report; its last screen stands in.
+    case ended
 }
 
 public struct WorkerRow: Decodable, Equatable, Identifiable, Sendable {
@@ -207,7 +233,7 @@ public struct WorkerRow: Decodable, Equatable, Identifiable, Sendable {
     public let profile: String
     public let title: String
     public let state: WorkerState
-    /// The Worker's lifecycle state: starting, running, done, blocked, exited, lost.
+    /// The Worker's lifecycle state: starting, running, done, ended, blocked, exited, lost.
     public let phase: String
     /// When it last reported (Unix seconds), so its quiet time counts up without a new snapshot,
     /// and an unchanged repo sends an unchanged snapshot.
@@ -245,8 +271,9 @@ public struct WorkerRow: Decodable, Equatable, Identifiable, Sendable {
     /// Still working on its Task: starting or running, waiting on the human or not.
     public var isActive: Bool { phase == "starting" || phase == "running" }
 
-    /// Settled badly: blocked, exited without a Final Report, or lost.
-    public var isTrouble: Bool { !isActive && phase != "done" }
+    /// Settled badly: blocked, exited mid-turn without a Final Report, or lost. Ended is not
+    /// trouble: the Worker finished its turn and only skipped the report.
+    public var isTrouble: Bool { !isActive && phase != "done" && phase != "ended" }
 
     /// "claude-sonnet-5-5, high effort".
     public var modelLine: String? {
@@ -361,7 +388,7 @@ public enum TerminalTarget: Hashable, Sendable {
         }
     }
 
-    /// `a3`, `w21`: how `hub attach` and multiplexer session names call it.
+    /// `a3`, `w21`: how `echoctl attach` and multiplexer session names call it.
     public var label: String {
         switch self {
         case .agent(let id): return "a\(id)"

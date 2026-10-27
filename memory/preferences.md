@@ -15,5 +15,6 @@ Durable preferences and corrections stated by the user. Maintained by the `ino` 
 - When acting as shikamaru planner, write the plan and hand execution to other agents (kakashi implementers); do not execute the work. (2026-10-01)
 - Keep each PR's unified diff under 240,000 characters; split larger work across multiple PRs before opening. (2026-10-02)
 - Group related changes together before running expensive operations (re-embedding, re-indexing, etc.) to batch the work and reduce cost. (2026-10-08)
+- Point dev servers and checks at the existing frozen corpus database; never start or create a new database. (2026-10-27)
 
 ## Never do

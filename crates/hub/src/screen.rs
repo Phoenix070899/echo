@@ -9,7 +9,8 @@ pub enum Look {
     PermissionPrompt,
     /// A turn is running: the spinner line, e.g. `· Churning… (21s · ↓ 81 tokens)`.
     Working,
-    /// At its input box while a background shell it started still runs (`· 1 shell ·` in the footer).
+    /// At its input box while background work it started still runs: the footer counts it, as in
+    /// `· 1 shell ·`, `· 1 monitor ·`, or `· 1 shell, 1 monitor ·`.
     Waiting,
     /// Waiting at its input box.
     Idle,
@@ -33,17 +34,34 @@ pub fn look(screen: &str) -> Look {
         .iter()
         .rposition(|line| line.starts_with('❯'))
         .map_or(&lines[..0], |at| &lines[at..]);
-    if footer.iter().any(|line| line.split('·').any(is_shell_count)) {
+    if footer.iter().any(|line| line.split('·').any(is_background_count)) {
         return Look::Waiting;
     }
     Look::Idle
 }
 
-/// A footer segment like "1 shell" or "2 shells".
-fn is_shell_count(segment: &str) -> bool {
-    let mut words = segment.split_whitespace();
-    let count = words.next().is_some_and(|n| n.parse::<u32>().is_ok_and(|n| n > 0));
-    count && matches!(words.next(), Some("shell" | "shells")) && words.next().is_none()
+/// Whether the screen shows a turn that finished at the input box, as in
+/// `✻ Brewed for 18s · done 4:38 PM` above an empty `❯`: the Worker stopped on its own.
+pub fn turn_ended(screen: &str) -> bool {
+    let lines: Vec<&str> = screen.lines().map(str::trim).collect();
+    let finished = lines
+        .iter()
+        .any(|line| line.starts_with('✻') && line.contains(" for ") && line.contains("· done"));
+    finished && lines.iter().any(|line| line.starts_with('❯')) && matches!(look(screen), Look::Idle | Look::Waiting)
+}
+
+/// A footer segment counting background work, like "1 shell", "2 shells", "1 monitor", or
+/// "1 shell, 1 monitor". The agents pill ("← 2 agents") is not one.
+fn is_background_count(segment: &str) -> bool {
+    segment.split(',').all(|part| {
+        let mut words = part.split_whitespace();
+        let count = words.next().is_some_and(|n| n.parse::<u32>().is_ok_and(|n| n > 0));
+        let noun = matches!(
+            words.next(),
+            Some("shell" | "shells" | "monitor" | "monitors" | "agent" | "agents" | "task" | "tasks")
+        );
+        count && noun && words.next().is_none()
+    })
 }
 
 /// The spinner line: a glyph, a word ending in "…", then "(<digits>".
@@ -117,6 +135,38 @@ mod tests {
         let screen = "⏺ Step B runs in the background.\n✻ Baked for 12s · done 11:00 AM · 1 shell still running\n\
                       ────\n❯ \n────\n    Haiku 5.5 | ctx: 59% used\n  ⏵⏵ auto mode on · 2 shells · ← 1 agent";
         assert_eq!(look(screen), Look::Waiting);
+    }
+
+    #[test]
+    fn idle_with_a_monitor_is_waiting() {
+        // Claude Code 2.1.308's footers, with a Monitor alone and beside a background shell.
+        for footer in [
+            "⏵⏵ auto mode on · 1 monitor · ← 2 agents",
+            "⏵⏵ auto mode on · 1 shell, 1 monitor · ← 2 agents",
+        ] {
+            let screen =
+                format!("✻ Baked for 2s · done 11:45 PM · 1 monitor still running\n────\n❯ \n────\n  {footer}");
+            assert_eq!(look(&screen), Look::Waiting, "{footer}");
+        }
+    }
+
+    #[test]
+    fn the_agents_pill_is_not_background_work() {
+        assert_eq!(
+            look("✻ Baked for 2s · done 11:45 PM\n────\n❯ \n────\n  ⏵⏵ auto mode on · ← 2 agents"),
+            Look::Idle
+        );
+    }
+
+    #[test]
+    fn a_turn_ended_at_the_input_box() {
+        let screen =
+            "⏺ Done. Both databases are dropped.\n✻ Brewed for 18s · done 4:38 PM\n────\n❯ \n────\n    Haiku 5.5";
+        assert!(turn_ended(screen));
+        assert!(!turn_ended(
+            "⏺ Running it\n· Churning… (21s · ↓ 81 tokens)\n────\n❯ \n────"
+        ));
+        assert!(!turn_ended(""));
     }
 
     #[test]

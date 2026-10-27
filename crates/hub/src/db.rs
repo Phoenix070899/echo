@@ -17,7 +17,10 @@ pub mod state {
     pub const BLOCKED: &str = "blocked";
     /// The agent exited without a Final Report.
     pub const EXITED: &str = "exited";
-    /// The daemon restarted while the Worker was live; resume it with `hub worker resume`.
+    /// It stopped at its input box after a finished turn, then exited or was closed, with no
+    /// Final Report; its last screen stands in for one.
+    pub const ENDED: &str = "ended";
+    /// The daemon restarted while the Worker was live; resume it with `echoctl worker resume`.
     pub const LOST: &str = "lost";
 
     pub fn is_live(state: &str) -> bool {
@@ -375,7 +378,7 @@ pub fn answer(conn: &Connection, question_id: i64, text: &str) -> Result<()> {
     let question = message(conn, question_id)?;
     if question.kind != kind::QUESTION {
         bail!(
-            "message #{question_id} is a {}, not a question; answer an on-screen prompt with `hub worker key`",
+            "message #{question_id} is a {}, not a question; answer an on-screen prompt with `echoctl worker key`",
             question.kind
         );
     }
@@ -485,7 +488,7 @@ pub fn agents(conn: &Connection, repo: Option<&str>) -> Result<Vec<Agent>> {
     Ok(rows)
 }
 
-/// The repo's first open Orchestrator: the one `hub` and older clients mean by "the Orchestrator".
+/// The repo's first open Orchestrator: the one `echoctl` and older clients mean by "the Orchestrator".
 pub fn first_orchestrator(conn: &Connection, repo: &str) -> Result<Option<Agent>> {
     Ok(agents(conn, Some(repo))?
         .into_iter()
@@ -605,7 +608,7 @@ mod tests {
                 &conn,
                 &NewWorker {
                     repo: "/r",
-                    profile: "bash",
+                    profile: "lee",
                     title: "t",
                     spec: "s",
                     cwd: "/r",
@@ -685,7 +688,7 @@ mod tests {
         assert!(answer(&conn, b, "yes")
             .unwrap_err()
             .to_string()
-            .contains("hub worker key"));
+            .contains("echoctl worker key"));
     }
 
     #[test]

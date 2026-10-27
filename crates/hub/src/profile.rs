@@ -110,7 +110,7 @@ pub fn system_prompt(hub: &Path, profile: &Profile) -> Result<String> {
 
 /// The first message of a resumed Worker session.
 const RESUMED: &str = "Your terminal was restarted. Continue your Task from where you left off: \
-                       check what is already done before repeating anything, then finish with hub done.";
+                       check what is already done before repeating anything, then finish with echoctl done.";
 
 /// How a Worker's Claude session begins: a new session on its Task, or a resumed one.
 pub enum Launch<'a> {
@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn real_profiles_load() {
         let hub = crate::paths::hub_dir();
-        for name in ["hinata", "naruto", "jiraiya", "sasuke", "ino", "bash"] {
+        for name in ["hinata", "naruto", "jiraiya", "sasuke", "ino", "lee"] {
             load(&hub, name).unwrap_or_else(|e| panic!("{name}: {e}"));
         }
     }

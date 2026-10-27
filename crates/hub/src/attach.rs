@@ -1,4 +1,4 @@
-//! `hub attach`: this terminal becomes a Worker's or an agent's terminal until Ctrl-] or it ends.
+//! `echoctl attach`: this terminal becomes a Worker's or an agent's terminal until Ctrl-] or it ends.
 //! With `--follow` it stays put and reattaches whenever the agent starts again, showing the
 //! agent's shell while it is stopped, which is how Echo shows an agent inside the human's
 //! multiplexer. With `--echo` it is one of Echo's own
@@ -27,7 +27,7 @@ static TARGET: Mutex<Option<Value>> = Mutex::new(None);
 /// Running in an Echo pane (`--echo`).
 static ECHO: AtomicBool = AtomicBool::new(false);
 
-/// What `hub attach` names: `w12` (or `12`, `#12`) is a Worker, `a3` an agent.
+/// What `echoctl attach` names: `w12` (or `12`, `#12`) is a Worker, `a3` an agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
     Worker(i64),
@@ -100,14 +100,14 @@ fn restore_and_exit(note: &str) -> ! {
     if let Some(term) = ORIGINAL.get() {
         unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, term) };
     }
-    eprintln!("\r\n[hub: {note}]");
+    eprintln!("\r\n[echoctl: {note}]");
     std::process::exit(0)
 }
 
 /// A line in raw mode, between attachments.
 fn say(note: &str) {
     let mut stdout = std::io::stdout();
-    let _ = write!(stdout, "\r\n\x1b[2m[hub: {note}]\x1b[0m\r\n");
+    let _ = write!(stdout, "\r\n\x1b[2m[echoctl: {note}]\x1b[0m\r\n");
     let _ = stdout.flush();
 }
 

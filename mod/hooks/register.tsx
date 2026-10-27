@@ -3,8 +3,8 @@ import type { Register } from 'claude-code'
 
 import { needsHuman } from './report'
 
-const showTools = atom({ plugin: 'hub', key: 'showTools' } as const, false)
-const turnTools = atom({ plugin: 'hub', key: 'turnTools' } as const, 0)
+const showTools = atom({ plugin: 'echo', key: 'showTools' } as const, false)
+const turnTools = atom({ plugin: 'echo', key: 'turnTools' } as const, 0)
 
 /**
  * Reply cards: navy, or amber when the human must act. A terminal cell holds one solid color,

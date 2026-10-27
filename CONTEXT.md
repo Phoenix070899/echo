@@ -1,4 +1,4 @@
-# Agent Hub
+# Echo
 
 A working environment where one human talks to Orchestrators, which hand Tasks to specialised Workers and report back, or to plain Claude Code sessions, all in one app: Echo.
 
@@ -53,7 +53,7 @@ The human's standing instructions about how work should be done, kept between se
 _Avoid_: memory, settings
 
 **Dashboard**:
-The list of every Worker of the Hub Session with its state, as `hub status` prints it.
+The list of every Worker of the Hub Session with its state, as `echoctl status` prints it.
 _Avoid_: status panel, monitor
 
 **Hub Daemon**:
@@ -61,5 +61,5 @@ The long-running process that owns every Worker's terminal, worktree, and messag
 _Avoid_: server, backend, runtime
 
 **Echo**:
-The native macOS app (formerly Hub App): one tab per repo, a ledger grouped by agent (Needs you, Running, Done), and one terminal; it only views and drives the Hub Daemon. The CLI and daemon keep the name `hub`.
+The native macOS app (formerly Hub App): one tab per repo, a ledger grouped by agent (Needs you, Running, Done), and one terminal; it only views and drives the Hub Daemon. The CLI and daemon keep the name `echoctl`.
 _Avoid_: Hub App, client, GUI, frontend

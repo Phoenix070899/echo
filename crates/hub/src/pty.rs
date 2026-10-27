@@ -16,7 +16,7 @@ pub const COLS: u16 = 160;
 /// Only the visible screen is ever read or redrawn; the attached terminal keeps its own history.
 const SCROLLBACK: usize = 0;
 /// Output chunks (16 KiB at most) queued for one attached client. A client that falls this far
-/// behind, like a stopped `hub attach`, is let go rather than held in memory without limit; it
+/// behind, like a stopped `echoctl attach`, is let go rather than held in memory without limit; it
 /// attaches again to a fresh screen.
 const BACKLOG: usize = 1024;
 
@@ -38,8 +38,11 @@ pub struct Live {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// The blocker kind already reported for the current stretch, cleared when work resumes.
     pub blocker: Mutex<Option<String>>,
-    /// Set by `hub worker close`, so the exit is not reported as a failure.
+    /// Set by `echoctl worker close`, so the exit is not reported as a failure.
     pub closing: AtomicBool,
+    /// At its input box while background work it started runs (`Look::Waiting`), as the screen
+    /// watcher last saw it.
+    pub waiting: AtomicBool,
     alive: AtomicBool,
     started: Instant,
 }
@@ -78,6 +81,7 @@ impl Live {
             killer: Mutex::new(child.clone_killer()),
             blocker: Mutex::new(None),
             closing: AtomicBool::new(false),
+            waiting: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             started: Instant::now(),
         });

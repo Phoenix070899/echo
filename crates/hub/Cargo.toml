@@ -1,11 +1,11 @@
 [package]
-name = "hub"
+name = "echoctl"
 version = "0.1.0"
 edition = "2021"
-description = "Agent Hub: the Hub Daemon and the hub CLI"
+description = "Echo: the Hub Daemon and the echoctl CLI"
 
 [[bin]]
-name = "hub"
+name = "echoctl"
 path = "src/main.rs"
 
 [dependencies]

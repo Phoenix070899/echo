@@ -42,6 +42,23 @@ struct FilePreviewPanel: View {
             return handle(press.key == .return ? .return : press.key == .downArrow ? .down : .up) ? .handled : .ignored
         }
         .onKeyPress(.tab) { NSEvent.modifierFlags.contains(.shift) && handle(.backtab) ? .handled : .ignored }
+        // ⌘F searches the file: rendered Markdown and pages switch to their source to do it.
+        .onKeyPress(characters: ["f"], phases: .down) { press in
+            guard press.modifiers == .command, notes.editing == nil else { return .ignored }
+            switch content.state {
+            case .text, .markdown, .html:
+                content.rendered = false
+                content.find = Date()
+                return .handled
+            default:
+                return .ignored
+            }
+        }
+        // ⌘E starts and stops editing, ⌘S saves; the code view hands them here while it holds the keyboard.
+        .onKeyPress(characters: ["e", "s"], phases: .down) { press in
+            guard press.modifiers == .command, notes.editing == nil else { return .ignored }
+            return handle(press.characters == "e" ? .edit : .save) ? .handled : .ignored
+        }
         .onChange(of: model.previewFocusRequest) { if active { focused = true } }
         .onChange(of: active) { if active, !model.treeFocused { focused = true } }
         .onChange(of: file) {
@@ -58,8 +75,8 @@ struct FilePreviewPanel: View {
         .onAppear { if active, !model.treeFocused { focused = true } }
         // A search hit points at a line, which only the source shows.
         .onChange(of: model.previewLine, initial: true) { if active, model.previewLine != nil { content.rendered = false } }
-        .task(id: "\(file.root)|\(file.path)|\(files.generation)|\(scheme == .dark)") {
-            await content.load(file, dark: scheme == .dark)
+        .task(id: "\(file.root)|\(file.path)|\(files.generation)|\(scheme == .dark)|\(content.rereads)") {
+            await content.load(file, dark: scheme == .dark, unsaved: model.unsaved.contains(file))
         }
     }
 
@@ -67,23 +84,38 @@ struct FilePreviewPanel: View {
     private func handle(_ key: CodeKey) -> Bool {
         switch key {
         case .escape:
-            if notes.editing != nil {
+            if content.editing {
+                stopEditing()
+            } else if notes.editing != nil {
                 notes.editing = nil
                 focused = true
             } else {
                 model.preview = nil
             }
             return true
+        case .edit:
+            guard active else { return false }
+            if content.editing {
+                stopEditing()
+            } else {
+                startEditing()
+            }
+            return true
+        case .save:
+            guard active, content.editing else { return false }
+            save()
+            return true
         // ⇧Tab gives the keyboard back to the tree.
         case .backtab:
-            guard active, model.filesShown, notes.editing == nil else { return false }
+            guard active, model.filesShown, notes.editing == nil, !content.editing else { return false }
             model.filesFocusRequest += 1
             return true
         // ↑ and ↓ pick a rendered Markdown block or a line of code, and Return leaves a note on it.
         // Keys typed in a note bubble up here too; while one is being written, they are its own.
+        // While the file is edited they are the text's own.
         case .up, .down, .return:
             let count = noteTargets
-            guard active, count > 0, notes.editing == nil else { return false }
+            guard active, count > 0, notes.editing == nil, !content.editing else { return false }
             if key == .return {
                 guard let cursor = notes.cursor else { return false }
                 notes.start(at: cursor)
@@ -108,11 +140,50 @@ struct FilePreviewPanel: View {
 
     private var notesOpen: Bool { noteTargets > 0 }
 
+    private var unsaved: Bool { model.unsaved.contains(file) }
+
+    /// Shows the source as editable text; notes wait until editing stops.
+    private func startEditing() {
+        guard content.editable else { return }
+        content.rendered = false
+        notes.cursor = nil
+        notes.editing = nil
+        content.saveError = nil
+        content.editing = true
+    }
+
+    /// Unsaved edits are saved or let go first; the file is then read again, coloured as saved.
+    private func stopEditing() {
+        let had = unsaved
+        guard model.settleDraft(file) else { return }
+        content.editing = false
+        content.saveError = nil
+        if had || content.changedOnDisk { content.reread(quiet: true) }
+        focused = true
+    }
+
+    private func save() {
+        do {
+            try model.saveDraft(file)
+            content.saveError = nil
+            content.keepEdits()
+            content.reread(quiet: true)
+        } catch {
+            content.saveError = "\(file.name) was not saved: \(error.localizedDescription)"
+        }
+    }
+
+    /// Text typed back to what the file holds counts as no edit.
+    private func edited(_ text: String) {
+        model.setDraft(content.isFileText(text) ? nil : text, for: file)
+    }
+
     private func codeView(_ code: Code, cut: Bool) -> some View {
         VStack(spacing: 0) {
             CodeView(code: code, version: content.reloads, changed: content.changed,
                      focus: active ? model.previewLine : nil, file: file, fileNotes: rootNotes,
-                     setNotes: setRootNotes, notes: notes, done: { focused = true }, key: handle, active: active)
+                     setNotes: setRootNotes, notes: notes, done: { focused = true }, key: handle, active: active,
+                     find: content.find, editing: content.editing, edited: edited)
                 .equatable()
             if cut {
                 Text("Only the first 1 MB is shown. Open the file to read the rest.")
@@ -159,7 +230,9 @@ struct FilePreviewPanel: View {
     @ViewBuilder
     private var notesBar: some View {
         let notes = rootNotes
-        if notesOpen || !notes.isEmpty {
+        if content.editing {
+            editBar
+        } else if notesOpen || !notes.isEmpty {
             let name = model.terminalName ?? "the agent"
             HStack(spacing: 10) {
                 if notes.isEmpty {
@@ -192,6 +265,45 @@ struct FilePreviewPanel: View {
         }
     }
 
+    /// While editing: how to save and stop, a failed save, or a change on disk to pick about.
+    private var editBar: some View {
+        HStack(spacing: 10) {
+            if content.changedOnDisk {
+                Text("\(file.name) changed on disk while you were editing it.")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Ledger.changed)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Button("Keep my changes") { content.keepEdits() }
+                    .buttonStyle(.ledgerLink)
+                    .fixedSize()
+                    .help("Saving writes your text over the change on disk.")
+                Button("Show the new file") {
+                    model.setDraft(nil, for: file)
+                    content.takeHeld()
+                }
+                .buttonStyle(.ledger)
+                .fixedSize()
+                .help("Drops your unsaved changes.")
+            } else if let error = content.saveError {
+                Text(error)
+                    .foregroundStyle(Ledger.fail)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+            } else {
+                Text(unsaved ? "Edited. ⌘S saves; Esc or ⌘E stops editing." : "Editing. ⌘S saves; Esc or ⌘E stops editing.")
+                    .foregroundStyle(Ledger.ink3)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+            }
+        }
+        .font(.system(size: 12.5))
+        .padding(.horizontal, 18)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Ledger.wash)
+    }
+
     private var header: some View {
         HStack(spacing: 10) {
             Text(file.path)
@@ -208,7 +320,23 @@ struct FilePreviewPanel: View {
                     .foregroundStyle(mark == .modified || mark == .renamed ? Ledger.changed : mark == .deleted ? Ledger.fail : Ledger.done)
             }
             Spacer(minLength: 8)
-            if content.state.hasRenderedView {
+            if content.editing {
+                Button("Done") { stopEditing() }
+                    .buttonStyle(.ledgerLink)
+                    .fixedSize()
+                    .help("Stops editing. Esc or ⌘E")
+                Button("Save") { save() }
+                    .buttonStyle(.ledger)
+                    .fixedSize()
+                    .disabled(!unsaved)
+                    .help("Writes your changes to the file. ⌘S")
+            } else if content.editable {
+                Button("Edit") { startEditing() }
+                    .buttonStyle(.ledgerLink)
+                    .fixedSize()
+                    .help("Edit the file as text. ⌘E")
+            }
+            if content.state.hasRenderedView, !content.editing {
                 Picker("View", selection: $content.rendered) {
                     Text("Rendered").tag(true)
                     Text("Source").tag(false)
@@ -306,25 +434,62 @@ struct PreviewTabs: View {
     let files: [FileRef]
 
     var body: some View {
+        HStack(spacing: 0) {
+            // Names show in full, never wrapped or cut; when they overflow, the strip scrolls sideways.
+            ScrollViewReader { scroller in
+                ScrollView(.horizontal) {
+                    tabs
+                }
+                .scrollIndicators(.never)
+                .onAppear { scroller.scrollTo(model.preview) }
+                .onChange(of: model.preview) { _, shown in
+                    withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(shown) }
+                }
+            }
+            Spacer(minLength: 8)
+            if model.preview != nil {
+                Text("Esc returns to the terminal")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Ledger.ink3)
+                    .fixedSize()
+                    .padding(.trailing, 6)
+                    .padding(.bottom, 6)
+            }
+        }
+        .font(.system(size: 13, weight: .medium))
+        .padding(.top, 6)
+        .padding(.horizontal, 8)
+        .background(Ledger.band, in: Rectangle())
+    }
+
+    private var tabs: some View {
         HStack(spacing: 2) {
             tab(active: model.preview == nil) {
                 Button { model.preview = nil } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "terminal").font(.system(size: 11))
-                        Text("Terminal")
+                        Text("Terminal").fixedSize()
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
+            .id(FileRef?.none)
             ForEach(files, id: \.self) { file in
                 tab(active: model.preview == file, file: file) {
                     HStack(spacing: 8) {
                         Button { model.preview = file } label: {
-                            Text(file.name).lineLimit(1).contentShape(Rectangle())
+                            Text(file.name).fixedSize().contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .help(file.path)
+                        if model.unsaved.contains(file) {
+                            Circle()
+                                .fill(Ledger.ink2)
+                                .frame(width: 6, height: 6)
+                                .help("Unsaved changes")
+                                .accessibilityLabel("Unsaved changes")
+                        }
                         Button { model.closePreview(file) } label: {
                             Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                         }
@@ -333,19 +498,10 @@ struct PreviewTabs: View {
                         .accessibilityLabel("Close \(file.name)")
                     }
                 }
-            }
-            Spacer(minLength: 8)
-            if model.preview != nil {
-                Text("Esc returns to the terminal")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Ledger.ink3)
-                    .padding(.trailing, 6)
+                .id(Optional(file))
             }
         }
-        .font(.system(size: 13, weight: .medium))
-        .padding(.top, 6)
-        .padding(.horizontal, 8)
-        .background(Ledger.band)
+        .fixedSize()
     }
 
     /// A file's tab can be dragged onto another to reorder.
@@ -397,6 +553,8 @@ final class PreviewContent: ObservableObject {
     @Published var state: State = .loading
     /// Markdown shows rendered unless the human picked Source.
     @Published var rendered = true
+    /// When ⌘F last asked for the find bar while the preview, not the code, held the keyboard.
+    @Published var find: Date?
     /// Counts reads, so the web view loads the page again when the file changes.
     @Published var reloads = 0
     /// Errors the page reported (script errors, failed loads, `console.error`), newest last.
@@ -414,9 +572,28 @@ final class PreviewContent: ObservableObject {
         return view
     }()
 
+    /// The human is editing the file as text (ui-ux/0041).
+    @Published var editing = false
+    /// The whole file is shown as UTF-8 text, so what the human types can be saved over it.
+    @Published private(set) var editable = false
+    /// The file changed on disk while the edits were unsaved; the read waits until the human picks.
+    @Published private(set) var changedOnDisk = false
+    @Published var saveError: String?
+    /// Bumped to read the file again though it did not change: after a save or a discard.
+    @Published private(set) var rereads = 0
+    private var held: (read: Read, path: String)?
+    /// The next read is the human's own save, so its lines do not glow.
+    private var quiet = false
+
     private var shown: (path: String, lines: [String])?
     /// What the last read saw, so a change elsewhere in the checkout does not read this file again.
     private var stamp: Stamp?
+
+    private struct Read {
+        let state: State
+        let lines: [String]?
+        let utf8: Bool
+    }
 
     private struct Stamp: Equatable {
         let path: String
@@ -428,40 +605,57 @@ final class PreviewContent: ObservableObject {
     /// Bigger text shows without colours, which would take too long.
     nonisolated private static let colourLimit = 300_000
 
-    func load(_ file: FileRef, dark: Bool) async {
+    /// Reads the file when it changed. While `unsaved`, a read that differs is held back, so the
+    /// edits on screen stay, and `changedOnDisk` asks the human.
+    func load(_ file: FileRef, dark: Bool, unsaved: Bool) async {
         let url = file.url
         let path = file.path
         let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         let stamp = Stamp(path: url.path, modified: values?.contentModificationDate, size: values?.fileSize, dark: dark)
         guard stamp != self.stamp || values == nil else { return }
-        let read = await Task.detached(priority: .userInitiated) { () -> (State, [String]?) in
-            guard let handle = try? FileHandle(forReadingFrom: url) else { return (.missing, nil) }
+        let read = await Task.detached(priority: .userInitiated) { () -> Read in
+            guard let handle = try? FileHandle(forReadingFrom: url) else { return Read(state: .missing, lines: nil, utf8: false) }
             defer { try? handle.close() }
             let data = (try? handle.read(upToCount: Self.limit + 1)) ?? Data()
             switch fileKind(path: path, head: data) {
-            case .binary: return (.binary, nil)
+            case .binary: return Read(state: .binary, lines: nil, utf8: false)
             case .image:
-                return (NSImage(contentsOf: url).map(State.image) ?? .binary, nil)
+                return Read(state: NSImage(contentsOf: url).map(State.image) ?? .binary, lines: nil, utf8: false)
             case .pdf:
-                return (PDFDocument(url: url).map(State.pdf) ?? .binary, nil)
+                return Read(state: PDFDocument(url: url).map(State.pdf) ?? .binary, lines: nil, utf8: false)
             case let kind:
                 let cut = data.count > Self.limit
+                let utf8 = !cut && String(data: data, encoding: .utf8) != nil
                 let text = String(decoding: data.prefix(Self.limit), as: UTF8.self)
                 let plain = text.components(separatedBy: "\n")
                 let code = Self.code(text, lines: plain, path: path, dark: dark)
-                if kind == .html { return (.html(code, cut: cut), plain) }
+                if kind == .html { return Read(state: .html(code, cut: cut), lines: plain, utf8: utf8) }
                 if kind == .markdown {
                     let read = parseMarkdownLines(text)
                     warmInline(read.blocks)
-                    return (.markdown(read.blocks, read.lines, code, cut: cut), plain)
+                    return Read(state: .markdown(read.blocks, read.lines, code, cut: cut), lines: plain, utf8: utf8)
                 }
-                return (.text(code, cut: cut), plain)
+                return Read(state: .text(code, cut: cut), lines: plain, utf8: utf8)
             }
         }.value
         // A newer read took over while this one ran.
         guard !Task.isCancelled else { return }
         self.stamp = stamp
-        if let new = read.1, let old = shown, old.path == path {
+        if unsaved {
+            // A new theme alone reads the same lines; only a change to the file is asked about.
+            if read.lines.map({ $0 != shown?.lines }) ?? true {
+                held = (read, path)
+                changedOnDisk = true
+            }
+            return
+        }
+        apply(read, path: path)
+    }
+
+    private func apply(_ read: Read, path: String) {
+        held = nil
+        changedOnDisk = false
+        if let new = read.lines, let old = shown, old.path == path, !quiet {
             let lines = changedLines(old: old.lines, new: new)
             if !lines.isEmpty {
                 changed = lines
@@ -472,10 +666,37 @@ final class PreviewContent: ObservableObject {
         } else {
             changed = []
         }
-        shown = read.1.map { (path, $0) }
-        state = read.0
+        quiet = false
+        shown = read.lines.map { (path, $0) }
+        fileText = read.lines?.joined(separator: "\n")
+        state = read.state
+        editable = read.utf8
+        if !editable { editing = false }
         reloads += 1
         pageErrors = []
+    }
+
+    /// The text of the file as last shown.
+    private var fileText: String?
+
+    func isFileText(_ text: String) -> Bool { text == fileText }
+
+    /// Reads the file again, as after a save (`quiet`, so the human's own lines do not glow) or a discard.
+    func reread(quiet: Bool) {
+        self.quiet = quiet
+        stamp = nil
+        rereads += 1
+    }
+
+    /// Shows the read held back while the edits were unsaved; the edits are dropped.
+    func takeHeld() {
+        if let held { apply(held.read, path: held.path) } else { reread(quiet: false) }
+    }
+
+    /// Keeps the edits; saving them writes over the file's new text.
+    func keepEdits() {
+        held = nil
+        changedOnDisk = false
     }
 
     /// The file as the code view shows it: coloured by Highlightr when small enough and in a

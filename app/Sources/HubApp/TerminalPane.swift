@@ -5,9 +5,9 @@ import SwiftUI
 
 /// What a terminal pane runs: the target's own terminal, or the human's multiplexer around it.
 enum PaneCommand: Equatable {
-    /// `hub attach --echo <target>`, relaying the daemon's terminal.
+    /// `echoctl attach --echo <target>`, relaying the daemon's terminal.
     case attach
-    /// The multiplexer line from the daemon, run by `hub mux` in a login shell; the agent sits in
+    /// The multiplexer line from the daemon, run by `echoctl mux` in a login shell; the agent sits in
     /// its first pane, while the multiplexer itself runs right in this pane.
     case mux(String)
 }
@@ -148,7 +148,7 @@ struct TerminalPane: NSViewRepresentable {
 
         private static var hub: String?
 
-        /// Starts the surface for the current target, finding `hub` first if need be.
+        /// Starts the surface for the current target, finding `echoctl` first if need be.
         private func start() {
             guard let target, let view, view.surface == nil else { return }
             if let hub = Self.hub {
@@ -175,7 +175,7 @@ struct TerminalPane: NSViewRepresentable {
             }
         }
 
-        /// `direct:` runs `hub` as given, with no shell or login(1) in between (see ghostty.patch);
+        /// `direct:` runs `echoctl` as given, with no shell or login(1) in between (see ghostty.patch);
         /// a path with a space, which that form cannot hold, goes through the shell instead.
         private static func command(_ hub: String, _ args: String) -> String {
             guard hub.contains(" ") else { return "direct:\(hub) \(args)" }
@@ -413,7 +413,7 @@ final class GhosttyView: NSView, NSTextInputClient {
         _ = action.withCString { ghostty_surface_binding_action(surface, $0, UInt(action.utf8.count)) }
     }
 
-    /// Ends the surface, and with it the `hub attach` inside; the daemon's terminal keeps running.
+    /// Ends the surface, and with it the `echoctl attach` inside; the daemon's terminal keeps running.
     func stop() {
         find.close()
         guard let surface else { return }

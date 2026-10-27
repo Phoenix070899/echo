@@ -35,7 +35,7 @@ struct QuickOpen: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
-                .background(Ledger.band)
+                .background(Ledger.band, in: Rectangle())
 
                 if results.isEmpty {
                     Text("Nothing matches \u{201C}\(search.query)\u{201D}.")

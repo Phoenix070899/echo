@@ -1,0 +1,5 @@
+{
+  "name": "echoctl",
+  "version": "0.1.0",
+  "description": "Skills for agents running inside Echo: drive its window with echoctl"
+}

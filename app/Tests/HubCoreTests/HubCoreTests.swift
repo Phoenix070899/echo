@@ -4,12 +4,12 @@ import Testing
 
 /// A snapshot exactly as the daemon's `events` stream prints it.
 let snapshotLine = """
-{"repo":"/r","orchestrator":{"live":true},"workers":[{"id":"w3","profile":"bash","title":"Remove junk",\
+{"repo":"/r","orchestrator":{"live":true},"workers":[{"id":"w3","profile":"lee","title":"Remove junk",\
 "state":"needs you","phase":"running","quietSeconds":75,"place":"in place","branch":null,"live":true,\
 "blocker":"permission_prompt","openQuestions":[],"finalReport":null}],"needs":[{"kind":"permission_prompt",\
-"message":9,"worker":"w3","profile":"bash","title":"Remove junk","body":"Blocked: permission_prompt",\
+"message":9,"worker":"w3","profile":"lee","title":"Remove junk","body":"Blocked: permission_prompt",\
 "prompt":"Bash command\\nrm -rf junk\\nDo you want to proceed?","at":1792200000},{"kind":"something_new",\
-"message":10,"worker":"w3","profile":"bash","title":"Remove junk","body":"?","prompt":"","at":1792200001}],"usage":{"limits":[{"name":"Session","percent":48,"resets":"Oct 17 at 4:50pm"},\
+"message":10,"worker":"w3","profile":"lee","title":"Remove junk","body":"?","prompt":"","at":1792200001}],"usage":{"limits":[{"name":"Session","percent":48,"resets":"Oct 17 at 4:50pm"},\
 {"name":"Week (Fable)","percent":0,"resets":null}],"updatedAt":1792199000,"error":null,"refreshing":false}}
 """
 
@@ -25,6 +25,15 @@ let snapshotLine = """
     #expect(snapshot.usage?.limits.map(\.name) == ["Session", "Week (Fable)"])
     #expect(snapshot.usage?.limits.first?.percent == 48)
     #expect(snapshot.usage?.limits.last?.resets == nil)
+}
+
+@Test func decodesUiRequestsFromAgents() throws {
+    let line = #"{"repo":"/r","orchestrator":{"live":true},"workers":[],"needs":[],"ui":[{"id":"u1","at":1792200000,"action":"open","from":"a1","root":"/r","path":"src/a.rs","line":42,"worker":null,"agent":null,"text":null},{"id":"u2","at":1792200001,"action":"notify","from":"w3","text":"tests pass"}]}"#
+    let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(line.utf8))
+    let ui = try #require(snapshot.ui)
+    #expect(ui.map(\.action) == ["open", "notify"])
+    #expect(ui[0].path == "src/a.rs" && ui[0].line == 42 && ui[0].from == "a1")
+    #expect(ui[1].text == "tests pass" && ui[1].root == nil)
 }
 
 @Test func needsAnnounceOnceAndNotWhatWasWaitingAtLaunch() throws {
@@ -238,7 +247,7 @@ Binary files a/logo.png and /dev/null differ
     #expect(workers(3, "at work") == "3 Workers at work")
 }
 
-/// The real `hub` binary with the daemon tests' fake agent, in a throwaway state folder.
+/// The real `echoctl` binary with the daemon tests' fake agent, in a throwaway state folder.
 struct LiveDaemon {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent().deletingLastPathComponent()
@@ -249,7 +258,7 @@ struct LiveDaemon {
     @discardableResult
     func run(_ args: [String], in dir: String? = nil) throws -> String {
         let process = Process()
-        process.executableURL = root.appendingPathComponent("target/release/hub")
+        process.executableURL = root.appendingPathComponent("target/release/echoctl")
         process.arguments = args
         process.currentDirectoryURL = URL(fileURLWithPath: dir ?? repo)
         var env = ProcessInfo.processInfo.environment
@@ -286,7 +295,7 @@ struct LiveDaemon {
     let hub = LiveDaemon()
     try hub.setUp()
     defer { hub.tearDown() }
-    try hub.run(["worker", "start", "bash", "--spec", "prompt me"])
+    try hub.run(["worker", "start", "lee", "--spec", "prompt me"])
     let repo = URL(fileURLWithPath: hub.repo).resolvingSymlinksInPath().path
 
     var waiting: Need?
@@ -311,13 +320,13 @@ struct LiveDaemon {
 }
 
 /// One Worker row with the fields the ledger reads.
-func row(_ id: String, phase: String, quiet: Int, model: String? = nil, effort: String? = nil, agent: Int? = nil) -> String {
+func row(_ id: String, phase: String, quiet: Int, model: String? = nil, effort: String? = nil, agent: Int? = nil, state: String = "running") -> String {
     let model = model.map { "\"\($0)\"" } ?? "null"
     let effort = effort.map { "\"\($0)\"" } ?? "null"
     let agent = agent.map(String.init) ?? "null"
     let since = Int(Date().timeIntervalSince1970) - quiet
     return """
-    {"id":"\(id)","profile":"naruto","title":"t","state":"running","phase":"\(phase)","quietSince":\(since),\
+    {"id":"\(id)","profile":"naruto","title":"t","state":"\(state)","phase":"\(phase)","quietSince":\(since),\
     "place":"in place","branch":null,"live":true,"blocker":null,"openQuestions":[],"finalReport":null,\
     "model":\(model),"effort":\(effort),"progress":null,"agent":\(agent)}
     """
@@ -350,6 +359,18 @@ func row(_ id: String, phase: String, quiet: Int, model: String? = nil, effort: 
     let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(line.utf8))
     #expect(snapshot.running.map(\.id) == ["w2", "w1"], "longest quiet first; w6 waits on the human")
     #expect(snapshot.settled.map(\.id) == ["w4", "w5", "w3"], "trouble first, then newest")
+}
+
+@Test func waitingRunsAndEndedIsNotTrouble() throws {
+    let line = """
+    {"repo":"/r","orchestrator":{"live":true},"workers":[\(row("w1", phase: "running", quiet: 30, state: "waiting")),\
+    \(row("w2", phase: "ended", quiet: 60, state: "ended")),\(row("w3", phase: "exited", quiet: 900, state: "failed"))],"needs":[]}
+    """
+    let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(line.utf8))
+    #expect(snapshot.running.map(\.id) == ["w1"], "a Worker waiting on background work is still running")
+    #expect(snapshot.workers[0].state == .waiting)
+    #expect(snapshot.settled.map(\.id) == ["w3", "w2"], "failed first; ended is not trouble")
+    #expect(!snapshot.workers[1].isTrouble)
 }
 
 @Test func theLedgerGroupsByAgent() throws {

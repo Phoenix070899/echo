@@ -1,4 +1,4 @@
-//! The Orchestrator: how the daemon starts it, and `hub` with no command, which attaches to it.
+//! The Orchestrator: how the daemon starts it, and `echoctl` with no command, which attaches to it.
 
 use std::path::Path;
 
@@ -9,7 +9,7 @@ use crate::db::Agent;
 use crate::{attach, proto, repo};
 
 /// The first message of a resumed Orchestrator session.
-const RESUMED: &str = "Your terminal was restarted. Run `hub worker list`, give the human a Summary, \
+const RESUMED: &str = "Your terminal was restarted. Run `echoctl worker list`, give the human a Summary, \
                        and start the listener if Workers are open.";
 
 /// Arguments after `claude` for a repo's Orchestrator: a new session, or its saved one resumed.
@@ -24,7 +24,7 @@ pub fn orchestrator_args(
     extra: &[String],
 ) -> Result<Vec<String>> {
     let orchestrator =
-        std::fs::read_to_string(hub.join("orchestrator.md"))?.replace("$AGENT_HUB", &hub.display().to_string());
+        std::fs::read_to_string(hub.join("orchestrator.md"))?.replace("$ECHO_REPO", &hub.display().to_string());
     let preferences = std::fs::read_to_string(hub.join("memory").join("preferences.md")).unwrap_or_default();
     let mut prompt = format!(
         "{orchestrator}\n\n# Preferences\n\n{preferences}\n\nRepo for this Hub Session: {}",
@@ -42,9 +42,11 @@ pub fn orchestrator_args(
         .unwrap_or_default();
     let mut args = vec![
         "-n".to_string(),
-        format!("hub: {name}"),
+        format!("echo: {name}"),
         "--plugin-dir".into(),
         hub.join("mod").display().to_string(),
+        "--plugin-dir".into(),
+        hub.join("skills").display().to_string(),
         "--add-dir".into(),
         hub.display().to_string(),
         "--append-system-prompt".into(),
@@ -60,15 +62,21 @@ pub fn orchestrator_args(
     Ok(args)
 }
 
-/// Arguments after `claude` for a Normal session: plain Claude Code in the repo, new or resumed.
-pub fn claude_args(agent: &Agent, resume: bool, request: Option<&str>, extra: &[String]) -> Vec<String> {
+/// Arguments after `claude` for a Normal session: plain Claude Code in the repo, new or resumed,
+/// with only the skills for driving Echo added (`skills/`), not the Orchestrator's view.
+pub fn claude_args(hub: &Path, agent: &Agent, resume: bool, request: Option<&str>, extra: &[String]) -> Vec<String> {
     let name = agent.name.clone().unwrap_or_else(|| {
         let repo = Path::new(&agent.repo);
         repo.file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default()
     });
-    let mut args = vec!["-n".to_string(), format!("echo: {name}")];
+    let mut args = vec![
+        "-n".to_string(),
+        format!("echo: {name}"),
+        "--plugin-dir".into(),
+        hub.join("skills").display().to_string(),
+    ];
     args.extend(extra.iter().cloned());
     if resume {
         args.extend(["--resume".into(), agent.session_id.clone()]);
@@ -87,7 +95,7 @@ fn first_request(request: Option<&str>) -> Vec<String> {
 }
 
 /// Starts an Orchestrator in the Hub Daemon, or finds it running, then attaches to it: the agent
-/// named first (`hub a10`), else the Orchestrator working in this checkout, else the repo's first.
+/// named first (`echoctl a10`), else the Orchestrator working in this checkout, else the repo's first.
 pub fn run(mut extra: Vec<String>) -> Result<()> {
     if let Some(id) = extra.first().and_then(|first| agent_id(first)) {
         extra.remove(0);

@@ -1,4 +1,4 @@
-//! `hub`: the Agent Hub CLI. With no command it starts the Orchestrator for the repo here.
+//! `echoctl`: the Echo CLI. With no command it starts the Orchestrator for the repo here.
 
 mod attach;
 mod daemon;
@@ -23,11 +23,11 @@ use serde_json::{json, Value};
 
 #[derive(Parser)]
 #[command(
-    name = "hub",
-    about = "Agent Hub. Run `hub` with no command in a repo to start its Orchestrator.",
-    after_help = "Orchestrator: hub worker start|list|read|send|key|close|resume, hub wait, hub reply, hub inbox, hub status\n\
-                  Worker:       hub ask, hub send, hub done\n\
-                  Human:        hub attach <w12|a3> [--follow], hub open <w>"
+    name = "echoctl",
+    about = "Echo. Run `echoctl` with no command in a repo to start its Orchestrator.",
+    after_help = "Orchestrator: echoctl worker start|list|read|send|key|close|resume, echoctl wait, echoctl reply, echoctl inbox, echoctl status\n\
+                  Worker:       echoctl ask, echoctl send, echoctl done\n\
+                  Human:        echoctl attach <w12|a3> [--follow], echoctl open <w>"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -128,10 +128,47 @@ enum Command {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Have Echo show something: a file, a Worker or agent, a Worker's diff, a notification, or a
+    /// new Orchestrator. Echo changes what it shows but never comes to the front.
+    #[command(subcommand)]
+    Ui(UiCommand),
     /// Echo's multiplexer panes: runs the line in `HUB_MUX` (from the daemon's `mux.command`) in
     /// a login shell, in place of this process.
     #[command(hide = true)]
     Mux,
+}
+
+#[derive(Subcommand)]
+enum UiCommand {
+    /// Open a file in a tab over the terminal, at a line if given: `echoctl ui open src/a.rs:42`.
+    Open { file: String },
+    /// Select a Worker (w12) or an agent (a3) in Echo.
+    Show { target: String },
+    /// Show a Worker's diff, ready for review.
+    Diff { worker: String },
+    /// Post a macOS notification from this agent; clicking it opens Echo on the agent.
+    Notify {
+        /// The text; "-" reads it from stdin.
+        text: String,
+    },
+    /// Start an Orchestrator in this repo and show it: on the repo's checkout, on an existing
+    /// branch, or on a new branch made from a base.
+    Orchestrator {
+        /// Work on this existing branch.
+        #[arg(long, conflicts_with = "new_branch")]
+        branch: Option<String>,
+        /// Make this branch in a new worktree (or use it, if it exists).
+        #[arg(long)]
+        new_branch: Option<String>,
+        /// What the new branch starts from (default: HEAD).
+        #[arg(long, requires = "new_branch")]
+        base: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        /// Its first request.
+        #[arg(long)]
+        request: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -182,7 +219,7 @@ enum WorkerCommand {
     },
     /// Stop a Worker's terminal (its worktree stays).
     Close { worker: String },
-    /// Restart a lost or exited Worker on its Claude session.
+    /// Restart a lost, exited, or ended Worker on its Claude session.
     Resume { worker: String },
 }
 
@@ -220,7 +257,7 @@ fn main() -> ExitCode {
     match result {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("hub: {error:#}");
+            eprintln!("echoctl: {error:#}");
             ExitCode::FAILURE
         }
     }
@@ -243,7 +280,7 @@ fn text_arg(text: &str) -> Result<String> {
     }
 }
 
-/// The Orchestrator this `hub` runs in (`HUB_AGENT`, set by the daemon), if any.
+/// The Orchestrator this `echoctl` runs in (`HUB_AGENT`, set by the daemon), if any.
 fn agent_env() -> Option<i64> {
     std::env::var("HUB_AGENT").ok().and_then(|id| id.parse().ok())
 }
@@ -254,6 +291,49 @@ fn repo_arg(repo: Option<PathBuf>) -> Result<String> {
         None => std::env::current_dir()?,
     };
     Ok(repo::root(&start)?.display().to_string())
+}
+
+/// `echoctl ui`: who asks, so Echo can name it and a notification can open on it.
+fn ui(command: UiCommand) -> Result<()> {
+    let from = match (std::env::var("HUB_WORKER"), agent_env()) {
+        (Ok(worker), _) => json!(format!("w{}", worker.trim_start_matches('w'))),
+        (_, Some(agent)) => json!(format!("a{agent}")),
+        _ => Value::Null,
+    };
+    let repo = || repo_arg(None);
+    let params = match command {
+        UiCommand::Open { file } => {
+            // `path:42` names a line; a path that itself ends in `:digits` is rare enough.
+            let (path, line) = match file.rsplit_once(':') {
+                Some((path, line)) if line.parse::<u64>().is_ok() && !path.is_empty() => {
+                    (path.to_string(), line.parse::<u64>().ok())
+                }
+                _ => (file, None),
+            };
+            let path = std::env::current_dir()?.join(path);
+            json!({ "action": "open", "path": path, "line": line })
+        }
+        UiCommand::Show { target } => json!({ "action": "show", "repo": repo()?, "target": target }),
+        UiCommand::Diff { worker } => json!({ "action": "diff", "repo": repo()?, "target": worker }),
+        UiCommand::Notify { text } => json!({ "action": "notify", "repo": repo()?, "text": text_arg(&text)? }),
+        UiCommand::Orchestrator {
+            branch,
+            new_branch,
+            base,
+            name,
+            request,
+        } => json!({
+            "action": "orchestrator", "repo": repo()?, "branch": branch, "new_branch": new_branch,
+            "base": base, "name": name, "request": request,
+        }),
+    };
+    let mut params = params;
+    params["from"] = from;
+    let result = proto::call("ui", params)?;
+    if let Some(agent) = result["agent"].as_i64() {
+        println!("Started Orchestrator a{agent}.");
+    }
+    Ok(())
 }
 
 /// This Worker's id, from the environment the daemon started it with.
@@ -350,6 +430,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         }
         Command::Worker(command) => return worker(command),
+        Command::Ui(command) => ui(command)?,
         Command::Wait { timeout, json, repo } => {
             let result = proto::call(
                 "wait",
@@ -401,7 +482,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             match result["answer"].as_str() {
                 Some(answer) => println!("{answer}"),
                 None => {
-                    println!("No answer to question #{id} yet. Keep waiting: hub ask --wait {id}");
+                    println!("No answer to question #{id} yet. Keep waiting: echoctl ask --wait {id}");
                     return Ok(ExitCode::from(3));
                 }
             }
@@ -459,13 +540,13 @@ fn print_message(m: &Value) {
     let id = &m["id"];
     let worker = m["worker"].as_str().unwrap_or("");
     let next = match m["kind"].as_str().unwrap_or("") {
-        "question" => format!("Answer: hub reply {id} \"<answer>\""),
-        "done" => format!("Settled. Validate the report, then: hub worker close {worker}"),
+        "question" => format!("Answer: echoctl reply {id} \"<answer>\""),
+        "done" => format!("Settled. Validate the report, then: echoctl worker close {worker}"),
         "blocker" => format!(
-            "Show the human the exact prompt. On their yes: hub worker key {worker} enter. On no: hub worker key {worker} esc, then hub worker send {worker} \"<what to do instead>\""
+            "Show the human the exact prompt. On their yes: echoctl worker key {worker} enter. On no: echoctl worker key {worker} esc, then echoctl worker send {worker} \"<what to do instead>\""
         ),
-        "exited" => format!("No Final Report. Check: hub worker read {worker}; then start the Task again or report it"),
-        "lost" => format!("Resume: hub worker resume {worker}"),
+        "exited" => format!("No Final Report. Check: echoctl worker read {worker}; then start the Task again or report it"),
+        "lost" => format!("Resume: echoctl worker resume {worker}"),
         "human" => "The human acted in the Hub App. Reflect it; do not redo it".to_string(),
         _ => String::new(),
     };
@@ -599,7 +680,7 @@ fn notify() {
         Ok(())
     };
     if let Err(error) = report() {
-        eprintln!("hub notify: {error:#}");
+        eprintln!("echoctl notify: {error:#}");
     }
 }
 

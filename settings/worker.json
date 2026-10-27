@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "hub notify"
+            "command": "echoctl notify"
           }
         ]
       }

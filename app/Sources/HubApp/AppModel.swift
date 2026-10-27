@@ -223,12 +223,74 @@ final class AppModel: ObservableObject {
     /// Closes a file's tab; if it was the one shown, the next tab in that checkout (else the
     /// one before, else the terminal) takes over.
     func closePreview(_ file: FileRef) {
+        guard settleDraft(file) else { return }
         let tabs = openPreviews.filter { $0.root == file.root }
         let next = tabs.firstIndex(of: file).flatMap { index in
             index + 1 < tabs.count ? tabs[index + 1] : index > 0 ? tabs[index - 1] : nil
         }
         openPreviews.removeAll { $0 == file }
         if preview == file { preview = next }
+    }
+
+    /// The edited text of each file with unsaved edits (ui-ux/0041). Not published: it changes on
+    /// every key, and only `unsaved` needs drawing.
+    private var drafts: [FileRef: String] = [:]
+    /// Files with unsaved edits; their tabs show a dot.
+    @Published private(set) var unsaved: Set<FileRef> = []
+
+    /// nil when the edits match the file again.
+    func setDraft(_ text: String?, for file: FileRef) {
+        drafts[file] = text
+        if text == nil {
+            unsaved.remove(file)
+        } else if !unsaved.contains(file) {
+            unsaved.insert(file)
+        }
+    }
+
+    /// Writes a file's edits in place, not by replacing the file, so its permissions stay.
+    func saveDraft(_ file: FileRef) throws {
+        guard let text = drafts[file] else { return }
+        try Data(text.utf8).write(to: file.url)
+        setDraft(nil, for: file)
+    }
+
+    /// Asks what to do with a file's unsaved edits before they go; false when the human cancels.
+    func settleDraft(_ file: FileRef) -> Bool {
+        guard unsaved.contains(file) else { return true }
+        let alert = NSAlert()
+        alert.messageText = "Save your changes to \(file.name)?"
+        alert.informativeText = "Your changes are lost if you don't save them."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don't Save")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            do {
+                try saveDraft(file)
+                return true
+            } catch {
+                let failed = NSAlert()
+                failed.messageText = "\(file.name) was not saved"
+                failed.informativeText = error.localizedDescription
+                failed.runModal()
+                return false
+            }
+        case .alertThirdButtonReturn:
+            setDraft(nil, for: file)
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Before quitting: every file with unsaved edits is saved or let go; false when one is kept.
+    func settleDrafts() -> Bool {
+        for file in openPreviews where unsaved.contains(file) {
+            preview = file
+            guard settleDraft(file) else { return false }
+        }
+        return true
     }
 
     func showPreview(_ file: FileRef, line: Int) {
@@ -248,8 +310,13 @@ final class AppModel: ObservableObject {
             filesFocus = tab
         } else if filesFocus == tab {
             filesFocus = nil
+            filesFocusAsked = false
         }
     }
+
+    /// ⇧⌘E last asked for the keyboard for the column, and it has not left the column since; the
+    /// next press hides it even if the keyboard never arrived.
+    private var filesFocusAsked = false
     /// Bumped to move the keyboard to the Files tree.
     @Published var filesFocusRequest = 0
     /// Bumped to hand the keyboard to the previewed file (Tab in the tree).
@@ -348,6 +415,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var lookFlipped = false
 
     private var trackers: [String: NeedTracker] = [:]
+    /// The `echoctl ui` requests already acted on, and when Echo started: older ones are not.
+    private var handledUi: Set<String> = []
+    private let launchedAt = Int(Date().timeIntervalSince1970)
     /// What each repo last showed, so switching back returns to it.
     private var lastSelection: [String: Selection] = [:]
     private static let appearanceKey = "appearance"
@@ -448,7 +518,7 @@ final class AppModel: ObservableObject {
             return
         }
         let quoted = "'" + session.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        // Exit 3: the focused pane is the agent's own (`hub attach --follow`).
+        // Exit 3: the focused pane is the agent's own (`echoctl attach --follow`).
         let script = "case \"$(tmux display -p -t \(quoted): '#{pane_start_command}')\" in *attach*--follow*) exit 3;; esac; tmux kill-pane -t \(quoted):"
         Task.detached {
             let shell = Process()
@@ -511,7 +581,7 @@ final class AppModel: ObservableObject {
             do {
                 let shell = Process()
                 shell.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                shell.arguments = ["-lic", "hub sessions >/dev/null"]
+                shell.arguments = ["-lic", "echoctl sessions >/dev/null"]
                 shell.standardOutput = FileHandle.nullDevice
                 shell.standardError = FileHandle.nullDevice
                 try shell.run()
@@ -546,7 +616,7 @@ final class AppModel: ObservableObject {
             for session in sessions where self.following[session.repo] == nil {
                 self.follow(repo: session.repo)
             }
-            // A first session started outside the window (`hub` in a terminal) opens here too.
+            // A first session started outside the window (`echoctl` in a terminal) opens here too.
             if self.selection == nil, let first = sessions.first(where: \.live) ?? sessions.first {
                 self.selectSession(first.repo)
             }
@@ -758,6 +828,10 @@ final class AppModel: ObservableObject {
             Notifier.post(need, repo: repo, agent: need.agent.flatMap { snapshot.agent($0) })
         }
         trackers[repo] = tracker
+        // Only requests made since launch: a relaunch within the half minute does not replay them.
+        for request in snapshot.ui ?? [] where request.at >= launchedAt && handledUi.insert(request.id).inserted {
+            perform(request, repo: repo, snapshot: snapshot)
+        }
         // A report that arrives while its Worker is on screen has been seen; only as it arrives,
         // so Mark as Unread on the Worker being looked at holds.
         if case .worker(repo, let id)? = selection, let worker = snapshot.workers.first(where: { $0.id == id }),
@@ -770,6 +844,55 @@ final class AppModel: ObservableObject {
                 self.selection = .agent(repo: repo, id: first.id)
             }
         }
+    }
+
+    /// Acts on an agent's `echoctl ui` request. It changes what the window shows, but never brings
+    /// Echo forward: the human's focus stays where it is (features/0033).
+    private func perform(_ request: UiRequest, repo: String, snapshot: Snapshot) {
+        switch request.action {
+        case "open":
+            guard let root = request.root, let path = request.path else { return }
+            if selectedCheckout != root, let place = place(for: root, from: request.from, repo: repo, snapshot: snapshot) {
+                select(place)
+            }
+            let file = FileRef(root: root, path: path)
+            if let line = request.line { showPreview(file, line: line) } else { preview = file }
+        case "show", "diff":
+            if let worker = request.worker {
+                select(.worker(repo: repo, id: worker))
+                if request.action == "diff", let row = snapshot.workers.first(where: { $0.id == worker }) {
+                    show(.changes, repo: repo, worker: row)
+                }
+            } else if let agent = request.agent {
+                select(.agent(repo: repo, id: agent))
+            }
+            preview = nil
+        case "notify":
+            guard let text = request.text else { return }
+            let sender = request.from.flatMap { from -> String? in
+                if from.hasPrefix("w") { return snapshot.workers.first { $0.id == from }.map { "\($0.id) \($0.profile)" } }
+                return Int(from.dropFirst()).flatMap { snapshot.agent($0) }?.displayName
+            }
+            Notifier.post(message: text, id: request.id, repo: repo, from: sender,
+                          worker: request.from.flatMap { $0.hasPrefix("w") ? $0 : nil },
+                          agent: request.from.flatMap { $0.hasPrefix("a") ? Int($0.dropFirst()) : nil })
+        default:
+            break
+        }
+    }
+
+    /// The agent or Worker that works in a checkout, the one that asked first.
+    private func place(for root: String, from: String?, repo: String, snapshot: Snapshot) -> Selection? {
+        var places: [(Selection, String)] = (snapshot.agents ?? []).map { (.agent(repo: repo, id: $0.id), $0.cwd ?? repo) }
+        places += snapshot.workers.map { (.worker(repo: repo, id: $0.id), $0.cwd ?? repo) }
+        let asking = places.first { place, _ in
+            switch place {
+            case .agent(_, let id): return from == "a\(id)"
+            case .worker(_, let id): return from == id
+            }
+        }
+        if let asking, asking.1 == root { return asking.0 }
+        return places.first { $0.1 == root }?.0
     }
 
     /// Brings the window forward on a Worker, an agent, or the repo.
@@ -1217,13 +1340,15 @@ extension AppModel {
     /// ⇧⌘E: shows the Files column and gives it the keyboard; shown but elsewhere, gives it the
     /// keyboard; already in it, hides it and the terminal takes the keyboard back.
     func toggleFiles() {
-        if filesShown && !treeFocused {
+        if filesShown && !treeFocused && !filesFocusAsked {
+            filesFocusAsked = true
             filesFocusRequest += 1
             return
         }
         if filesShown {
             hideFiles()
         } else {
+            filesFocusAsked = true
             filesFocusRequest += 1
             withAnimation(.easeOut(duration: 0.15)) { filesShown = true }
         }
@@ -1231,6 +1356,7 @@ extension AppModel {
 
     /// The column's close button: hides it whichever tab shows and wherever the keyboard is.
     func hideFiles() {
+        filesFocusAsked = false
         withAnimation(.easeOut(duration: 0.15)) { filesShown = false }
     }
 }

@@ -121,6 +121,7 @@ textarea:focus, input[type=text]:focus { border-color: var(--run); }
 .state.running { color: var(--run); background: color-mix(in srgb, var(--run) 13%, transparent); }
 .state.done { color: var(--done); background: color-mix(in srgb, var(--done) 13%, transparent); }
 .state.failed { color: var(--fail); background: color-mix(in srgb, var(--fail) 13%, transparent); }
+.state.ended { color: var(--ink2); background: color-mix(in srgb, var(--ink2) 13%, transparent); }
 .state.needs { color: var(--marker-ink); background: var(--marker); }
 .usage { font-size: 13px; color: var(--ink3); margin: 18px 4px 0; display: flex; gap: 14px; flex-wrap: wrap; }
 .term-page { display: flex; flex-direction: column; height: var(--vh); }
@@ -242,8 +243,9 @@ function command(need) {
   if (!lines.length) return need.body || "";
   return lines.length > 1 ? lines.slice(1).join(" ") : lines[0];
 }
-function stateClass(row) { return { "needs you": "needs", running: "running", done: "done", failed: "failed" }[row.state] || "running"; }
-function stateLabel(row) { return { "needs you": "Needs you", running: "Running", done: "Done", failed: "Failed" }[row.state] || row.state; }
+function stateClass(row) { return { "needs you": "needs", running: "running", waiting: "running", done: "done", ended: "ended", failed: "failed" }[row.state] || "running"; }
+function stateLabel(row) { return { "needs you": "Needs you", running: "Running", waiting: "Waiting", done: "Done", ended: "Ended", failed: "Failed" }[row.state] || row.state; }
+function settled(row) { return ["done", "ended", "failed"].includes(row.state); }
 
 // ---- Talking to the daemon
 async function api(path, body) {
@@ -359,7 +361,7 @@ function renderHome(flash) {
   if (!repos().length) html += '<div class="empty">No agents yet. Start one in Echo on your Mac.</div>';
   else html += '<div class="list">' + repos().map(repo => {
     const live = (repo.agents || []).filter(a => a.live && a.kind !== "terminal").length;
-    const running = (repo.workers || []).filter(w => w.state === "running").length;
+    const running = (repo.workers || []).filter(w => w.state === "running" || w.state === "waiting").length;
     const waiting = (repo.needs || []).length;
     const parts = [`${live} agent${live === 1 ? "" : "s"} running`];
     if (running) parts.push(`${running} Worker${running === 1 ? "" : "s"} working`);
@@ -429,7 +431,8 @@ function renderRepo(path) {
 
 function workerRow(w) {
   const line = w.state === "running" ? (w.progress || `quiet for ${age(w.quietSince)}`)
-    : (w.state === "done" || w.state === "failed") ? firstLine(w.finalReport)
+    : w.state === "waiting" ? (w.progress || "Waiting on background work")
+    : settled(w) ? firstLine(w.finalReport)
     : ((w.openQuestions || []).length ? "Asks a question" : w.blocker === "permission_prompt" ? "Wants to run a command" : "Waiting on you");
   return `<a class="worker" href="#worker=${w.id.slice(1)}">
     <div class="main"><div class="name">${esc(w.id)} ${esc(w.title)}</div>
@@ -459,7 +462,7 @@ function renderTerm(target) {
     if (w.finalReport) {
       extra = `<div class="banner"><div class="card"><div class="head"><div class="what">Final Report</div><span class="age">${age(w.settledAt)}</span></div>
         <div class="report">${esc(w.finalReport)}</div>
-        ${w.state === "done" || w.state === "failed" ? `<div class="row"><button class="btn" data-act="dismiss" data-worker="${w.id.slice(1)}">Clear from Done</button></div>` : ""}</div></div>`;
+        ${settled(w) ? `<div class="row"><button class="btn" data-act="dismiss" data-worker="${w.id.slice(1)}">Clear from Done</button></div>` : ""}</div></div>`;
     }
   } else if (state.world) {
     title = target.agent ? "Agent" : `w${target.worker}`;
@@ -600,6 +603,16 @@ async function pushOn() {
   } catch (error) { s.error = error.message; }
   s.busy = false; render();
 }
+// A new pairing link makes the daemon forget every phone's notifications, but the browser keeps
+// its subscription: hand it back on pairing, so a phone that had them on keeps getting them.
+async function restorePush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return false;
+  const registration = await navigator.serviceWorker.getRegistration();
+  const subscription = registration && await registration.pushManager.getSubscription();
+  if (!subscription) return false;
+  await api("/api/push/subscribe", subscription.toJSON());
+  return true;
+}
 async function pushOff() {
   const s = state.sheet;
   try {
@@ -644,7 +657,8 @@ async function pair(token) {
     state.paired = true;
     connect();
     render();
-    toast("Paired. Add Echo to the Home Screen to get notifications.");
+    const restored = await restorePush().catch(() => false);
+    toast(restored ? "Paired. Notifications are still on." : "Paired. Add Echo to the Home Screen to get notifications.");
   } catch (error) {
     state.paired = false;
     renderPair(error.message);

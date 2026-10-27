@@ -1,6 +1,6 @@
-# Agent Hub
+# Echo
 
-Echo (the macOS app in `app/`) and the Hub Daemon with its `hub` CLI (Rust, `crates/hub/`).
+Echo (the macOS app in `app/`) and the Hub Daemon with its `echoctl` CLI (Rust, `crates/hub/`).
 Domain words and their meanings are in `CONTEXT.md`; use them in code, copy, and commits.
 
 ## Decisions come first
@@ -33,5 +33,5 @@ Every bug you fix, or catch while building, gets a file there in the same change
 - Never test against the human's daemon, repos, or tmux sessions: use `HUB_STATE=/tmp/hubui` (short, for the socket path limit), `HUB_TEST_AGENT=crates/hub/tests/fake-agent.sh`, and a throwaway repo whose folder name differs from any real one.
 - Run a copy of the app with its own bundle id (`dev.agenthub.Echo.test`), so it shares no defaults or saved windows with the human's Echo.
 - Do not steal focus while the human uses the Mac: capture the window with `screencapture -l <window id>` and post keys to the app's process instead of clicking.
-- Afterwards kill the tmux sessions whose start command contains the test state folder first, then stop the test daemon (`hub shutdown --force` with the test env), then remove the test folders.
-  In the other order, a test pane's `hub attach --follow` restarts the daemon without `HUB_TEST_AGENT`, and it starts a real Claude Code.
+- Afterwards kill the tmux sessions whose start command contains the test state folder first, then stop the test daemon (`echoctl shutdown --force` with the test env), then remove the test folders.
+  In the other order, a test pane's `echoctl attach --follow` restarts the daemon without `HUB_TEST_AGENT`, and it starts a real Claude Code.
