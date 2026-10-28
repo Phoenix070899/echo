@@ -5,14 +5,17 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 
+use crate::cli::Start;
 use crate::{lessons, paths};
 
 #[derive(Debug, Clone)]
 pub struct Profile {
     pub name: String,
-    pub model: String,
+    /// Its own CLI and model, over the settings; either left out leaves it to them.
+    pub cli: Option<String>,
+    pub model: Option<String>,
     pub effort: Option<String>,
     pub tools: Vec<String>,
     pub skills: Vec<String>,
@@ -118,7 +121,7 @@ pub fn blank(name: &str) -> String {
     }
     format!(
         "---\nname: {name}\ndescription: One line: what this Worker does, for the Orchestrator picking a Profile.\n\
-         cli: claude\nmodel: claude-sonnet-5-5\neffort: medium\ntools: Read, Grep, Glob, Bash\nskills:\n\
+         cli: claude\nmodel: anthropic/claude-sonnet-5-5\neffort: medium\ntools: Read, Grep, Glob, Bash\nskills:\n\
          context: CONTEXT.md, AGENTS.md, CLAUDE.md\nwrites: false\n---\n\n\
          You are {title}. Say what you do, in steps the Worker follows.\n\n\
          Your Final Report, sent with `echoctl done`, lists: what the Orchestrator needs back.\n\n\
@@ -157,13 +160,14 @@ fn parse(name: &str, text: &str) -> Result<Profile> {
             .map(String::from)
             .collect()
     };
-    let cli = field("cli").unwrap_or_default();
-    if cli != "claude" {
-        bail!("profile {name}: cli {cli:?} is not supported yet (only claude)");
+    let cli = field("cli").filter(|v| !v.is_empty());
+    if let Some(cli) = &cli {
+        crate::cli::Cli::parse(cli).map_err(|e| anyhow::anyhow!("profile {name}: {e}"))?;
     }
     Ok(Profile {
         name: field("name").unwrap_or_else(|| name.to_string()),
-        model: field("model").with_context(|| format!("profile {name}: no model"))?,
+        cli,
+        model: field("model").filter(|v| !v.is_empty()),
         effort: field("effort").filter(|v| !v.is_empty()),
         tools: list("tools"),
         skills: list("skills"),
@@ -221,46 +225,43 @@ pub enum Launch<'a> {
     Resume,
 }
 
-/// Arguments after `claude` for a Worker session.
-pub fn claude_args(
+impl Profile {
+    pub fn choice(&self) -> crate::cli::Choice {
+        crate::cli::Choice {
+            cli: self.cli.clone(),
+            model: self.model.clone(),
+        }
+    }
+}
+
+/// What a Worker starts with, whatever its CLI; `model` is the one already picked for it.
+pub fn start(
     hub: &Path,
     repo: &str,
     profile: &Profile,
     title: &str,
     session_id: &str,
     launch: Launch,
-) -> Result<Vec<String>> {
-    let mut args: Vec<String> = vec![
-        "--model".into(),
-        profile.model.clone(),
-        "--permission-mode".into(),
-        "auto".into(),
-        "--settings".into(),
-        hub.join("settings").join("worker.json").display().to_string(),
-        "--disallowedTools".into(),
-        "AskUserQuestion".into(),
-        "--add-dir".into(),
-        hub.display().to_string(),
-        "--add-dir".into(),
-        lessons::memory_dir(&paths::state_dir()).display().to_string(),
-        "-n".into(),
-        format!("{}: {title}", profile.name),
-    ];
-    if let Some(effort) = &profile.effort {
-        args.extend(["--effort".into(), effort.clone()]);
-    }
-    if !profile.tools.is_empty() {
-        args.extend(["--tools".into(), profile.tools.join(",")]);
-    }
-    args.extend([
-        "--append-system-prompt".into(),
-        system_prompt(hub, &paths::state_dir(), repo, profile)?,
-    ]);
-    match launch {
-        Launch::New { spec } => args.extend(["--session-id".into(), session_id.into(), "--".into(), spec.into()]),
-        Launch::Resume => args.extend(["--resume".into(), session_id.into(), "--".into(), RESUMED.into()]),
-    }
-    Ok(args)
+    model: Option<String>,
+) -> Result<Start> {
+    let state = paths::state_dir();
+    let (resume, first) = match launch {
+        Launch::New { spec } => (false, spec.to_string()),
+        Launch::Resume => (true, RESUMED.to_string()),
+    };
+    Ok(Start {
+        title: format!("{}: {title}", profile.name),
+        prompt: system_prompt(hub, &state, repo, profile)?,
+        dirs: vec![hub.to_path_buf(), lessons::memory_dir(&state)],
+        model,
+        effort: profile.effort.clone(),
+        tools: profile.tools.clone(),
+        worker: true,
+        session_id: session_id.to_string(),
+        resume,
+        first: Some(first),
+        ..Start::default()
+    })
 }
 
 #[cfg(test)]
@@ -272,7 +273,7 @@ mod tests {
     #[test]
     fn parses_frontmatter_and_role() {
         let profile = parse("naruto", NARUTO).unwrap();
-        assert_eq!(profile.model, "claude-sonnet-5-5");
+        assert_eq!(profile.model.as_deref(), Some("claude-sonnet-5-5"));
         assert_eq!(profile.effort.as_deref(), Some("high"));
         assert_eq!(profile.tools, ["Bash", "Read", "Edit"]);
         assert!(profile.skills.is_empty());
@@ -340,7 +341,7 @@ mod tests {
         std::fs::write(repo.join(".echo/profiles/lee.md"), "no frontmatter").unwrap();
 
         let naruto = load(&hub, &state, Some(&repo), "naruto").unwrap();
-        assert_eq!(naruto.model, "claude-opus-5-5");
+        assert_eq!(naruto.model.as_deref(), Some("claude-opus-5-5"));
         assert_eq!(naruto.effort, None, "whole file, no field taken from the built-in one");
         let all = entries(&hub, &state, Some(&repo));
         let lee = all.iter().find(|e| e.name == "lee").unwrap();

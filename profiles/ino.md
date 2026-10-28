@@ -2,7 +2,7 @@
 name: ino
 description: Scribe. Merges the human's stated preferences into the Preferences file, and merges or prunes a repo's Lessons file.
 cli: claude
-model: claude-haiku-5-5
+model: anthropic/claude-haiku-5-5
 effort: low
 tools: Read, Edit, Write, Bash
 skills:

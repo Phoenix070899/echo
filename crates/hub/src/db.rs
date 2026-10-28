@@ -62,6 +62,9 @@ pub struct Worker {
     pub dismissed_at: Option<i64>,
     /// The fan-out it is one try of: Workers given the same Task, each in its own worktree.
     pub fanout: Option<String>,
+    /// The CLI and model picked when it started, over its Profile's; none leaves them to it.
+    pub cli: Option<String>,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -155,6 +158,12 @@ pub fn open(path: &Path) -> Result<Connection> {
     if !has_column(&conn, "workers", "fanout")? {
         conn.execute_batch("alter table workers add column fanout text")?;
     }
+    if !has_column(&conn, "workers", "cli")? {
+        conn.execute_batch(
+            "alter table workers add column cli text; alter table workers add column model text;
+             alter table agents add column cli text",
+        )?;
+    }
     // A repo's one Orchestrator from before agents becomes its first agent, Workers and all.
     conn.execute_batch(
         "insert into agents (repo, kind, model, session_id, created_at)
@@ -174,7 +183,7 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
 }
 
 const WORKER_COLUMNS: &str = "id, repo, profile, title, cwd, branch, session_id, state, final_report, \
-                              created_at, settled_at, closed_at, last_message_at, agent_id, dismissed_at, fanout";
+                              created_at, settled_at, closed_at, last_message_at, agent_id, dismissed_at, fanout, cli, model";
 
 fn worker_row(row: &Row) -> rusqlite::Result<Worker> {
     Ok(Worker {
@@ -194,6 +203,8 @@ fn worker_row(row: &Row) -> rusqlite::Result<Worker> {
         agent_id: row.get(13)?,
         dismissed_at: row.get(14)?,
         fanout: row.get(15)?,
+        cli: row.get(16)?,
+        model: row.get(17)?,
     })
 }
 
@@ -223,12 +234,15 @@ pub struct NewWorker<'a> {
     pub session_id: &'a str,
     pub agent: Option<i64>,
     pub fanout: Option<&'a str>,
+    pub cli: Option<&'a str>,
+    pub model: Option<&'a str>,
 }
 
 pub fn insert_worker(conn: &Connection, w: &NewWorker) -> Result<i64> {
     conn.execute(
-        "insert into workers (repo, profile, title, spec, cwd, branch, session_id, state, created_at, agent_id, fanout)
-         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "insert into workers (repo, profile, title, spec, cwd, branch, session_id, state, created_at, agent_id, fanout,
+                              cli, model)
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             w.repo,
             w.profile,
@@ -240,7 +254,9 @@ pub fn insert_worker(conn: &Connection, w: &NewWorker) -> Result<i64> {
             state::STARTING,
             now(),
             w.agent,
-            w.fanout
+            w.fanout,
+            w.cli,
+            w.model
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -410,8 +426,10 @@ pub struct Agent {
     pub kind: String,
     /// What the human called it, or what their first request was about; none until then.
     pub name: Option<String>,
-    /// The model the human picked; none means the `claude` default.
+    /// The model the human picked; none leaves it to the settings, then the CLI's own default.
     pub model: Option<String>,
+    /// The agent CLI the human picked; none leaves it to the settings, then claude.
+    pub cli: Option<String>,
     pub session_id: String,
     pub created_at: i64,
     /// Its own worktree, when it works on a branch apart from the repo's checkout.
@@ -428,7 +446,7 @@ impl Agent {
     }
 }
 
-const AGENT_COLUMNS: &str = "id, repo, kind, name, model, session_id, created_at, cwd, branch";
+const AGENT_COLUMNS: &str = "id, repo, kind, name, model, session_id, created_at, cwd, branch, cli";
 
 fn agent_row(row: &Row) -> rusqlite::Result<Agent> {
     Ok(Agent {
@@ -441,6 +459,7 @@ fn agent_row(row: &Row) -> rusqlite::Result<Agent> {
         created_at: row.get(6)?,
         cwd: row.get(7)?,
         branch: row.get(8)?,
+        cli: row.get(9)?,
     })
 }
 
@@ -505,6 +524,11 @@ pub fn set_agent_model(conn: &Connection, id: i64, model: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn set_agent_cli(conn: &Connection, id: i64, cli: &str) -> Result<()> {
+    conn.execute("update agents set cli = ?2 where id = ?1", params![id, cli])?;
+    Ok(())
+}
+
 /// Takes an agent off the repo's list; its Workers keep their rows.
 pub fn close_agent(conn: &Connection, id: i64) -> Result<()> {
     conn.execute("update agents set closed_at = ?2 where id = ?1", params![id, now()])?;
@@ -542,6 +566,8 @@ mod tests {
                 session_id: "sid",
                 agent: None,
                 fanout: None,
+                cli: None,
+                model: None,
             },
         )
         .unwrap();
@@ -616,6 +642,8 @@ mod tests {
                     session_id: "s",
                     agent: Some(agent),
                     fanout: None,
+                    cli: None,
+                    model: None,
                 },
             )
             .unwrap();

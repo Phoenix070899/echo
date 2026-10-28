@@ -2,7 +2,7 @@
 name: hinata
 description: Codebase analyst. Read-only analysis of how the current code works, for planning.
 cli: claude
-model: claude-sonnet-5-5
+model: anthropic/claude-sonnet-5-5
 effort: high
 tools: Read, Grep, Glob, Bash
 skills:

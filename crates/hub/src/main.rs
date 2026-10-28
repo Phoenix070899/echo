@@ -1,6 +1,7 @@
 //! `echoctl`: the Echo CLI. With no command it starts the Orchestrator for the repo here.
 
 mod attach;
+mod cli;
 mod daemon;
 mod db;
 mod launch;
@@ -216,6 +217,12 @@ enum WorkerCommand {
         repo: Option<PathBuf>,
         #[arg(long)]
         json: bool,
+        /// The agent CLI to run, over the Profile's and the settings' (claude).
+        #[arg(long)]
+        cli: Option<String>,
+        /// The model, as provider/model (anthropic/claude-opus-5-5), over the Profile's and the settings'.
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Workers not yet closed.
     List {
@@ -344,7 +351,14 @@ fn profile_command(command: ProfileCommand) -> Result<()> {
                     None => entry.level.label().to_string(),
                 };
                 match &entry.profile {
-                    Ok(p) => println!("{:width$}  {from:25}  {:18}  {}", entry.name, p.model, p.description),
+                    Ok(p) => {
+                        let runs = match cli::pick(&state, repo.as_deref(), &[&p.choice()]) {
+                            Ok((cli, Some(model))) => format!("{} {model}", cli.name()),
+                            Ok((cli, None)) => format!("{} default", cli.name()),
+                            Err(e) => format!("cannot run: {e}"),
+                        };
+                        println!("{:width$}  {from:25}  {runs:32}  {}", entry.name, p.description)
+                    }
                     Err(e) => println!("{:width$}  {from:25}  does not load: {e}", entry.name),
                 }
             }
@@ -684,6 +698,8 @@ fn worker(command: WorkerCommand) -> Result<ExitCode> {
             title,
             repo,
             json,
+            cli,
+            model,
         } => {
             let spec = match (spec, spec_file) {
                 (Some(spec), _) => spec,
@@ -695,7 +711,7 @@ fn worker(command: WorkerCommand) -> Result<ExitCode> {
             let result = proto::call(
                 "worker.start",
                 json!({ "repo": repo_arg(repo)?, "profile": profile, "spec": spec, "worktree": worktree, "title": title,
-                        "agent": agent_env() }),
+                        "agent": agent_env(), "cli": cli, "model": model }),
             )?;
             if json {
                 print_json(&result)?;

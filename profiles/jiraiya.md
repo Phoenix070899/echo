@@ -2,7 +2,7 @@
 name: jiraiya
 description: Web researcher. Answers research questions from primary sources with cited findings.
 cli: claude
-model: claude-sonnet-5-5
+model: anthropic/claude-sonnet-5-5
 effort: medium
 tools: WebSearch, WebFetch, Read, Bash
 skills:

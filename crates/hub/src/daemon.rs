@@ -15,6 +15,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
+use crate::cli;
 use crate::db::{self, kind, state, Worker};
 use crate::launch;
 use crate::lessons;
@@ -495,6 +496,10 @@ impl Hub {
         if let Some(model) = picked("model") {
             db::set_agent_model(&self.db(), id, &model)?;
         }
+        if let Some(cli) = picked("cli") {
+            cli::Cli::parse(&cli)?;
+            db::set_agent_cli(&self.db(), id, &cli)?;
+        }
         if let Some(name) = picked("name") {
             db::set_agent_name(&self.db(), id, &name)?;
         }
@@ -506,19 +511,22 @@ impl Hub {
         if self.agent_is_live(id) || agent.kind == db::agent_kind::TERMINAL {
             return Ok(view(false, false));
         }
-        let mut extra: Vec<String> = p
+        let extra: Vec<String> = p
             .get("args")
             .and_then(Value::as_array)
             .map(|args| args.iter().filter_map(|a| a.as_str().map(String::from)).collect())
             .unwrap_or_default();
-        if let Some(model) = &agent.model {
-            if !extra.iter().any(|arg| arg == "--model") {
-                extra.extend(["--model".to_string(), model.clone()]);
-            }
-        }
         let repo = PathBuf::from(&agent.repo);
         let home = PathBuf::from(agent.home());
-        let resume = paths::transcript_exists(&agent.session_id);
+        let (agent_cli, model) = cli::pick(
+            &paths::state_dir(),
+            Some(&repo),
+            &[&cli::Choice {
+                cli: agent.cli.clone(),
+                model: agent.model.clone(),
+            }],
+        )?;
+        let resume = agent_cli.has_session(&agent.session_id);
         // What the human asked for up front, like an issue to work on; a resumed session has its own.
         let request = picked("request").filter(|_| !resume);
         let orchestrator = agent.kind == db::agent_kind::ORCHESTRATOR;
@@ -531,22 +539,26 @@ impl Hub {
                 };
                 (test.clone(), std::iter::once(script).chain(request).collect())
             }
-            None if orchestrator => (
-                "claude".to_string(),
-                launch::orchestrator_args(
-                    &self.hub_dir,
-                    &repo,
-                    agent.cwd.as_deref().zip(agent.branch.as_deref()),
-                    &agent.session_id,
+            None => {
+                let session = launch::Session {
+                    id: agent.session_id.clone(),
                     resume,
-                    request.as_deref(),
-                    &extra,
-                )?,
-            ),
-            None => (
-                "claude".to_string(),
-                launch::claude_args(&self.hub_dir, &agent, resume, request.as_deref(), &extra),
-            ),
+                    request,
+                    model,
+                    extra,
+                };
+                let start = if orchestrator {
+                    launch::orchestrator_start(
+                        &self.hub_dir,
+                        &repo,
+                        agent.cwd.as_deref().zip(agent.branch.as_deref()),
+                        session,
+                    )?
+                } else {
+                    launch::normal_start(&self.hub_dir, &agent, session)
+                };
+                (agent_cli.program().to_string(), agent_cli.args(&self.hub_dir, &start)?)
+            }
         };
         let spawn = Spawn {
             program,
@@ -871,7 +883,12 @@ impl Hub {
                     .transpose()?;
                 let profiles: Vec<Value> = profile::all(&self.hub_dir, &paths::state_dir(), repo.as_deref())
                     .iter()
-                    .map(|p| json!({ "name": p.name, "description": p.description, "model": p.model, "writes": p.writes }))
+                    .map(|p| {
+                        let (cli, model) = cli::pick(&paths::state_dir(), repo.as_deref(), &[&p.choice()])
+                            .unwrap_or((cli::Cli::Claude, p.model.clone()));
+                        let model = model.unwrap_or_else(|| format!("{} default", cli.name()));
+                        json!({ "name": p.name, "description": p.description, "cli": cli.name(), "model": model, "writes": p.writes })
+                    })
                     .collect();
                 Ok(json!({ "profiles": profiles }))
             }
@@ -1015,21 +1032,26 @@ impl Hub {
                 (agent.clone(), vec![spec])
             }
             None => {
-                let profile = profile::load(
-                    &self.hub_dir,
-                    &paths::state_dir(),
-                    Some(Path::new(&worker.repo)),
-                    &worker.profile,
-                )?;
-                let args = profile::claude_args(
+                let repo = Path::new(&worker.repo);
+                let profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(repo), &worker.profile)?;
+                let picked = cli::Choice {
+                    cli: worker.cli.clone(),
+                    model: worker.model.clone(),
+                };
+                let (worker_cli, model) = cli::pick(&paths::state_dir(), Some(repo), &[&profile.choice(), &picked])?;
+                let start = profile::start(
                     &self.hub_dir,
                     &worker.repo,
                     &profile,
                     &worker.title,
                     &worker.session_id,
                     launch,
+                    model,
                 )?;
-                ("claude".to_string(), args)
+                (
+                    worker_cli.program().to_string(),
+                    worker_cli.args(&self.hub_dir, &start)?,
+                )
             }
         };
         Ok(Spawn {
@@ -1087,7 +1109,19 @@ impl Hub {
         // The repo's main checkout, as every other method keys it, whatever path names it.
         let repo_root = repo::root(Path::new(str_param(p, "repo")?))?;
         let profile_name = str_param(p, "profile")?;
-        profile::load(&self.hub_dir, &paths::state_dir(), Some(&repo_root), profile_name)?;
+        let profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(&repo_root), profile_name)?;
+        let picked = |key: &str| {
+            p.get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+        };
+        let runs = cli::Choice {
+            cli: picked("cli").map(String::from),
+            model: picked("model").map(String::from),
+        };
+        // A CLI or model that cannot run fails here, before a worktree is made for it.
+        cli::pick(&paths::state_dir(), Some(&repo_root), &[&profile.choice(), &runs])?;
         let spec = str_param(p, "spec")?;
         let title = match p.get("title").and_then(Value::as_str) {
             Some(title) if !title.trim().is_empty() => title.to_string(),
@@ -1130,6 +1164,8 @@ impl Hub {
                 session_id: &session_id,
                 agent,
                 fanout: p.get("fanout").and_then(Value::as_str),
+                cli: runs.cli.as_deref(),
+                model: runs.model.as_deref(),
             },
         )?;
         let worker = db::worker(&self.db(), id)?;
@@ -1600,7 +1636,9 @@ impl Hub {
                 "openQuestions": open,
                 "finalReport": worker.final_report,
                 "agent": worker.agent_id,
-                "model": profile.as_ref().map(|p| p.model.clone()),
+                // The model it runs, as the human reads it: "claude-haiku-5-5", not "anthropic/claude-haiku-5-5".
+                "model": worker.model.clone().or_else(|| profile.as_ref().and_then(|p| p.model.clone()))
+                    .map(|m| m.rsplit('/').next().unwrap_or(&m).to_string()),
                 "effort": profile.as_ref().and_then(|p| p.effort.clone()),
                 "progress": progress,
                 "settledAt": worker.settled_at,

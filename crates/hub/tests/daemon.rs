@@ -444,6 +444,46 @@ fn profiles_copied_into_yours_or_the_repo_replace_echos_own() {
 }
 
 #[test]
+fn a_cli_or_model_that_cannot_run_stops_a_worker_before_it_starts() {
+    let hub = Hub::new("pickcli");
+    let err = hub.fails(&[
+        "worker",
+        "start",
+        "lee",
+        "--spec",
+        "done quickly",
+        "--model",
+        "openai/gpt-5",
+    ]);
+    assert!(err.contains("only Anthropic"), "{err}");
+    let err = hub.fails(&["worker", "start", "lee", "--spec", "done quickly", "--cli", "opencode"]);
+    assert!(err.contains("not supported yet"), "{err}");
+    assert!(!hub.ok(&["worker", "list"]).contains("w1"), "nothing was started");
+    std::fs::create_dir_all(hub.repo.join(".echo")).unwrap();
+    std::fs::write(
+        hub.repo.join(".echo/settings.json"),
+        r#"{"model": "anthropic/claude-fable-5-1"}"#,
+    )
+    .unwrap();
+    let listed = hub.ok(&["profile", "list"]);
+    let lee = listed.lines().find(|l| l.starts_with("lee ")).unwrap();
+    assert!(
+        lee.contains("claude anthropic/claude-haiku-5-5"),
+        "a Profile's model beats the repo's: {lee}"
+    );
+    hub.ok(&[
+        "worker",
+        "start",
+        "lee",
+        "--spec",
+        "done quickly",
+        "--model",
+        "anthropic/claude-opus-5-5",
+    ]);
+    assert!(hub.wait().contains("done (done) from w1"));
+}
+
+#[test]
 fn a_lesson_from_a_final_report_reaches_the_repos_lessons() {
     let hub = Hub::new("lesson");
     hub.ok(&["worker", "start", "lee", "--spec", "lesson"]);

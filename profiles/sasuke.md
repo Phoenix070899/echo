@@ -2,7 +2,7 @@
 name: sasuke
 description: Verifier. Reviews one writing Worker's commits: runs the verify command and inspects the diff. Read-only.
 cli: claude
-model: claude-opus-5-5
+model: anthropic/claude-opus-5-5
 effort: high
 tools: Read, Grep, Glob, Bash
 skills:

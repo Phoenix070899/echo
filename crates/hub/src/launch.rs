@@ -5,6 +5,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::json;
 
+use crate::cli::Start;
 use crate::db::Agent;
 use crate::{attach, lessons, paths, proto, repo};
 
@@ -12,17 +13,9 @@ use crate::{attach, lessons, paths, proto, repo};
 const RESUMED: &str = "Your terminal was restarted. Run `echoctl worker list`, give the human a Summary, \
                        and start the listener if Workers are open.";
 
-/// Arguments after `claude` for a repo's Orchestrator: a new session, or its saved one resumed.
-/// A new session given a `request` starts on it, as if the human had typed it first.
-pub fn orchestrator_args(
-    hub: &Path,
-    repo: &Path,
-    worktree: Option<(&str, &str)>,
-    session_id: &str,
-    resume: bool,
-    request: Option<&str>,
-    extra: &[String],
-) -> Result<Vec<String>> {
+/// What a repo's Orchestrator starts with: a new session, or its saved one resumed. A new session
+/// given a `request` starts on it, as if the human had typed it first.
+pub fn orchestrator_start(hub: &Path, repo: &Path, worktree: Option<(&str, &str)>, session: Session) -> Result<Start> {
     let state = paths::state_dir();
     let key = repo.to_string_lossy();
     let orchestrator = std::fs::read_to_string(hub.join("orchestrator.md"))?
@@ -52,60 +45,53 @@ pub fn orchestrator_args(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut args = vec![
-        "-n".to_string(),
-        format!("echo: {name}"),
-        "--plugin-dir".into(),
-        hub.join("mod").display().to_string(),
-        "--plugin-dir".into(),
-        hub.join("skills").display().to_string(),
-        "--add-dir".into(),
-        hub.display().to_string(),
-        "--add-dir".into(),
-        lessons::memory_dir(&state).display().to_string(),
-        "--append-system-prompt".into(),
-        prompt,
-    ];
-    args.extend(extra.iter().cloned());
-    if resume {
-        args.extend(["--resume".into(), session_id.into(), "--".into(), RESUMED.into()]);
+    let first = if session.resume {
+        Some(RESUMED.to_string())
     } else {
-        args.extend(["--session-id".into(), session_id.into()]);
-        args.extend(first_request(request));
-    }
-    Ok(args)
+        session.request
+    };
+    Ok(Start {
+        title: format!("echo: {name}"),
+        prompt,
+        dirs: vec![hub.to_path_buf(), lessons::memory_dir(&state)],
+        plugins: vec![hub.join("mod"), hub.join("skills")],
+        model: session.model,
+        session_id: session.id,
+        resume: session.resume,
+        first,
+        extra: session.extra,
+        ..Start::default()
+    })
 }
 
-/// Arguments after `claude` for a Normal session: plain Claude Code in the repo, new or resumed,
-/// with only the skills for driving Echo added (`skills/`), not the Orchestrator's view.
-pub fn claude_args(hub: &Path, agent: &Agent, resume: bool, request: Option<&str>, extra: &[String]) -> Vec<String> {
+/// An agent session as the daemon opens it: which saved session, and what the human added.
+pub struct Session {
+    pub id: String,
+    pub resume: bool,
+    pub request: Option<String>,
+    pub model: Option<String>,
+    pub extra: Vec<String>,
+}
+
+/// What a Normal session starts with: plain Claude Code in the repo, new or resumed, with only
+/// the skills for driving Echo added (`skills/`), not the Orchestrator's view.
+pub fn normal_start(hub: &Path, agent: &Agent, session: Session) -> Start {
     let name = agent.name.clone().unwrap_or_else(|| {
         let repo = Path::new(&agent.repo);
         repo.file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default()
     });
-    let mut args = vec![
-        "-n".to_string(),
-        format!("echo: {name}"),
-        "--plugin-dir".into(),
-        hub.join("skills").display().to_string(),
-    ];
-    args.extend(extra.iter().cloned());
-    if resume {
-        args.extend(["--resume".into(), agent.session_id.clone()]);
-    } else {
-        args.extend(["--session-id".into(), agent.session_id.clone()]);
-        args.extend(first_request(request));
+    Start {
+        title: format!("echo: {name}"),
+        plugins: vec![hub.join("skills")],
+        model: session.model,
+        session_id: session.id,
+        first: if session.resume { None } else { session.request },
+        resume: session.resume,
+        extra: session.extra,
+        ..Start::default()
     }
-    args
-}
-
-/// A new session's first message, after `--` so a request starting with `-` is not an option.
-fn first_request(request: Option<&str>) -> Vec<String> {
-    request
-        .map(|r| vec!["--".to_string(), r.to_string()])
-        .unwrap_or_default()
 }
 
 /// Starts an Orchestrator in the Hub Daemon, or finds it running, then attaches to it: the agent

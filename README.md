@@ -65,6 +65,9 @@ echoctl profile copy sasuke        your own copy to change ("--repo" for this re
 echoctl profile new code-reviewer  a blank Profile to fill in
 ```
 
+A Profile's `cli` and `model` (`provider/model`) can be left out: they then come from the repo's `.echo/settings.json`, else `~/.echo/settings.json` (`{"cli": "claude", "model": "anthropic/claude-sonnet-5-5"}`), else claude's own default.
+`echoctl worker start --cli --model` overrides all of them for one Worker.
+
 | Profile | Role |
 | --- | --- |
 | `naruto` | Implementer: one coding Task, runs its verify command |
