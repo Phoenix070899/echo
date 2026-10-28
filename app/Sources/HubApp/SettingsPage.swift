@@ -3,7 +3,7 @@ import SwiftUI
 
 /// One part of Settings, listed down the page's left side.
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case window, theme, background, font, multiplexer, agents, remote
+    case window, theme, background, font, multiplexer, agents, memory, remote
 
     var id: String { rawValue }
 
@@ -15,6 +15,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .font: "Font"
         case .multiplexer: "Multiplexer"
         case .agents: "Agents"
+        case .memory: "Preferences and Lessons"
         case .remote: "Echo Remote"
         }
     }
@@ -27,6 +28,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .font: "textformat"
         case .multiplexer: "rectangle.split.2x1"
         case .agents: "person.2"
+        case .memory: "text.book.closed"
         case .remote: "iphone"
         }
     }

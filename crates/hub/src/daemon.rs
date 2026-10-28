@@ -952,6 +952,53 @@ impl Hub {
                 };
                 Ok(json!({ "path": path }))
             }
+            "memory.get" => {
+                let state = paths::state_dir();
+                let prefs_path = lessons::preferences_path(&state, &self.hub_dir);
+                let prefs = std::fs::read_to_string(&prefs_path).unwrap_or_default();
+                let mut out = json!({ "preferences": { "path": prefs_path, "sections": lessons::sections(&prefs),
+                                                     "bullets": lessons::bullets(&prefs) } });
+                if let Some(repo) = p.get("repo").and_then(Value::as_str) {
+                    let key = repo::root(Path::new(repo))?.display().to_string();
+                    let path = lessons::lessons_path(&state, &key);
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    out["lessons"] =
+                        json!({ "path": path, "bullets": lessons::bullets(&text), "limit": lessons::LIMIT });
+                }
+                Ok(out)
+            }
+            "memory.add" | "memory.remove" => {
+                let state = paths::state_dir();
+                let path = match str_param(p, "file")? {
+                    "preferences" => lessons::preferences_path(&state, &self.hub_dir),
+                    "lessons" => {
+                        let key = repo::root(Path::new(str_param(p, "repo")?))?.display().to_string();
+                        lessons::lessons_path(&state, &key)
+                    }
+                    other => bail!("no such file {other:?}; preferences or lessons"),
+                };
+                let text = str_param(p, "text")?;
+                if method == "memory.remove" {
+                    lessons::remove(&path, text)?;
+                } else if str_param(p, "file")? == "lessons" {
+                    let today: String = self
+                        .db()
+                        .query_row("select date('now', 'localtime')", [], |row| row.get(0))?;
+                    let key = repo::root(Path::new(str_param(p, "repo")?))?.display().to_string();
+                    lessons::add(&state, &key, "you", &today, &[text.to_string()])?;
+                } else {
+                    let today: String = self
+                        .db()
+                        .query_row("select date('now', 'localtime')", [], |row| row.get(0))?;
+                    lessons::add_to_section(
+                        &path,
+                        p.get("section").and_then(Value::as_str).unwrap_or(""),
+                        text,
+                        &today,
+                    )?;
+                }
+                Ok(json!({}))
+            }
             "settings.get" => {
                 let all = settings::read(&paths::state_dir())?;
                 Ok(json!({ "cli": all.get("cli"), "model": all.get("model"),
@@ -1915,6 +1962,7 @@ impl Hub {
                     "font",
                     "multiplexer",
                     "agents",
+                    "memory",
                     "remote",
                 ];
                 let section = p.get("section").and_then(Value::as_str).unwrap_or("agents");

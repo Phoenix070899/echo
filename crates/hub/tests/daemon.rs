@@ -525,6 +525,33 @@ fn settings_and_profile_edits_from_echo_land_in_the_humans_files() {
 }
 
 #[test]
+fn the_human_adds_and_removes_preferences_and_lessons_from_echo() {
+    let hub = Hub::new("memory");
+    hub.ok(&["sessions"]);
+    let add = |file: &str, text: &str, section: &str| {
+        hub.call(
+            "memory.add",
+            serde_json::json!({ "file": file, "text": text, "section": section, "repo": hub.repo }),
+        )
+    };
+    assert_eq!(add("preferences", "Never push to main", "Never do")["ok"], true);
+    assert_eq!(add("lessons", "Run make db first", "")["ok"], true);
+    let got = hub.call("memory.get", serde_json::json!({ "repo": hub.repo }))["result"].clone();
+    let pref = &got["preferences"]["bullets"][0];
+    assert_eq!(pref["section"], "Never do");
+    assert!(pref["text"].as_str().unwrap().starts_with("Never push to main ("));
+    let lesson = got["lessons"]["bullets"][0]["text"].as_str().unwrap().to_string();
+    assert!(lesson.ends_with(", you)"), "{lesson}");
+    let removed = hub.call(
+        "memory.remove",
+        serde_json::json!({ "file": "lessons", "text": lesson, "repo": hub.repo }),
+    );
+    assert_eq!(removed["ok"], true, "{removed}");
+    let got = hub.call("memory.get", serde_json::json!({ "repo": hub.repo }))["result"].clone();
+    assert_eq!(got["lessons"]["bullets"], serde_json::json!([]));
+}
+
+#[test]
 fn a_lesson_from_a_final_report_reaches_the_repos_lessons() {
     let hub = Hub::new("lesson");
     hub.ok(&["worker", "start", "lee", "--spec", "lesson"]);

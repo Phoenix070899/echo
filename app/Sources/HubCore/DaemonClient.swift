@@ -184,6 +184,20 @@ public struct DaemonClient: Sendable {
         return result?["path"] as? String ?? ""
     }
 
+    public func memory(repo: String?) throws -> MemoryFiles {
+        let result = try call("memory.get", repo.map { ["repo": $0] } ?? [:])
+        return try JSONDecoder().decode(MemoryFiles.self, from: JSONSerialization.data(withJSONObject: result))
+    }
+
+    /// Adds a dated line to the Preferences (under `section`) or to `repo`'s Lessons, or removes
+    /// the line written exactly as `text`.
+    public func editMemory(_ action: String, file: String, text: String, section: String? = nil, repo: String? = nil) throws {
+        var params: [String: Any] = ["file": file, "text": text]
+        if let section { params["section"] = section }
+        if let repo { params["repo"] = repo }
+        _ = try call("memory.\(action)", params)
+    }
+
     public func agentSettings() throws -> AgentSettings {
         try decodeSettings(call("settings.get"))
     }

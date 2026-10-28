@@ -534,6 +534,29 @@ public struct WorkerProfile: Decodable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// The human's Preferences and one repo's Lessons, from `memory.get`.
+public struct MemoryFiles: Decodable, Equatable, Sendable {
+    public struct Bullet: Decodable, Equatable, Hashable, Sendable {
+        public let section: String
+        public let text: String
+    }
+
+    public struct Preferences: Decodable, Equatable, Sendable {
+        public let path: String
+        public let sections: [String]
+        public let bullets: [Bullet]
+    }
+
+    public struct Lessons: Decodable, Equatable, Sendable {
+        public let path: String
+        public let bullets: [Bullet]
+        public let limit: Int
+    }
+
+    public let preferences: Preferences
+    public let lessons: Lessons?
+}
+
 /// The CLIs Echo can run agents in.
 public let agentCLIs = ["claude", "codex"]
 

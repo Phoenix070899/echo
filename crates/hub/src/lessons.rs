@@ -96,6 +96,94 @@ pub fn preferences(hub: &Path) -> String {
     std::fs::read_to_string(preferences_path(&paths::state_dir(), hub)).unwrap_or_default()
 }
 
+/// One bullet of a Preferences or Lessons file, under the `## ` heading it sits in ("" for none).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Bullet {
+    pub section: String,
+    /// The line as written, without "- ": the handle to remove it by.
+    pub text: String,
+}
+
+pub fn bullets(text: &str) -> Vec<Bullet> {
+    let mut section = String::new();
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            section = heading.trim().to_string();
+        } else if let Some(bullet) = line.strip_prefix("- ") {
+            out.push(Bullet {
+                section: section.clone(),
+                text: bullet.to_string(),
+            });
+        }
+    }
+    out
+}
+
+/// The `## ` headings of a file, in order.
+pub fn sections(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| l.strip_prefix("## "))
+        .map(|h| h.trim().to_string())
+        .collect()
+}
+
+/// Deletes the bullet written exactly as `bullet`; fails when the file no longer has it.
+pub fn remove(path: &Path, bullet: &str) -> Result<()> {
+    let text = std::fs::read_to_string(path)?;
+    let line = format!("- {bullet}");
+    let Some(at) = text.lines().position(|l| l == line) else {
+        anyhow::bail!(
+            "{} no longer has that line; it may have changed meanwhile",
+            path.display()
+        );
+    };
+    let kept: Vec<&str> = text
+        .lines()
+        .enumerate()
+        .filter(|(i, _)| *i != at)
+        .map(|(_, l)| l)
+        .collect();
+    std::fs::write(path, kept.join("\n") + "\n")?;
+    Ok(())
+}
+
+/// Adds a dated bullet at the end of `section`'s bullets, or at the end of the file when it has
+/// no such heading.
+pub fn add_to_section(path: &Path, section: &str, bullet: &str, today: &str) -> Result<()> {
+    let line = bullet.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty() {
+        anyhow::bail!("a line needs some text");
+    }
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    let new = format!("- {line} ({today})");
+    let heading = lines
+        .iter()
+        .position(|l| l.strip_prefix("## ").is_some_and(|h| h.trim() == section));
+    match heading {
+        Some(at) => {
+            // After the section's last non-blank line, before the next heading.
+            let end = lines[at + 1..]
+                .iter()
+                .position(|l| l.starts_with("## "))
+                .map_or(lines.len(), |n| at + 1 + n);
+            let last = (at..end).rev().find(|&i| !lines[i].trim().is_empty()).unwrap_or(at);
+            let blank_after_heading = last == at;
+            lines.insert(last + 1, new);
+            if blank_after_heading {
+                lines.insert(last + 1, String::new());
+            }
+        }
+        None => lines.push(new),
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(path, lines.join("\n") + "\n")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,5 +237,41 @@ mod tests {
         std::fs::write(&path, "- Mine\n").unwrap();
         preferences_path(&state, &hub);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "- Mine\n", "kept once moved");
+    }
+
+    #[test]
+    fn bullets_are_read_added_under_their_heading_and_removed() {
+        let dir = scratch("edit");
+        let path = dir.join("preferences.md");
+        std::fs::write(
+            &path,
+            "# User preferences\n\nIntro.\n\n## Workflow\n\n- Push after review (2026-10-01)\n\n## Never do\n",
+        )
+        .unwrap();
+        add_to_section(&path, "Never do", "Commit to   main", "2026-10-28").unwrap();
+        add_to_section(&path, "Workflow", "Draft PRs first", "2026-10-28").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            bullets(&text),
+            [
+                Bullet {
+                    section: "Workflow".into(),
+                    text: "Push after review (2026-10-01)".into()
+                },
+                Bullet {
+                    section: "Workflow".into(),
+                    text: "Draft PRs first (2026-10-28)".into()
+                },
+                Bullet {
+                    section: "Never do".into(),
+                    text: "Commit to main (2026-10-28)".into()
+                },
+            ]
+        );
+        assert!(text.contains("## Never do\n\n- Commit to main"), "{text}");
+        assert_eq!(sections(&text), ["Workflow", "Never do"]);
+        remove(&path, "Push after review (2026-10-01)").unwrap();
+        assert!(remove(&path, "Push after review (2026-10-01)").is_err());
+        assert_eq!(bullets(&std::fs::read_to_string(&path).unwrap()).len(), 2);
     }
 }
