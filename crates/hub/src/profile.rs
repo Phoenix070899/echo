@@ -4,6 +4,8 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 
+use crate::{lessons, paths};
+
 #[derive(Debug, Clone)]
 pub struct Profile {
     pub name: String,
@@ -83,16 +85,20 @@ pub fn all(hub: &Path) -> Result<Vec<Profile>> {
     Ok(names.iter().filter_map(|name| load(hub, name).ok()).collect())
 }
 
-/// Worker Contract, Preferences, then the profile's role, skills, and context.
-pub fn system_prompt(hub: &Path, profile: &Profile) -> Result<String> {
+/// Worker Contract, Preferences, the repo's Lessons, then the profile's role, skills, and context.
+pub fn system_prompt(hub: &Path, state: &Path, repo: &str, profile: &Profile) -> Result<String> {
     let mut parts = vec![
         std::fs::read_to_string(hub.join("worker-contract.md"))?,
         format!(
             "# Preferences\n\nApply these standing instructions from the human.\n\n{}",
-            std::fs::read_to_string(hub.join("memory").join("preferences.md")).unwrap_or_default()
+            std::fs::read_to_string(lessons::preferences_path(state, hub)).unwrap_or_default()
         ),
-        format!("# Your role: {}\n\n{}", profile.name, profile.role),
     ];
+    let lessons = lessons::lessons(state, repo);
+    if !lessons.is_empty() {
+        parts.push(format!("{}\n\n{}", lessons::WORKER_INTRO, lessons.trim_end()));
+    }
+    parts.push(format!("# Your role: {}\n\n{}", profile.name, profile.role));
     if !profile.skills.is_empty() {
         parts.push(format!(
             "Use these skills when they fit the Task: {}.",
@@ -121,6 +127,7 @@ pub enum Launch<'a> {
 /// Arguments after `claude` for a Worker session.
 pub fn claude_args(
     hub: &Path,
+    repo: &str,
     profile: &Profile,
     title: &str,
     session_id: &str,
@@ -137,6 +144,8 @@ pub fn claude_args(
         "AskUserQuestion".into(),
         "--add-dir".into(),
         hub.display().to_string(),
+        "--add-dir".into(),
+        lessons::memory_dir(&paths::state_dir()).display().to_string(),
         "-n".into(),
         format!("{}: {title}", profile.name),
     ];
@@ -146,7 +155,10 @@ pub fn claude_args(
     if !profile.tools.is_empty() {
         args.extend(["--tools".into(), profile.tools.join(",")]);
     }
-    args.extend(["--append-system-prompt".into(), system_prompt(hub, profile)?]);
+    args.extend([
+        "--append-system-prompt".into(),
+        system_prompt(hub, &paths::state_dir(), repo, profile)?,
+    ]);
     match launch {
         Launch::New { spec } => args.extend(["--session-id".into(), session_id.into(), "--".into(), spec.into()]),
         Launch::Resume => args.extend(["--resume".into(), session_id.into(), "--".into(), RESUMED.into()]),
@@ -186,5 +198,27 @@ mod tests {
         for name in ["hinata", "naruto", "jiraiya", "sasuke", "ino", "lee"] {
             load(&hub, name).unwrap_or_else(|e| panic!("{name}: {e}"));
         }
+    }
+
+    #[test]
+    fn a_worker_prompt_carries_preferences_then_the_repos_lessons() {
+        let hub = crate::paths::hub_dir();
+        let state = std::env::temp_dir().join(format!("hub-prompt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&state);
+        std::fs::create_dir_all(state.join("memory")).unwrap();
+        std::fs::write(state.join("memory/preferences.md"), "- Never push to main\n").unwrap();
+        let profile = load(&hub, "lee").unwrap();
+        let plain = system_prompt(&hub, &state, "/code/shop", &profile).unwrap();
+        assert!(plain.contains("- Never push to main"));
+        assert!(!plain.contains("# Lessons"), "no Lessons section before there are any");
+        lessons::add(&state, "/code/shop", "w2", "2026-10-28", &["Run make db first".into()]).unwrap();
+        let prompt = system_prompt(&hub, &state, "/code/shop", &profile).unwrap();
+        let (prefs, rest) = prompt.split_once("# Lessons for this repo").unwrap();
+        assert!(prefs.contains("- Never push to main"));
+        assert!(rest.contains("- Run make db first (2026-10-28, w2)"));
+        assert!(rest.contains("# Your role: lee"));
+        assert!(!system_prompt(&hub, &state, "/code/other", &profile)
+            .unwrap()
+            .contains("# Lessons"));
     }
 }

@@ -4,6 +4,7 @@ mod attach;
 mod daemon;
 mod db;
 mod launch;
+mod lessons;
 mod paths;
 mod profile;
 mod proto;
@@ -102,6 +103,9 @@ enum Command {
         state: DoneState,
         /// The Final Report; "-" reads it from stdin.
         report: String,
+        /// A fact about this repo the next Worker needs, one line; repeat for more.
+        #[arg(long = "lesson")]
+        lessons: Vec<String>,
     },
     /// Claude Code Notification hook for Workers (reads the hook JSON on stdin).
     Notify,
@@ -497,14 +501,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 json!({ "worker": this_worker()?, "kind": kind, "body": text_arg(&text)? }),
             )?;
         }
-        Command::Done { state, report } => {
+        Command::Done { state, report, lessons } => {
             let state = match state {
                 DoneState::Done => "done",
                 DoneState::Blocked => "blocked",
             };
             proto::call(
                 "done",
-                json!({ "worker": this_worker()?, "state": state, "body": text_arg(&report)? }),
+                json!({ "worker": this_worker()?, "state": state, "body": text_arg(&report)?, "lessons": lessons }),
             )?;
             println!("Final Report sent. Stop here and stay idle.");
         }

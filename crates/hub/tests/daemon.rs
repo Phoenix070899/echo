@@ -409,6 +409,26 @@ fn a_done_worker_leaves_echo_after_five_minutes() {
 }
 
 #[test]
+fn a_lesson_from_a_final_report_reaches_the_repos_lessons() {
+    let hub = Hub::new("lesson");
+    hub.ok(&["worker", "start", "lee", "--spec", "lesson"]);
+    let heard = hub.ok(&["wait", "--timeout", "15"]);
+    assert!(
+        heard.contains("Lessons added:\n- Run make db before the tests"),
+        "{heard}"
+    );
+    let repos: Vec<_> = std::fs::read_dir(hub.state.join("memory/repos"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert_eq!(repos.len(), 1);
+    assert!(repos[0].file_name().to_string_lossy().starts_with("repo-"));
+    let lessons = std::fs::read_to_string(repos[0].path().join("lessons.md")).unwrap();
+    assert!(lessons.contains("- Run make db before the tests ("), "{lessons}");
+    assert!(lessons.trim_end().ends_with(", w1)"), "{lessons}");
+}
+
+#[test]
 fn a_final_report_stays_in_echo_until_dismissed() {
     let hub = Hub::new("dismiss");
     hub.ok(&["worker", "start", "lee", "--spec", "done quickly"]);

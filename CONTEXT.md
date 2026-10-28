@@ -49,8 +49,12 @@ The Orchestrator's report to the human, always in three sections: Needs you, Don
 _Avoid_: status update, digest
 
 **Preferences**:
-The human's standing instructions about how work should be done, kept between sessions and applied to every new Task.
+The human's standing instructions about how work should be done, kept between sessions and applied to every new Task in every repo.
 _Avoid_: memory, settings
+
+**Lessons**:
+Facts about one repo that Workers learned while doing their Tasks (a setup step, a command that works, a trap), given to every new Worker and Orchestrator in that repo.
+_Avoid_: memory, notes, learnings
 
 **Dashboard**:
 The list of every Worker of the Hub Session with its state, as `echoctl status` prints it.

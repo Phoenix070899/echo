@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 
 use crate::db::{self, kind, state, Worker};
 use crate::launch;
+use crate::lessons;
 use crate::paths;
 use crate::profile::{self, Launch};
 use crate::proto;
@@ -887,14 +888,35 @@ impl Hub {
                 if ![state::DONE, state::BLOCKED].contains(&final_state) {
                     bail!("done --state must be done or blocked");
                 }
-                let body = str_param(p, "body")?;
+                let mut body = str_param(p, "body")?.to_string();
+                let new: Vec<String> = p
+                    .get("lessons")
+                    .and_then(Value::as_array)
+                    .map(|all| all.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                    .unwrap_or_default();
                 let db = self.db();
                 let worker = db::worker(&db, id)?;
                 if !state::is_live(&worker.state) {
                     bail!("w{id} already settled as {}", worker.state);
                 }
-                db::settle(&db, id, final_state, body)?;
-                db::insert_message(&db, &worker, kind::DONE, body)?;
+                if !new.is_empty() {
+                    let today: String = db.query_row("select date('now', 'localtime')", [], |row| row.get(0))?;
+                    let state = paths::state_dir();
+                    let count = lessons::add(&state, &worker.repo, &format!("w{id}"), &today, &new)?;
+                    body = format!("{}\n\nLessons added:\n", body.trim_end());
+                    for lesson in &new {
+                        body += &format!("- {lesson}\n");
+                    }
+                    if count > lessons::LIMIT {
+                        body += &format!(
+                            "The repo now has {count} Lessons, over {}: have an ino Worker merge {}.\n",
+                            lessons::LIMIT,
+                            lessons::lessons_path(&state, &worker.repo).display()
+                        );
+                    }
+                }
+                db::settle(&db, id, final_state, &body)?;
+                db::insert_message(&db, &worker, kind::DONE, &body)?;
                 drop(db);
                 self.notify();
                 Ok(json!({}))
@@ -989,7 +1011,14 @@ impl Hub {
             }
             None => {
                 let profile = profile::load(&self.hub_dir, &worker.profile)?;
-                let args = profile::claude_args(&self.hub_dir, &profile, &worker.title, &worker.session_id, launch)?;
+                let args = profile::claude_args(
+                    &self.hub_dir,
+                    &worker.repo,
+                    &profile,
+                    &worker.title,
+                    &worker.session_id,
+                    launch,
+                )?;
                 ("claude".to_string(), args)
             }
         };

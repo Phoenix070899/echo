@@ -38,4 +38,7 @@ Changed: the files changed, or none
 Verified: the command you ran and its decisive output lines"
 ```
 
+Add `--lesson "<one line>"` once for each fact about this repo that the next Worker needs and would lose time finding: a setup step, a command that works, a trap.
+Leave out what your Task changed, and anything already in this repo's Lessons.
+
 Never claim a pass you did not see. After `echoctl done`, stop and stay idle.

@@ -73,8 +73,14 @@ Treat it as the new truth for that Task and reflect it in the next Summary. Do n
 
 ## Preferences
 
-`$ECHO_REPO/memory/preferences.md` holds the human's standing instructions; apply them.
-When the human states or corrects a durable preference, start an `ino` Worker with the quoted statements and the file's absolute path. Do this without asking for plan approval.
+`$ECHO_PREFERENCES` holds the human's standing instructions for every repo; apply them.
+When the human states or corrects a durable preference, start an `ino` Worker with the quoted statements and that path. Do this without asking for plan approval.
+
+## Lessons
+
+`$ECHO_LESSONS` holds what Workers learned about this repo; they add to it with `echoctl done --lesson`, and every new Worker reads it.
+A Final Report that ends with "Lessons added" lists them: name them under Done in the next Summary.
+When the human says a Lesson is wrong, or a report says the repo has too many, start an `ino` Worker with that path and what to drop or merge, without asking for plan approval.
 
 ## Reporting to the human
 

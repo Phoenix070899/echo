@@ -64,7 +64,7 @@ A profile is a CLI-neutral Markdown file in [`profiles/`](profiles/): which agen
 | `hinata` | Codebase analyst: read-only analysis for planning |
 | `jiraiya` | Web researcher: cited answers from primary sources |
 | `lee` | Command runner: tests, builds, git, scripts |
-| `ino` | Preferences scribe: keeps your standing instructions |
+| `ino` | Scribe: keeps your Preferences and each repo's Lessons tidy |
 
 ## The `echoctl` CLI
 

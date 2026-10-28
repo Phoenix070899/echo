@@ -20,6 +20,7 @@ if [ "$1" = "orchestrator" ] && [ "$2" = "prompt me" ]; then shift; fi
 case "$1" in
   ask*) answer=$(echoctl ask "Which color?") && echoctl done --state done "answer was $answer" ;;
   done*) echoctl done --state done "finished" ;;
+  lesson*) echoctl done --state done "finished" --lesson "Run make db before the tests" ;;
   status*) echoctl send --type status "41 of 44 tests passing
 details the ledger leaves out" ;;
   exit*) sleep 2; echo "fake agent giving up"; sleep 1; exit 1 ;;

@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::db::Agent;
-use crate::{attach, proto, repo};
+use crate::{attach, lessons, paths, proto, repo};
 
 /// The first message of a resumed Orchestrator session.
 const RESUMED: &str = "Your terminal was restarted. Run `echoctl worker list`, give the human a Summary, \
@@ -23,13 +23,25 @@ pub fn orchestrator_args(
     request: Option<&str>,
     extra: &[String],
 ) -> Result<Vec<String>> {
-    let orchestrator =
-        std::fs::read_to_string(hub.join("orchestrator.md"))?.replace("$ECHO_REPO", &hub.display().to_string());
-    let preferences = std::fs::read_to_string(hub.join("memory").join("preferences.md")).unwrap_or_default();
-    let mut prompt = format!(
-        "{orchestrator}\n\n# Preferences\n\n{preferences}\n\nRepo for this Hub Session: {}",
-        repo.display()
-    );
+    let state = paths::state_dir();
+    let key = repo.to_string_lossy();
+    let orchestrator = std::fs::read_to_string(hub.join("orchestrator.md"))?
+        .replace("$ECHO_REPO", &hub.display().to_string())
+        .replace(
+            "$ECHO_PREFERENCES",
+            &lessons::preferences_path(&state, hub).display().to_string(),
+        )
+        .replace(
+            "$ECHO_LESSONS",
+            &lessons::lessons_path(&state, &key).display().to_string(),
+        );
+    let preferences = lessons::preferences(hub);
+    let mut prompt = format!("{orchestrator}\n\n# Preferences\n\n{preferences}");
+    let known = lessons::lessons(&state, &key);
+    if !known.is_empty() {
+        prompt += &format!("\n\n{}\n\n{}", lessons::WORKER_INTRO, known.trim_end());
+    }
+    prompt += &format!("\n\nRepo for this Hub Session: {}", repo.display());
     if let Some((cwd, branch)) = worktree {
         prompt += &format!(
             "\nYou work in your own worktree {cwd} on branch {branch}, apart from other Orchestrators in this repo. \
@@ -49,6 +61,8 @@ pub fn orchestrator_args(
         hub.join("skills").display().to_string(),
         "--add-dir".into(),
         hub.display().to_string(),
+        "--add-dir".into(),
+        lessons::memory_dir(&state).display().to_string(),
         "--append-system-prompt".into(),
         prompt,
     ];
