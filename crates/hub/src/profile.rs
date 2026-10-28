@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn refuses_other_clis() {
-        let text = NARUTO.replace("cli: claude", "cli: codex");
+        let text = NARUTO.replace("cli: claude", "cli: gemini");
         assert!(parse("naruto", &text)
             .unwrap_err()
             .to_string()

@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
+
+use crate::cli::Cli;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 
 pub const ROWS: u16 = 45;
@@ -21,6 +23,8 @@ const SCROLLBACK: usize = 0;
 const BACKLOG: usize = 1024;
 
 pub struct Spawn {
+    /// Whose screen it is, so the watcher reads it right.
+    pub cli: Cli,
     pub program: String,
     pub args: Vec<String>,
     pub cwd: PathBuf,
@@ -31,6 +35,7 @@ pub struct Spawn {
 
 pub struct Live {
     pub id: i64,
+    pub cli: Cli,
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     parser: Mutex<vt100::Parser>,
@@ -74,6 +79,7 @@ impl Live {
         let mut reader = pair.master.try_clone_reader()?;
         let live = Arc::new(Live {
             id,
+            cli: spawn.cli,
             writer: Mutex::new(pair.master.take_writer()?),
             master: Mutex::new(pair.master),
             parser: Mutex::new(vt100::Parser::new(ROWS, COLS, SCROLLBACK)),

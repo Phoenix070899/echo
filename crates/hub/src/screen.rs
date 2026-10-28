@@ -1,4 +1,4 @@
-//! Reading a Worker's screen: what Claude Code's TUI is showing right now.
+//! Reading a Worker's screen: what Claude Code's or Codex's TUI is showing right now.
 
 /// What a Worker's screen says about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +90,58 @@ pub fn prompt_lines(screen: &str) -> String {
         .copied()
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Codex's screen, read the same way: its trust dialog, its command approval, its
+/// `• Working (10s • esc to interrupt)` line, or its `› Ask Codex to do anything` box.
+pub fn codex_look(screen: &str) -> Look {
+    let lines: Vec<&str> = screen.lines().map(str::trim).collect();
+    if lines.iter().any(|line| line.contains("Trust this folder?")) && screen.contains("Trust and continue") {
+        return Look::TrustPrompt;
+    }
+    if lines
+        .iter()
+        .any(|line| line.starts_with("Press enter to confirm or esc to cancel"))
+        && lines.iter().any(|line| line.contains("1. Yes"))
+    {
+        return Look::PermissionPrompt;
+    }
+    if lines.iter().any(|line| line.contains("esc to interrupt")) {
+        return Look::Working;
+    }
+    // At its input box while a command it started runs on: "· 1 background terminal running ·".
+    if lines
+        .iter()
+        .any(|line| line.contains("background terminal running") || line.contains("background terminals running"))
+    {
+        return Look::Waiting;
+    }
+    Look::Idle
+}
+
+/// Codex's approval: from "Would you like to ..." to the command it asks about.
+pub fn codex_prompt_lines(screen: &str) -> String {
+    let lines: Vec<&str> = screen.lines().map(str::trim).collect();
+    let Some(ask) = lines.iter().rposition(|line| line.starts_with("Would you like to")) else {
+        return String::new();
+    };
+    let end = lines[ask..]
+        .iter()
+        .position(|line| line.starts_with("1. ") || line.starts_with("› 1."))
+        .map_or(lines.len(), |at| ask + at);
+    lines[ask..end]
+        .iter()
+        .filter(|line| !line.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A Codex turn that finished at its input box: it answered (`• ...`) and works no more.
+pub fn codex_turn_ended(screen: &str) -> bool {
+    codex_look(screen) == Look::Idle
+        && screen.lines().any(|line| line.trim_start().starts_with("• "))
+        && screen.lines().any(|line| line.trim_start().starts_with("› "))
 }
 
 /// The last `count` non-blank lines, right-trimmed.
@@ -193,5 +245,31 @@ mod tests {
     #[test]
     fn tail_keeps_the_last_non_blank_lines() {
         assert_eq!(tail("a\n\nb  \nc\n\n", 2), "b\nc");
+    }
+
+    const CODEX_TRUST: &str = "  Folder access\n  /private/tmp/r\n  Trust this folder? Codex can read, edit, and run files here.\n› 1. Trust and continue\n  2. Quit\n  enter continue · esc quit\n";
+    const CODEX_ASK: &str = "› Run exactly: touch /x\n• Running touch /x\n  Would you like to run the following command?\n  Environment: local\n  Reason: Do you want to allow creating the file?\n  $ touch /x\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again (p)\n  3. No, and tell Codex what to do differently (esc)\n  Press enter to confirm or esc to cancel\n";
+    const CODEX_WORKING: &str = "› Run exactly: ls\n• Ran ls\n  └ README.md\n• Working (10s • esc to interrupt)\n› Ask Codex to do anything\n  ? for shortcuts\n";
+    const CODEX_DONE: &str = "› Run exactly: ls\n• Ran ls\n  └ README.md\n• Listed: README.md\n  11:58\n› Ask Codex to do anything\n  GPT-5.6-Terra low · /private/tmp/r\n  ? for shortcuts\n";
+
+    #[test]
+    fn reads_codex_screens() {
+        assert_eq!(codex_look(CODEX_TRUST), Look::TrustPrompt);
+        assert_eq!(codex_look(CODEX_ASK), Look::PermissionPrompt);
+        assert_eq!(codex_look(CODEX_WORKING), Look::Working);
+        assert_eq!(codex_look(CODEX_DONE), Look::Idle);
+        assert!(codex_turn_ended(CODEX_DONE));
+        let waiting = CODEX_DONE.replace("  ? for shortcuts", "  1 background terminal running · /ps to view");
+        assert_eq!(codex_look(&waiting), Look::Waiting);
+        assert!(!codex_turn_ended(CODEX_WORKING));
+        assert_eq!(
+            codex_prompt_lines(CODEX_ASK),
+            "Would you like to run the following command?\nEnvironment: local\nReason: Do you want to allow creating the file?\n$ touch /x"
+        );
+        assert_eq!(
+            look(CODEX_ASK),
+            Look::Idle,
+            "Claude's reader does not take Codex's prompt for its own"
+        );
     }
 }

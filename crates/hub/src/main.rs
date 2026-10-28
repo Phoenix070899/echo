@@ -792,14 +792,53 @@ fn worker(command: WorkerCommand) -> Result<ExitCode> {
 }
 
 /// The Notification hook must never break the Worker: it reports what it can and exits 0.
+/// The hook every agent CLI runs: Claude Code's Notification hook, and Codex's SessionStart,
+/// PermissionRequest, and Stop hooks. It prints nothing, so it never answers a prompt itself.
 fn notify() {
     let report = || -> Result<()> {
-        let Ok(worker) = this_worker() else { return Ok(()) };
         let mut input = String::new();
         std::io::stdin().read_to_string(&mut input)?;
         let event: Value = serde_json::from_str(&input).unwrap_or_default();
-        let kind = event["notification_type"].as_str().unwrap_or("notification");
-        let message = event["message"].as_str().or(event["title"].as_str()).unwrap_or("");
+        let worker = this_worker().ok();
+        if event["hook_event_name"] == "SessionStart" {
+            // Codex names its session only once it starts; resuming needs that name.
+            if let Some(id) = event["session_id"].as_str() {
+                proto::call(
+                    "session",
+                    json!({ "worker": worker, "agent": agent_env(), "session_id": id }),
+                )?;
+            }
+            return Ok(());
+        }
+        let Some(worker) = worker else { return Ok(()) };
+        let (kind, message) = match event["hook_event_name"].as_str() {
+            Some("PermissionRequest") => (
+                "permission_prompt".to_string(),
+                format!(
+                    "{} wants approval: {}",
+                    event["tool_name"].as_str().unwrap_or("A tool"),
+                    event["tool_input"]["command"]
+                        .as_str()
+                        .map(String::from)
+                        .unwrap_or_else(|| event["tool_input"].to_string())
+                ),
+            ),
+            Some("Stop") => (
+                "idle_prompt".to_string(),
+                "Its turn ended with no Final Report.".to_string(),
+            ),
+            _ => (
+                event["notification_type"]
+                    .as_str()
+                    .unwrap_or("notification")
+                    .to_string(),
+                event["message"]
+                    .as_str()
+                    .or(event["title"].as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            ),
+        };
         proto::call("notify", json!({ "worker": worker, "kind": kind, "message": message }))?;
         Ok(())
     };

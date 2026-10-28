@@ -524,6 +524,17 @@ pub fn set_agent_model(conn: &Connection, id: i64, model: &str) -> Result<()> {
     Ok(())
 }
 
+/// The CLI's own name for the session, when it picks one at start (Codex).
+pub fn set_worker_session(conn: &Connection, id: i64, session: &str) -> Result<()> {
+    conn.execute("update workers set session_id = ?2 where id = ?1", params![id, session])?;
+    Ok(())
+}
+
+pub fn set_agent_session(conn: &Connection, id: i64, session: &str) -> Result<()> {
+    conn.execute("update agents set session_id = ?2 where id = ?1", params![id, session])?;
+    Ok(())
+}
+
 pub fn set_agent_cli(conn: &Connection, id: i64, cli: &str) -> Result<()> {
     conn.execute("update agents set cli = ?2 where id = ?1", params![id, cli])?;
     Ok(())

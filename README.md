@@ -67,6 +67,7 @@ echoctl profile new code-reviewer  a blank Profile to fill in
 
 A Profile's `cli` and `model` (`provider/model`) can be left out: they then come from the repo's `.echo/settings.json`, else `~/.echo/settings.json` (`{"cli": "claude", "model": "anthropic/claude-sonnet-5-5"}`), else claude's own default.
 `echoctl worker start --cli --model` overrides all of them for one Worker.
+The CLIs are `claude` (Anthropic models) and `codex` (OpenAI models, as `openai/<model>`).
 
 | Profile | Role |
 | --- | --- |

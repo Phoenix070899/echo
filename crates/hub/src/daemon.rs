@@ -381,6 +381,8 @@ impl Hub {
         let mut env = self.agent_env(None, None)?;
         env.push(("SHELL".into(), login_shell()));
         let spawn = Spawn {
+            // A plain shell: nothing reads its screen, so any CLI's reader would do.
+            cli: cli::Cli::Claude,
             program: login_shell(),
             args: vec!["-l".into()],
             cwd: PathBuf::from(agent.home()),
@@ -561,6 +563,7 @@ impl Hub {
             }
         };
         let spawn = Spawn {
+            cli: agent_cli,
             program,
             args,
             cwd: home,
@@ -943,11 +946,20 @@ impl Hub {
                 self.notify();
                 Ok(json!({}))
             }
+            "session" => {
+                let session = str_param(p, "session_id")?;
+                if let Some(worker) = p.get("worker").and_then(Value::as_i64) {
+                    db::set_worker_session(&self.db(), worker, session)?;
+                } else if let Some(agent) = p.get("agent").and_then(Value::as_i64) {
+                    db::set_agent_session(&self.db(), agent, session)?;
+                }
+                Ok(json!({}))
+            }
             "notify" => {
                 let live = self.live(id_param(p, "worker")?)?;
                 let kind = str_param(p, "kind")?;
                 // Idle only because a background shell still runs: nothing for the human to do.
-                if !(kind == "idle_prompt" && screen::look(&live.screen()) == Look::Waiting) {
+                if !(kind == "idle_prompt" && live.cli.look(&live.screen()) == Look::Waiting) {
                     self.report_blocker(&live, kind, p["message"].as_str().unwrap_or(""))?;
                 }
                 Ok(json!({}))
@@ -1023,13 +1035,13 @@ impl Hub {
     }
 
     fn spawn_for(&self, worker: &Worker, launch: Launch) -> Result<Spawn> {
-        let (program, args) = match &self.test_agent {
+        let (worker_cli, program, args) = match &self.test_agent {
             Some(agent) => {
                 let spec = match launch {
                     Launch::New { spec } => spec.to_string(),
                     Launch::Resume => "resume".to_string(),
                 };
-                (agent.clone(), vec![spec])
+                (cli::Cli::Claude, agent.clone(), vec![spec])
             }
             None => {
                 let repo = Path::new(&worker.repo);
@@ -1049,12 +1061,14 @@ impl Hub {
                     model,
                 )?;
                 (
+                    worker_cli,
                     worker_cli.program().to_string(),
                     worker_cli.args(&self.hub_dir, &start)?,
                 )
             }
         };
         Ok(Spawn {
+            cli: worker_cli,
             program,
             args,
             cwd: PathBuf::from(&worker.cwd),
@@ -1355,7 +1369,7 @@ impl Hub {
             let tail = screen::tail(&screen, SCREEN_LINES);
             // A Worker that finished its turn and then was closed or quit did its work; it only
             // skipped `echoctl done`. Its last screen is the report the human reads.
-            let ended = worker.state == state::RUNNING && screen::turn_ended(&screen);
+            let ended = worker.state == state::RUNNING && live.cli.turn_ended(&screen);
             let (final_state, verb) = if ended {
                 (state::ENDED, "ended")
             } else {
@@ -1416,7 +1430,7 @@ impl Hub {
                 last_screen = screen.clone();
                 changed_at = Instant::now();
             }
-            let look = screen::look(&screen);
+            let look = live.cli.look(&screen);
             let waiting = look == Look::Waiting;
             if live.waiting.swap(waiting, std::sync::atomic::Ordering::SeqCst) != waiting {
                 self.notify();
@@ -1430,9 +1444,10 @@ impl Hub {
                         // The human approved this Task, so trusting its folder is part of starting it.
                         if trusted_at.is_none_or(|at| at.elapsed() > Duration::from_secs(5)) {
                             trusted_at = Some(Instant::now());
-                            live.write(b"\x1b[B")?;
-                            std::thread::sleep(Duration::from_millis(300));
-                            live.write(b"\r")?;
+                            for key in live.cli.trust_keys() {
+                                live.write(key)?;
+                                std::thread::sleep(Duration::from_millis(300));
+                            }
                         }
                     }
                     Look::PermissionPrompt => {
@@ -1456,7 +1471,7 @@ impl Hub {
                 }
                 // A permission prompt also means a turn is under way.
                 let started = matches!(look, Look::Working | Look::Waiting | Look::PermissionPrompt)
-                    || paths::transcript_exists(&worker.session_id);
+                    || live.cli.has_session(&worker.session_id);
                 if worker.state == state::STARTING && started {
                     db::set_state(&self.db(), live.id, state::RUNNING)?;
                     self.notify();
@@ -1684,7 +1699,7 @@ impl Hub {
             if let (Some(blocker), Some(message)) = (blocker, db::last_message(&db, worker.id, kind::BLOCKER)?) {
                 // The prompt's own lines, so the Hub App can show the exact command, not the whole screen.
                 let prompt = match blocker.as_str() {
-                    "permission_prompt" => screen::prompt_lines(&live.screen()),
+                    "permission_prompt" => live.cli.prompt_lines(&live.screen()),
                     _ => String::new(),
                 };
                 needs.push(json!({
@@ -1718,7 +1733,7 @@ impl Hub {
                     if agent.kind == db::agent_kind::ORCHESTRATOR { "Orchestrator" } else { "Claude Code" }.into()
                 }),
                 "body": "A permission prompt is waiting on screen.",
-                "prompt": screen::prompt_lines(&live.screen()),
+                "prompt": live.cli.prompt_lines(&live.screen()),
                 "at": at,
             }));
         }
@@ -1957,10 +1972,10 @@ impl Hub {
         let id = id_param(p, "worker")?;
         let live = self.live(id)?;
         let screen = live.screen();
-        if screen::look(&screen) != Look::PermissionPrompt {
+        if live.cli.look(&screen) != Look::PermissionPrompt {
             bail!("no permission prompt is waiting on w{id}");
         }
-        let prompt = screen::prompt_lines(&screen);
+        let prompt = live.cli.prompt_lines(&screen);
         if approve {
             live.write(b"\r")?;
         } else {
@@ -1991,7 +2006,7 @@ impl Hub {
     /// is the only one to tell.
     fn decide_agent(&self, id: i64, approve: bool, note: Option<&str>) -> Result<Value> {
         let live = self.agent_live(id)?;
-        if screen::look(&live.screen()) != Look::PermissionPrompt {
+        if live.cli.look(&live.screen()) != Look::PermissionPrompt {
             bail!("no permission prompt is waiting on agent {id}");
         }
         if approve {
@@ -2015,7 +2030,7 @@ impl Hub {
     fn watch_agent(self: Arc<Self>, live: Arc<Live>) {
         while live.is_alive() {
             std::thread::sleep(Duration::from_secs(1));
-            let waiting = screen::look(&live.screen()) == Look::PermissionPrompt;
+            let waiting = live.cli.look(&live.screen()) == Look::PermissionPrompt;
             let mut prompts = self.agent_prompts.lock().unwrap();
             let changed = if waiting {
                 // Keep the time it was first seen.
