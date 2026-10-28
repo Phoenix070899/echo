@@ -5,7 +5,6 @@ import SwiftUI
 /// somewhere does not mean scanning tabs and the ledger.
 struct QuickOpen: View {
     @EnvironmentObject private var model: AppModel
-    @Environment(\.openSettings) private var openSettings
     /// Local state as an ObservableObject: the command-line tools lack the plugin `@State` needs.
     @StateObject private var search = QuickOpenSearch()
     @FocusState private var fieldFocused: Bool
@@ -120,7 +119,7 @@ struct QuickOpen: View {
                 model.toggleLedger()
             },
             QuickOpenItem(id: "settings", icon: "gearshape", title: "Settings", detail: "Command") {
-                openSettings()
+                model.showSettings()
             },
         ]
         if let (_, worker) = model.selectedWorker {

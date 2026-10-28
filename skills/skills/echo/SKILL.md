@@ -14,6 +14,8 @@ You run inside Echo: the human sees your terminal there, beside the files and Wo
 - A Worker or agent: `echoctl ui show w12` or `echoctl ui show a3`.
 - A Worker's changes, ready for review: `echoctl ui diff w12`. Do this whenever you ask the human to review or merge a Worker's work.
 
+- A setting only the human changes, like which CLI or model a Profile runs with: `echoctl ui settings agents` (or window, theme, background, font, multiplexer, remote).
+
 Point at the one place the human needs, at the moment you mention it.
 
 ## Notify

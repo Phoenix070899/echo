@@ -3,17 +3,19 @@ import HubCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Settings, one tab each: the window's look, the terminal theme (a preset, then any colour changed
+/// Settings, one section each: the window's look, the terminal theme (a preset, then any colour changed
 /// by hand), its background image, the font, the multiplexer agents run inside, what agents run
 /// with, their Profiles, and the Orchestrator's rules, and Echo Remote.
 struct SettingsView: View {
+    let section: SettingsSection
     @EnvironmentObject private var model: AppModel
     /// The Custom look being edited; it reaches the app only on Apply.
     @StateObject private var draft = LookDraft()
     @StateObject private var agents = AgentSettingsModel()
 
     var body: some View {
-        TabView {
+        switch section {
+            case .window:
             page {
                 Section {
                     Picker("Appearance", selection: $model.windowLook) {
@@ -74,8 +76,8 @@ struct SettingsView: View {
                     }
                 }
             }
-            .tabItem { Label("Window", systemImage: "macwindow") }
             .onAppear { draft.look = model.customLook }
+            case .theme:
             page {
                 Section {
                     Picker("Preset", selection: presetBinding) {
@@ -96,7 +98,7 @@ struct SettingsView: View {
                     Button("Match Orca (Ayu Dark, JetBrainsMono Nerd Font 14)") { model.appearance = .orca }
                 }
             }
-            .tabItem { Label("Theme", systemImage: "paintpalette") }
+            case .background:
             page {
                 Section {
                     LabeledContent("Image") {
@@ -150,7 +152,7 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .tabItem { Label("Background", systemImage: "photo") }
+            case .font:
             page {
                 Section {
                     TextField("Family", text: $model.appearance.fontName)
@@ -164,7 +166,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            .tabItem { Label("Font", systemImage: "textformat") }
+            case .multiplexer:
             page {
                 Section {
                     Picker("Show agents and Workers inside", selection: $model.multiplexer.kind) {
@@ -194,17 +196,15 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .tabItem { Label("Multiplexer", systemImage: "rectangle.split.2x1") }
+            case .agents:
             page {
                 AgentsSettings(agents: agents)
                 OrchestratorSettings(agents: agents)
             }
-            .tabItem { Label("Agents", systemImage: "person.2") }
             .onAppear(perform: refreshAgents)
+            case .remote:
             page { RemoteSettings() }
-                .tabItem { Label("Remote", systemImage: "iphone") }
         }
-        .frame(width: 520)
     }
 
     /// Profiles are the selected repo's, its own included.
@@ -213,11 +213,11 @@ struct SettingsView: View {
         agents.refresh()
     }
 
-    /// One tab: its sections, as tall as they need.
+    /// One section's page: its groups, scrolling when taller than the window.
     private func page<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         Form(content: content)
             .formStyle(.grouped)
-            .fixedSize(horizontal: false, vertical: true)
+            .scrollContentBackground(.hidden)
     }
 
     private func chooseImage() {

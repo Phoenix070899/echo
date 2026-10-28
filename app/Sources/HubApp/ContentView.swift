@@ -26,31 +26,13 @@ struct ContentView: View {
                     .padding(.bottom, 10)
                     .transition(.opacity)
             }
-            HStack(alignment: .top, spacing: 0) {
-                if model.ledgerCollapsed {
-                    LedgerRail()
-                        .frame(width: 48)
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                    Color.clear.frame(width: 12)
-                } else {
-                    LedgerColumn()
-                        .frame(width: model.ledgerWidth)
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                    ColumnResizer(width: $model.ledgerWidth, range: 300...640, grows: .right, fallback: 392)
-                }
-                MainPanel()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if model.filesShown, let root = model.selectedCheckout {
-                    ColumnResizer(width: $model.filesWidth, range: 220...600, grows: .left, fallback: 280)
-                    FilesColumn(root: root)
-                        .frame(width: model.filesWidth)
-                        .frame(maxHeight: .infinity)
-                        .ledgerSheet()
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
+            if let section = model.settingsSection {
+                SettingsPage(section: section)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
+            } else {
+                agents
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 12)
         }
         .font(.system(size: 13))
         .foregroundStyle(Ledger.ink)
@@ -79,6 +61,35 @@ struct ContentView: View {
         }
         .onAppear { model.openMainWindow = { openWindow(id: "main") } }
         .background(TrafficLightInset(barHeight: TitleBar.height))
+    }
+
+    /// The ledger, the agent or Worker shown, and its files.
+    private var agents: some View {
+        HStack(alignment: .top, spacing: 0) {
+            if model.ledgerCollapsed {
+                LedgerRail()
+                    .frame(width: 48)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                Color.clear.frame(width: 12)
+            } else {
+                LedgerColumn()
+                    .frame(width: model.ledgerWidth)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                ColumnResizer(width: $model.ledgerWidth, range: 300...640, grows: .right, fallback: 392)
+            }
+            MainPanel()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if model.filesShown, let root = model.selectedCheckout {
+                ColumnResizer(width: $model.filesWidth, range: 220...600, grows: .left, fallback: 280)
+                FilesColumn(root: root)
+                    .frame(width: model.filesWidth)
+                    .frame(maxHeight: .infinity)
+                    .ledgerSheet()
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 12)
     }
 
     private var closeTitle: String {
@@ -358,6 +369,7 @@ struct LedgerColumn: View {
             HStack {
                 LedgerToggle()
                 Spacer()
+                SettingsButton()
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -383,6 +395,24 @@ struct LedgerToggle: View {
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .help("\(title) (⌘L)")
+    }
+}
+
+/// Opens Settings over the whole window; it sits at the ledger's foot beside the collapse button.
+struct SettingsButton: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        Button { model.showSettings() } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 14))
+                .foregroundStyle(Ledger.ink2)
+                .frame(width: 32, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Settings")
+        .help("Settings (⌘,)")
     }
 }
 
@@ -423,7 +453,11 @@ struct LedgerRail: View {
             }
             Spacer(minLength: 0)
             Rectangle().fill(Ledger.rule).frame(height: 1)
-            LedgerToggle().padding(.vertical, 6)
+            VStack(spacing: 2) {
+                SettingsButton()
+                LedgerToggle()
+            }
+            .padding(.vertical, 6)
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .ledgerSheet()

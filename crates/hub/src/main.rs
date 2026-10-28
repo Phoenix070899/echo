@@ -175,6 +175,12 @@ enum UiCommand {
     Show { target: String },
     /// Show a Worker's diff, ready for review.
     Diff { worker: String },
+    /// Show a part of Settings (window, theme, background, font, multiplexer, agents, remote),
+    /// for a change only the human makes there, like which model Profiles run with.
+    Settings {
+        #[arg(default_value = "agents")]
+        section: String,
+    },
     /// Post a macOS notification from this agent; clicking it opens Echo on the agent.
     Notify {
         /// The text; "-" reads it from stdin.
@@ -419,6 +425,7 @@ fn ui(command: UiCommand) -> Result<()> {
         UiCommand::Show { target } => json!({ "action": "show", "repo": repo()?, "target": target }),
         UiCommand::Diff { worker } => json!({ "action": "diff", "repo": repo()?, "target": worker }),
         UiCommand::Notify { text } => json!({ "action": "notify", "repo": repo()?, "text": text_arg(&text)? }),
+        UiCommand::Settings { section } => json!({ "action": "settings", "repo": repo()?, "section": section }),
         UiCommand::Orchestrator {
             branch,
             new_branch,

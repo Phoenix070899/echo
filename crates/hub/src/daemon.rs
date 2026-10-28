@@ -1907,6 +1907,23 @@ impl Hub {
                 }
                 repo
             }
+            "settings" => {
+                const SECTIONS: &[&str] = &[
+                    "window",
+                    "theme",
+                    "background",
+                    "font",
+                    "multiplexer",
+                    "agents",
+                    "remote",
+                ];
+                let section = p.get("section").and_then(Value::as_str).unwrap_or("agents");
+                if !SECTIONS.contains(&section) {
+                    bail!("no Settings section {section:?}; there are {}", SECTIONS.join(", "));
+                }
+                request["text"] = json!(section);
+                repo::root(Path::new(str_param(p, "repo")?))?.display().to_string()
+            }
             "notify" => {
                 let text = str_param(p, "text")?.trim();
                 if text.is_empty() {

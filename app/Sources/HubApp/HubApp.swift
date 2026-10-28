@@ -26,6 +26,11 @@ struct HubApp: App {
                        : model.canSplit ? "Close Pane" : "Close") { model.closePane() }
                     .keyboardShortcut("w")
             }
+            // Settings fill the main window rather than opening a window of their own.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { model.showSettings() }
+                    .keyboardShortcut(",")
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Orchestrator…") { model.showNewSession(repo: model.selectedRepo, kind: .orchestrator) }
                     .keyboardShortcut("n")
@@ -84,10 +89,6 @@ struct HubApp: App {
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")))
                 }
             }
-        }
-
-        Settings {
-            SettingsView().environmentObject(model)
         }
 
         MenuBarExtra {

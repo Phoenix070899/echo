@@ -88,7 +88,7 @@ echoctl status               dashboard rows for this repo's Workers
 echoctl sessions             repos the daemon knows, each with its agents
 echoctl daemon | shutdown    run or stop the Hub Daemon
 echoctl profile <action>     see and change the Agent Profiles Workers start as
-echoctl ui <action>          have Echo open a file, show an agent or a diff, notify, or start an Orchestrator
+echoctl ui <action>          have Echo open a file, show an agent, a diff, or a Settings section, notify, or start an Orchestrator
                              (agents learn it from the echoctl:echo skill in skills/)
 
 Orchestrator:  echoctl worker start|list|read|send|key|close|resume, echoctl wait, echoctl reply, echoctl inbox

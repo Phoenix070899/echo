@@ -129,6 +129,8 @@ final class AppModel: ObservableObject {
     @Published var fullScreen = false
     /// Quick open (⌘K) is up.
     @Published var quickOpenShown = false
+    /// The Settings section filling the window; nil shows the agents.
+    @Published var settingsSection: SettingsSection?
     /// While a modal is up, terminals hand it the keyboard.
     var modalShown: Bool { newSession != nil || renaming != nil || closing != nil || quickOpenShown || fanOutShown }
     /// Shrinks the ledger to a strip of status marks so the terminal takes almost the whole window.
@@ -867,6 +869,9 @@ final class AppModel: ObservableObject {
                 select(.agent(repo: repo, id: agent))
             }
             preview = nil
+        case "settings":
+            // Shown without coming forward, like the rest; the human looks when they choose.
+            settingsSection = request.text.flatMap(SettingsSection.init(rawValue:)) ?? .agents
         case "notify":
             guard let text = request.text else { return }
             let sender = request.from.flatMap { from -> String? in
@@ -1087,6 +1092,20 @@ final class AppModel: ObservableObject {
         }
         return orchestrators.first { $0.id == shown } ?? orchestrators.first(where: \.live) ?? orchestrators.first
     }
+
+    /// Settings fill the window, on the section last shown; the menu's Settings… comes here too.
+    func showSettings() {
+        quickOpenShown = false
+        settingsSection = settingsSection ?? lastSettingsSection
+        openMainWindow?()
+    }
+
+    func hideSettings() {
+        if let section = settingsSection { lastSettingsSection = section }
+        settingsSection = nil
+    }
+
+    private var lastSettingsSection = SettingsSection.window
 
     func loadProfiles(repo: String?, then done: @escaping @MainActor ([WorkerProfile]) -> Void) {
         background(quiet: true) { client in try client.profiles(repo: repo) } then: { done($0) }
