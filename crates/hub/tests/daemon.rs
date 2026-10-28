@@ -409,6 +409,41 @@ fn a_done_worker_leaves_echo_after_five_minutes() {
 }
 
 #[test]
+fn profiles_copied_into_yours_or_the_repo_replace_echos_own() {
+    let hub = Hub::new("profiles");
+    let listed = hub.ok(&["profile", "list"]);
+    assert!(
+        listed.lines().any(|l| l.starts_with("lee ") && l.contains("built-in")),
+        "{listed}"
+    );
+    let copied = hub.ok(&["profile", "copy", "lee"]);
+    let mine = hub.state.join("profiles/lee.md");
+    assert!(copied.contains(&mine.display().to_string()), "{copied}");
+    assert!(hub.fails(&["profile", "copy", "lee"]).contains("already yours"));
+    hub.ok(&["profile", "copy", "lee", "--repo"]);
+    let theirs = hub.repo.join(".echo/profiles/lee.md");
+    let text = std::fs::read_to_string(&theirs).unwrap();
+    std::fs::write(
+        &theirs,
+        text.replace("description: Command runner.", "description: The team's runner."),
+    )
+    .unwrap();
+    let listed = hub.ok(&["profile", "list"]);
+    let lee = listed.lines().find(|l| l.starts_with("lee ")).unwrap();
+    assert!(
+        lee.contains("repo (replaces yours)") && lee.contains("The team's runner."),
+        "{listed}"
+    );
+
+    // A Profile only this repo has starts Workers like any other.
+    hub.ok(&["profile", "new", "scout", "--repo"]);
+    assert!(hub.fails(&["profile", "new", "scout"]).contains("already exists"));
+    assert!(hub.fails(&["profile", "new", "Bad Name"]).contains("lowercase"));
+    hub.ok(&["worker", "start", "scout", "--spec", "done quickly"]);
+    assert!(hub.wait().contains("done (done) from w1 (scout"));
+}
+
+#[test]
 fn a_lesson_from_a_final_report_reaches_the_repos_lessons() {
     let hub = Hub::new("lesson");
     hub.ok(&["worker", "start", "lee", "--spec", "lesson"]);

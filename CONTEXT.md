@@ -21,7 +21,7 @@ A plain Claude Code agent with no Workers; its own permission prompts still land
 _Avoid_: solo mode, chat
 
 **Agent Profile**:
-A reusable definition of a specialist: which agent CLI, model, tools, role, skills, and context it starts with.
+A reusable definition of a specialist: which agent CLI, model, tools, role, skills, and context it starts with. Echo ships some; the human's own and a repo's replace one of the same name.
 _Avoid_: subagent, agent type, persona
 
 **Worker**:

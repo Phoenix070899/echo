@@ -5,7 +5,7 @@ cli: claude
 model: claude-sonnet-5-5
 effort: high
 tools: Read, Grep, Glob, Edit, Write, Bash
-skills: tdd
+skills:
 context: CONTEXT.md, AGENTS.md, CLAUDE.md
 writes: true
 ---

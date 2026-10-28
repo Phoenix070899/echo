@@ -57,6 +57,14 @@ Rules every Worker follows are in [`worker-contract.md`](worker-contract.md).
 
 A profile is a CLI-neutral Markdown file in [`profiles/`](profiles/): which agent CLI, model, effort, tools, and role a Worker starts with.
 
+Echo ships the ones below in [`profiles/`](profiles/). Yours, in `~/.echo/profiles/`, and a repo's, in its `.echo/profiles/`, replace one of the same name whole.
+
+```
+echoctl profile list               every Profile here, and where each comes from
+echoctl profile copy sasuke        your own copy to change ("--repo" for this repo's, shared through git)
+echoctl profile new code-reviewer  a blank Profile to fill in
+```
+
 | Profile | Role |
 | --- | --- |
 | `naruto` | Implementer: one coding Task, runs its verify command |
@@ -75,6 +83,7 @@ echoctl attach <w12|a3>      make this terminal a Worker's or an agent's termina
 echoctl status               dashboard rows for this repo's Workers
 echoctl sessions             repos the daemon knows, each with its agents
 echoctl daemon | shutdown    run or stop the Hub Daemon
+echoctl profile <action>     see and change the Agent Profiles Workers start as
 echoctl ui <action>          have Echo open a file, show an agent or a diff, notify, or start an Orchestrator
                              (agents learn it from the echoctl:echo skill in skills/)
 

@@ -126,7 +126,7 @@ struct FanOutModal: View {
         }
         .onAppear {
             DispatchQueue.main.async { titleFocused = true }
-            model.loadProfiles { profiles in
+            model.loadProfiles(repo: repo) { profiles in
                 // Tries by a profile that edits files differ; the rest come after.
                 form.profiles = profiles.filter(\.writes) + profiles.filter { !$0.writes }
                 if form.profile.isEmpty { form.profile = form.profiles.first?.name ?? "" }

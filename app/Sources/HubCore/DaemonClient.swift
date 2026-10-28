@@ -165,8 +165,9 @@ public struct DaemonClient: Sendable {
         return (result?["current"] as? String ?? "", try JSONDecoder().decode([RepoBranch].self, from: data))
     }
 
-    public func profiles() throws -> [WorkerProfile] {
-        let result = try call("profiles.list") as? [String: Any]
+    /// The Profiles Workers in `repo` can start as: Echo's own, the human's, and the repo's.
+    public func profiles(repo: String?) throws -> [WorkerProfile] {
+        let result = try call("profiles.list", repo.map { ["repo": $0] } ?? [:]) as? [String: Any]
         let data = try JSONSerialization.data(withJSONObject: result?["profiles"] ?? [])
         return try JSONDecoder().decode([WorkerProfile].self, from: data)
     }

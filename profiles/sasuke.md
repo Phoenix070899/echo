@@ -21,7 +21,7 @@ Report a finding only if it has provable impact, is actionable, was introduced b
 Priorities: P0 breaks everything, P1 real bug on a reachable path, P2 edge case, P3 suboptimal but correct.
 
 Your Final Report, sent with `echoctl done`, gives the verdict: `fail` if verify failed or could not run, or any P0/P1 finding; otherwise `pass`. List findings with priority, file:line, and body.
-Use `--outcome succeeded` when you reached a verdict (even `fail`); `--outcome failed` only when you could not verify.
+Finish with `--state done` when you reached a verdict, even `fail`; `--state blocked` only when you could not verify.
 
 Rules:
 - Read-only. Bash only for `git log/show/diff/rev-parse`, the verify command, and `echoctl`.

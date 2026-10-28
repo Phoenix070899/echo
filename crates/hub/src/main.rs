@@ -136,10 +136,33 @@ enum Command {
     /// new Orchestrator. Echo changes what it shows but never comes to the front.
     #[command(subcommand)]
     Ui(UiCommand),
+    /// Agent Profiles: Echo's own, yours, and this repo's; yours and the repo's replace Echo's
+    /// of the same name.
+    #[command(subcommand)]
+    Profile(ProfileCommand),
     /// Echo's multiplexer panes: runs the line in `HUB_MUX` (from the daemon's `mux.command`) in
     /// a login shell, in place of this process.
     #[command(hide = true)]
     Mux,
+}
+
+#[derive(Subcommand)]
+enum ProfileCommand {
+    /// Every Profile Workers can start as here, with where it comes from.
+    List,
+    /// Copy a Profile into yours (or this repo's) to change it; the copy replaces the original.
+    Copy {
+        name: String,
+        /// Into this repo's `.echo/profiles/`, shared through its git, instead of yours.
+        #[arg(long)]
+        repo: bool,
+    },
+    /// Start a new Profile from a blank one, in yours (or this repo's).
+    New {
+        name: String,
+        #[arg(long)]
+        repo: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -297,6 +320,86 @@ fn repo_arg(repo: Option<PathBuf>) -> Result<String> {
     Ok(repo::root(&start)?.display().to_string())
 }
 
+/// The checkout `echoctl profile` runs in, if any: its repo level, and where `--repo` writes.
+fn profile_repo() -> Option<PathBuf> {
+    repo::root(&std::env::current_dir().ok()?).ok()
+}
+
+fn profile_command(command: ProfileCommand) -> Result<()> {
+    let (hub, state, repo) = (paths::hub_dir(), paths::state_dir(), profile_repo());
+    let target = |to_repo: bool| -> Result<(profile::Level, PathBuf)> {
+        match (to_repo, &repo) {
+            (false, _) => Ok((profile::Level::Yours, state.join("profiles"))),
+            (true, Some(repo)) => Ok((profile::Level::Repo, repo.join(".echo").join("profiles"))),
+            (true, None) => bail!("--repo needs a git checkout; run it from the repo"),
+        }
+    };
+    let entries = profile::entries(&hub, &state, repo.as_deref());
+    match command {
+        ProfileCommand::List => {
+            let width = entries.iter().map(|e| e.name.len()).max().unwrap_or(0);
+            for entry in &entries {
+                let from = match entry.replaces.last() {
+                    Some(below) => format!("{} (replaces {})", entry.level.label(), below.label()),
+                    None => entry.level.label().to_string(),
+                };
+                match &entry.profile {
+                    Ok(p) => println!("{:width$}  {from:25}  {:18}  {}", entry.name, p.model, p.description),
+                    Err(e) => println!("{:width$}  {from:25}  does not load: {e}", entry.name),
+                }
+            }
+            println!("\nYours: {}", state.join("profiles").display());
+            if let Some(repo) = &repo {
+                println!("This repo's: {}", repo.join(".echo").join("profiles").display());
+            }
+        }
+        ProfileCommand::Copy { name, repo: to_repo } => {
+            let (level, dir) = target(to_repo)?;
+            let Some(entry) = entries.iter().find(|e| e.name == name) else {
+                let known: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+                bail!("no Profile {name:?}; known: {}", known.join(", "));
+            };
+            let to = dir.join(format!("{name}.md"));
+            if entry.level == level || to.exists() {
+                bail!("{name} is already {}: edit {}", level.label(), to.display());
+            }
+            std::fs::create_dir_all(&dir)?;
+            std::fs::copy(&entry.path, &to)?;
+            println!(
+                "Copied {name} ({}) to {}.\nEdit it there; it replaces the {} one for {}.",
+                entry.level.label(),
+                to.display(),
+                entry.level.label(),
+                if level == profile::Level::Repo {
+                    "everyone in this repo"
+                } else {
+                    "you, in every repo"
+                }
+            );
+        }
+        ProfileCommand::New { name, repo: to_repo } => {
+            if !profile::valid_name(&name) {
+                bail!("a Profile name is lowercase letters, digits, and -, like code-reviewer");
+            }
+            if let Some(entry) = entries.iter().find(|e| e.name == name) {
+                bail!(
+                    "{name} already exists ({}); change it with: echoctl profile copy {name}",
+                    entry.level.label()
+                );
+            }
+            let (_, dir) = target(to_repo)?;
+            let to = dir.join(format!("{name}.md"));
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(&to, profile::blank(&name))?;
+            println!(
+                "Wrote {}.\nFill in its description and role; Workers can start as {name} now.",
+                to.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// `echoctl ui`: who asks, so Echo can name it and a notification can open on it.
 fn ui(command: UiCommand) -> Result<()> {
     let from = match (std::env::var("HUB_WORKER"), agent_env()) {
@@ -435,6 +538,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Worker(command) => return worker(command),
         Command::Ui(command) => ui(command)?,
+        Command::Profile(command) => profile_command(command)?,
         Command::Wait { timeout, json, repo } => {
             let result = proto::call(
                 "wait",

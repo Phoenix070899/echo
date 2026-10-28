@@ -1088,8 +1088,8 @@ final class AppModel: ObservableObject {
         return orchestrators.first { $0.id == shown } ?? orchestrators.first(where: \.live) ?? orchestrators.first
     }
 
-    func loadProfiles(then done: @escaping @MainActor ([WorkerProfile]) -> Void) {
-        background(quiet: true) { client in try client.profiles() } then: { done($0) }
+    func loadProfiles(repo: String?, then done: @escaping @MainActor ([WorkerProfile]) -> Void) {
+        background(quiet: true) { client in try client.profiles(repo: repo) } then: { done($0) }
     }
 
     /// Starts the fan-out; `done` gets nil on success, else why it failed. The first try is shown.

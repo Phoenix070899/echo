@@ -864,7 +864,12 @@ impl Hub {
                 Ok(json!({ "current": current, "branches": rows }))
             }
             "profiles.list" => {
-                let profiles: Vec<Value> = profile::all(&self.hub_dir)?
+                let repo = p
+                    .get("repo")
+                    .and_then(Value::as_str)
+                    .map(|r| repo::root(Path::new(r)))
+                    .transpose()?;
+                let profiles: Vec<Value> = profile::all(&self.hub_dir, &paths::state_dir(), repo.as_deref())
                     .iter()
                     .map(|p| json!({ "name": p.name, "description": p.description, "model": p.model, "writes": p.writes }))
                     .collect();
@@ -1010,7 +1015,12 @@ impl Hub {
                 (agent.clone(), vec![spec])
             }
             None => {
-                let profile = profile::load(&self.hub_dir, &worker.profile)?;
+                let profile = profile::load(
+                    &self.hub_dir,
+                    &paths::state_dir(),
+                    Some(Path::new(&worker.repo)),
+                    &worker.profile,
+                )?;
                 let args = profile::claude_args(
                     &self.hub_dir,
                     &worker.repo,
@@ -1077,7 +1087,7 @@ impl Hub {
         // The repo's main checkout, as every other method keys it, whatever path names it.
         let repo_root = repo::root(Path::new(str_param(p, "repo")?))?;
         let profile_name = str_param(p, "profile")?;
-        profile::load(&self.hub_dir, profile_name)?;
+        profile::load(&self.hub_dir, &paths::state_dir(), Some(&repo_root), profile_name)?;
         let spec = str_param(p, "spec")?;
         let title = match p.get("title").and_then(Value::as_str) {
             Some(title) if !title.trim().is_empty() => title.to_string(),
@@ -1550,7 +1560,13 @@ impl Hub {
             let live = self.live(worker.id).ok();
             let blocker = live.as_ref().and_then(|live| live.blocker.lock().unwrap().clone());
             let open: Vec<i64> = db::open_questions(&db, worker.id)?.iter().map(|m| m.id).collect();
-            let profile = profile::load(&self.hub_dir, &worker.profile).ok();
+            let profile = profile::load(
+                &self.hub_dir,
+                &paths::state_dir(),
+                Some(Path::new(&worker.repo)),
+                &worker.profile,
+            )
+            .ok();
             // The Worker's latest `echoctl send --type status`, first line only: the ledger's progress line.
             let progress = db::last_message(&db, worker.id, kind::STATUS)?
                 .and_then(|m| m.body.lines().map(str::trim).find(|l| !l.is_empty()).map(String::from));
