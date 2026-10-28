@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::cli::Start;
 use crate::db::Agent;
-use crate::{attach, lessons, paths, proto, repo};
+use crate::{attach, lessons, paths, proto, repo, settings};
 
 /// The first message of a resumed Orchestrator session.
 const RESUMED: &str = "Your terminal was restarted. Run `echoctl worker list`, give the human a Summary, \
@@ -33,6 +33,10 @@ pub fn orchestrator_start(hub: &Path, repo: &Path, worktree: Option<(&str, &str)
     let known = lessons::lessons(&state, &key);
     if !known.is_empty() {
         prompt += &format!("\n\n{}\n\n{}", lessons::WORKER_INTRO, known.trim_end());
+    }
+    let rules = settings::Rules::from(&settings::read(&state).unwrap_or_default()).overrides();
+    if !rules.is_empty() {
+        prompt += &format!("\n\n{rules}");
     }
     prompt += &format!("\n\nRepo for this Hub Session: {}", repo.display());
     if let Some((cwd, branch)) = worktree {

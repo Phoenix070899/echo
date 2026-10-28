@@ -113,6 +113,97 @@ pub fn load(hub: &Path, state: &Path, repo: Option<&Path>, name: &str) -> Result
     }
 }
 
+/// The folder a level's Profiles live in; Echo's own is never written.
+pub fn level_dir(state: &Path, repo: Option<&Path>, level: Level) -> Result<PathBuf> {
+    match (level, repo) {
+        (Level::BuiltIn, _) => bail!("Echo's own Profiles are not changed; copy one into yours"),
+        (Level::Yours, _) => Ok(state.join("profiles")),
+        (Level::Repo, Some(repo)) => Ok(repo.join(".echo").join("profiles")),
+        (Level::Repo, None) => bail!("a repo's Profile needs a git checkout"),
+    }
+}
+
+/// Copies the Profile now in force into `level`, where it replaces the original; returns the copy.
+pub fn copy(hub: &Path, state: &Path, repo: Option<&Path>, name: &str, level: Level) -> Result<(PathBuf, Level)> {
+    let entries = entries(hub, state, repo);
+    let Some(entry) = entries.iter().find(|e| e.name == name) else {
+        let known: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        bail!("no Profile {name:?}; known: {}", known.join(", "));
+    };
+    let dir = level_dir(state, repo, level)?;
+    let to = dir.join(format!("{name}.md"));
+    if entry.level == level || to.exists() {
+        bail!("{name} is already {}: edit {}", level.label(), to.display());
+    }
+    std::fs::create_dir_all(&dir)?;
+    std::fs::copy(&entry.path, &to)?;
+    Ok((to, entry.level))
+}
+
+/// Writes a blank Profile into `level`; the name must be new at every level.
+pub fn create(hub: &Path, state: &Path, repo: Option<&Path>, name: &str, level: Level) -> Result<PathBuf> {
+    if !valid_name(name) {
+        bail!("a Profile name is lowercase letters, digits, and -, like code-reviewer");
+    }
+    if let Some(entry) = entries(hub, state, repo).iter().find(|e| e.name == name) {
+        bail!(
+            "{name} already exists ({}); change it with: echoctl profile copy {name}",
+            entry.level.label()
+        );
+    }
+    let dir = level_dir(state, repo, level)?;
+    let to = dir.join(format!("{name}.md"));
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(&to, blank(name))?;
+    Ok(to)
+}
+
+/// Deletes the copy at `level`, so the one below it is in force again.
+pub fn reset(state: &Path, repo: Option<&Path>, name: &str, level: Level) -> Result<()> {
+    let path = level_dir(state, repo, level)?.join(format!("{name}.md"));
+    if !path.exists() {
+        bail!("{name} has no {} copy to reset", level.label());
+    }
+    std::fs::remove_file(path)?;
+    Ok(())
+}
+
+/// Sets frontmatter fields in a Profile file, keeping the rest as it is; `None` empties one.
+pub fn set_fields(path: &Path, fields: &[(&str, Option<&str>)]) -> Result<()> {
+    let text = std::fs::read_to_string(path)?;
+    let Some(rest) = text.strip_prefix("---\n") else {
+        bail!("{}: missing --- frontmatter", path.display());
+    };
+    let Some(end) = rest.find("\n---") else {
+        bail!("{}: missing closing ---", path.display());
+    };
+    let mut lines: Vec<String> = rest[..end].lines().map(String::from).collect();
+    for (key, value) in fields {
+        let line = format!("{key}: {}", value.unwrap_or_default());
+        match lines
+            .iter()
+            .position(|l| l.split_once(':').is_some_and(|(k, _)| k.trim() == *key))
+        {
+            Some(at) => lines[at] = line,
+            None => lines.push(line),
+        }
+    }
+    let text = format!("---\n{}{}", lines.join("\n"), &rest[end..]);
+    parse("check", &text)?;
+    std::fs::write(path, text)?;
+    Ok(())
+}
+
+impl Level {
+    pub fn parse(name: &str) -> Result<Level> {
+        match name {
+            "yours" => Ok(Level::Yours),
+            "repo" => Ok(Level::Repo),
+            other => bail!("a Profile level is yours or repo, not {other:?}"),
+        }
+    }
+}
+
 /// A new Profile's file: every field there to fill in, a read-only Worker until changed.
 pub fn blank(name: &str) -> String {
     let mut title = name.to_string();
@@ -176,14 +267,6 @@ fn parse(name: &str, text: &str) -> Result<Profile> {
         description: field("description").unwrap_or_default(),
         writes: field("writes").as_deref() == Some("true"),
     })
-}
-
-/// Every profile that loads, by name.
-pub fn all(hub: &Path, state: &Path, repo: Option<&Path>) -> Vec<Profile> {
-    entries(hub, state, repo)
-        .into_iter()
-        .filter_map(|entry| entry.profile.ok())
-        .collect()
 }
 
 /// Worker Contract, Preferences, the repo's Lessons, then the profile's role, skills, and context.
@@ -360,5 +443,49 @@ mod tests {
         assert!(!profile.writes);
         assert!(profile.role.starts_with("You are Code-reviewer."));
         assert!(valid_name("code-reviewer") && !valid_name("Code") && !valid_name("-x") && !valid_name(""));
+    }
+
+    #[test]
+    fn copies_are_edited_by_field_and_reset_to_the_original() {
+        let root = std::env::temp_dir().join(format!("hub-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (hub, state) = (root.join("hub"), root.join("state"));
+        std::fs::create_dir_all(hub.join("profiles")).unwrap();
+        std::fs::write(hub.join("profiles/naruto.md"), NARUTO).unwrap();
+        assert!(copy(&hub, &state, None, "naruto", Level::BuiltIn).is_err());
+        let (path, from) = copy(&hub, &state, None, "naruto", Level::Yours).unwrap();
+        assert_eq!(from, Level::BuiltIn);
+        set_fields(
+            &path,
+            &[
+                ("cli", Some("codex")),
+                ("model", Some("openai/gpt-5.6-terra")),
+                ("effort", None),
+            ],
+        )
+        .unwrap();
+        let mine = load(&hub, &state, None, "naruto").unwrap();
+        assert_eq!(
+            (mine.cli.as_deref(), mine.model.as_deref(), mine.effort),
+            (Some("codex"), Some("openai/gpt-5.6-terra"), None)
+        );
+        assert_eq!(mine.role, "You implement.", "the role is kept");
+        assert!(
+            set_fields(&path, &[("cli", Some("vim"))]).is_err(),
+            "a field that breaks the Profile is not written"
+        );
+        assert_eq!(
+            load(&hub, &state, None, "naruto").unwrap().cli.as_deref(),
+            Some("codex")
+        );
+        reset(&state, None, "naruto", Level::Yours).unwrap();
+        assert_eq!(
+            load(&hub, &state, None, "naruto").unwrap().cli.as_deref(),
+            Some("claude")
+        );
+        assert!(create(&hub, &state, None, "naruto", Level::Yours).is_err());
+        assert!(create(&hub, &state, None, "scout", Level::Yours)
+            .unwrap()
+            .ends_with("profiles/scout.md"));
     }
 }

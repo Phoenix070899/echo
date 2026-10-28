@@ -4,11 +4,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Settings, one tab each: the window's look, the terminal theme (a preset, then any colour changed
-/// by hand), its background image, the font, the multiplexer agents run inside, and Echo Remote.
+/// by hand), its background image, the font, the multiplexer agents run inside, what agents run
+/// with, their Profiles, and the Orchestrator's rules, and Echo Remote.
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     /// The Custom look being edited; it reaches the app only on Apply.
     @StateObject private var draft = LookDraft()
+    @StateObject private var agents = AgentSettingsModel()
 
     var body: some View {
         TabView {
@@ -193,10 +195,22 @@ struct SettingsView: View {
                 }
             }
             .tabItem { Label("Multiplexer", systemImage: "rectangle.split.2x1") }
+            page {
+                AgentsSettings(agents: agents)
+                OrchestratorSettings(agents: agents)
+            }
+            .tabItem { Label("Agents", systemImage: "person.2") }
+            .onAppear(perform: refreshAgents)
             page { RemoteSettings() }
                 .tabItem { Label("Remote", systemImage: "iphone") }
         }
         .frame(width: 520)
+    }
+
+    /// Profiles are the selected repo's, its own included.
+    private func refreshAgents() {
+        agents.repo = model.selectedRepo
+        agents.refresh()
     }
 
     /// One tab: its sections, as tall as they need.

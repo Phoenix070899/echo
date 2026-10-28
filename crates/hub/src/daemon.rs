@@ -26,6 +26,7 @@ use crate::pty::{Live, Spawn};
 use crate::remote::{self, Remote};
 use crate::repo;
 use crate::screen::{self, Look};
+use crate::settings;
 
 /// How long a turn may take to start before `worker.start` gives up on it.
 const START_TIMEOUT: Duration = Duration::from_secs(90);
@@ -884,16 +885,99 @@ impl Hub {
                     .and_then(Value::as_str)
                     .map(|r| repo::root(Path::new(r)))
                     .transpose()?;
-                let profiles: Vec<Value> = profile::all(&self.hub_dir, &paths::state_dir(), repo.as_deref())
-                    .iter()
-                    .map(|p| {
-                        let (cli, model) = cli::pick(&paths::state_dir(), repo.as_deref(), &[&p.choice()])
-                            .unwrap_or((cli::Cli::Claude, p.model.clone()));
-                        let model = model.unwrap_or_else(|| format!("{} default", cli.name()));
-                        json!({ "name": p.name, "description": p.description, "cli": cli.name(), "model": model, "writes": p.writes })
-                    })
-                    .collect();
-                Ok(json!({ "profiles": profiles }))
+                let state = paths::state_dir();
+                let mut broken = Vec::new();
+                let mut profiles = Vec::new();
+                for entry in profile::entries(&self.hub_dir, &state, repo.as_deref()) {
+                    let p = match &entry.profile {
+                        Ok(p) => p,
+                        Err(e) => {
+                            broken.push(json!({ "name": entry.name, "level": entry.level.label(), "path": entry.path, "error": e }));
+                            continue;
+                        }
+                    };
+                    let (cli, model, problem) = match cli::pick(&state, repo.as_deref(), &[&p.choice()]) {
+                        Ok((cli, model)) => (cli.name().to_string(), model, None),
+                        Err(e) => (
+                            p.cli.clone().unwrap_or_else(|| "claude".into()),
+                            p.model.clone(),
+                            Some(e.to_string()),
+                        ),
+                    };
+                    profiles.push(json!({
+                        "name": p.name, "description": p.description, "writes": p.writes,
+                        // What it runs with here, and what its own file says.
+                        "cli": cli, "model": model.unwrap_or_else(|| format!("{cli} default")),
+                        "ownCli": p.cli, "ownModel": p.model, "effort": p.effort,
+                        "level": entry.level.label(), "path": entry.path,
+                        "replaces": entry.replaces.iter().map(|l| l.label()).collect::<Vec<_>>(),
+                        "problem": problem,
+                    }));
+                }
+                Ok(json!({ "profiles": profiles, "broken": broken }))
+            }
+            "profile.copy" | "profile.new" | "profile.reset" | "profile.set" => {
+                let repo = p
+                    .get("repo")
+                    .and_then(Value::as_str)
+                    .map(|r| repo::root(Path::new(r)))
+                    .transpose()?;
+                let state = paths::state_dir();
+                let name = str_param(p, "name")?;
+                let level = profile::Level::parse(p.get("level").and_then(Value::as_str).unwrap_or("yours"))?;
+                let path = match method {
+                    "profile.copy" => profile::copy(&self.hub_dir, &state, repo.as_deref(), name, level)?.0,
+                    "profile.new" => profile::create(&self.hub_dir, &state, repo.as_deref(), name, level)?,
+                    "profile.reset" => {
+                        profile::reset(&state, repo.as_deref(), name, level)?;
+                        PathBuf::new()
+                    }
+                    _ => {
+                        // A field set on Echo's own Profile goes into a copy of it first.
+                        let dir = profile::level_dir(&state, repo.as_deref(), level)?;
+                        let path = dir.join(format!("{name}.md"));
+                        if !path.exists() {
+                            profile::copy(&self.hub_dir, &state, repo.as_deref(), name, level)?;
+                        }
+                        let fields = param(p, "fields")?.as_object().context("fields must be an object")?;
+                        let mut set = Vec::new();
+                        for key in ["cli", "model", "effort", "description"] {
+                            if let Some(value) = fields.get(key) {
+                                set.push((key, value.as_str().filter(|v| !v.is_empty())));
+                            }
+                        }
+                        profile::set_fields(&path, &set)?;
+                        path
+                    }
+                };
+                Ok(json!({ "path": path }))
+            }
+            "settings.get" => {
+                let all = settings::read(&paths::state_dir())?;
+                Ok(json!({ "cli": all.get("cli"), "model": all.get("model"),
+                           "orchestrator": settings::Rules::from(&all).view() }))
+            }
+            "settings.set" => {
+                let patch = param(p, "settings")?
+                    .as_object()
+                    .context("settings must be an object")?;
+                let allowed = [
+                    "cli",
+                    "model",
+                    "maxWorkers",
+                    "planApproval",
+                    "review",
+                    "mergeWithoutAsking",
+                ];
+                if let Some(key) = patch.keys().find(|k| !allowed.contains(&k.as_str())) {
+                    bail!("unknown setting {key:?}");
+                }
+                if let Some(name) = patch.get("cli").and_then(Value::as_str).filter(|v| !v.is_empty()) {
+                    cli::Cli::parse(name)?;
+                }
+                let all = settings::update(&paths::state_dir(), patch)?;
+                Ok(json!({ "cli": all.get("cli"), "model": all.get("model"),
+                           "orchestrator": settings::Rules::from(&all).view() }))
             }
             "worker.pick" => self.pick_worker(id_param(p, "id")?),
             "send" => {

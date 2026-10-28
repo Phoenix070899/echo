@@ -506,11 +506,50 @@ public func issueReference(_ typed: String) -> String? {
 public struct WorkerProfile: Decodable, Equatable, Identifiable, Sendable {
     public let name: String
     public let description: String
+    /// The model it runs with here, after the settings: "claude-haiku-5-5", or "claude default".
     public let model: String
     /// It edits files, so tries of one Task by it differ and are worth comparing.
     public let writes: Bool
+    /// The CLI it runs with here.
+    public var cli: String? = nil
+    /// What its own file says; nil leaves it to the settings.
+    public var ownCli: String? = nil
+    public var ownModel: String? = nil
+    public var effort: String? = nil
+    /// Where it comes from: "built-in", "yours", or "repo".
+    public var level: String? = nil
+    public var path: String? = nil
+    /// The levels below that it replaces.
+    public var replaces: [String]? = nil
+    /// Why it cannot run here, when its CLI and model do not fit.
+    public var problem: String? = nil
 
     public var id: String { name }
+
+    /// "yours, replaces built-in"
+    public var origin: String {
+        guard let level else { return "" }
+        guard let below = replaces?.last else { return level }
+        return "\(level), replaces \(below)"
+    }
+}
+
+/// The CLIs Echo can run agents in.
+public let agentCLIs = ["claude", "codex"]
+
+/// The human's settings for agents, from `settings.get`: the default CLI and model, and how
+/// Orchestrators work.
+public struct AgentSettings: Decodable, Equatable, Sendable {
+    public var cli: String?
+    public var model: String?
+    public var orchestrator: OrchestratorRules
+
+    public struct OrchestratorRules: Codable, Equatable, Sendable {
+        public var maxWorkers: Int
+        public var planApproval: Bool
+        public var review: Bool
+        public var mergeWithoutAsking: Bool
+    }
 }
 
 /// A fan-out's branch named after its Task: "Fix the flaky bench!" is `feat/fix-the-flaky-bench`.

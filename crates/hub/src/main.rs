@@ -14,6 +14,7 @@ mod push;
 mod remote;
 mod repo;
 mod screen;
+mod settings;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -334,13 +335,6 @@ fn profile_repo() -> Option<PathBuf> {
 
 fn profile_command(command: ProfileCommand) -> Result<()> {
     let (hub, state, repo) = (paths::hub_dir(), paths::state_dir(), profile_repo());
-    let target = |to_repo: bool| -> Result<(profile::Level, PathBuf)> {
-        match (to_repo, &repo) {
-            (false, _) => Ok((profile::Level::Yours, state.join("profiles"))),
-            (true, Some(repo)) => Ok((profile::Level::Repo, repo.join(".echo").join("profiles"))),
-            (true, None) => bail!("--repo needs a git checkout; run it from the repo"),
-        }
-    };
     let entries = profile::entries(&hub, &state, repo.as_deref());
     match command {
         ProfileCommand::List => {
@@ -368,23 +362,18 @@ fn profile_command(command: ProfileCommand) -> Result<()> {
             }
         }
         ProfileCommand::Copy { name, repo: to_repo } => {
-            let (level, dir) = target(to_repo)?;
-            let Some(entry) = entries.iter().find(|e| e.name == name) else {
-                let known: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-                bail!("no Profile {name:?}; known: {}", known.join(", "));
+            let level = if to_repo {
+                profile::Level::Repo
+            } else {
+                profile::Level::Yours
             };
-            let to = dir.join(format!("{name}.md"));
-            if entry.level == level || to.exists() {
-                bail!("{name} is already {}: edit {}", level.label(), to.display());
-            }
-            std::fs::create_dir_all(&dir)?;
-            std::fs::copy(&entry.path, &to)?;
+            let (to, from) = profile::copy(&hub, &state, repo.as_deref(), &name, level)?;
             println!(
                 "Copied {name} ({}) to {}.\nEdit it there; it replaces the {} one for {}.",
-                entry.level.label(),
+                from.label(),
                 to.display(),
-                entry.level.label(),
-                if level == profile::Level::Repo {
+                from.label(),
+                if to_repo {
                     "everyone in this repo"
                 } else {
                     "you, in every repo"
@@ -392,19 +381,12 @@ fn profile_command(command: ProfileCommand) -> Result<()> {
             );
         }
         ProfileCommand::New { name, repo: to_repo } => {
-            if !profile::valid_name(&name) {
-                bail!("a Profile name is lowercase letters, digits, and -, like code-reviewer");
-            }
-            if let Some(entry) = entries.iter().find(|e| e.name == name) {
-                bail!(
-                    "{name} already exists ({}); change it with: echoctl profile copy {name}",
-                    entry.level.label()
-                );
-            }
-            let (_, dir) = target(to_repo)?;
-            let to = dir.join(format!("{name}.md"));
-            std::fs::create_dir_all(&dir)?;
-            std::fs::write(&to, profile::blank(&name))?;
+            let level = if to_repo {
+                profile::Level::Repo
+            } else {
+                profile::Level::Yours
+            };
+            let to = profile::create(&hub, &state, repo.as_deref(), &name, level)?;
             println!(
                 "Wrote {}.\nFill in its description and role; Workers can start as {name} now.",
                 to.display()

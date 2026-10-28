@@ -172,6 +172,32 @@ public struct DaemonClient: Sendable {
         return try JSONDecoder().decode([WorkerProfile].self, from: data)
     }
 
+    /// Copies, creates, resets, or sets fields of a Profile at `level` ("yours" or "repo"); returns
+    /// the file it now lives in.
+    @discardableResult
+    public func profile(_ action: String, name: String, level: String = "yours", repo: String? = nil,
+                        fields: [String: String]? = nil) throws -> String {
+        var params: [String: Any] = ["name": name, "level": level]
+        if let repo { params["repo"] = repo }
+        if let fields { params["fields"] = fields }
+        let result = try call("profile.\(action)", params) as? [String: Any]
+        return result?["path"] as? String ?? ""
+    }
+
+    public func agentSettings() throws -> AgentSettings {
+        try decodeSettings(call("settings.get"))
+    }
+
+    /// Sets each key; an empty string puts it back to its default.
+    public func setAgentSettings(_ patch: [String: Any]) throws -> AgentSettings {
+        try decodeSettings(call("settings.set", ["settings": patch]))
+    }
+
+    private func decodeSettings(_ result: Any) throws -> AgentSettings {
+        let data = try JSONSerialization.data(withJSONObject: result)
+        return try JSONDecoder().decode(AgentSettings.self, from: data)
+    }
+
     /// Starts `count` Workers on one Task, each in its own worktree on `<branch>-<n>`. Returns
     /// their ids, and why any of them could not start.
     public func fanOut(repo: String, agent: Int?, profile: String, title: String, spec: String,

@@ -277,12 +277,7 @@ pub struct Choice {
 impl Choice {
     /// `settings.json` in a folder: `{"cli": "claude", "model": "anthropic/claude-sonnet-5-5"}`.
     pub fn read(dir: &Path) -> Result<Choice> {
-        let path = dir.join("settings.json");
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return Ok(Choice::default());
-        };
-        let value: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        let value = crate::settings::read(dir)?;
         let field = |key: &str| {
             value
                 .get(key)

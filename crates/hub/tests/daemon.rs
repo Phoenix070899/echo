@@ -484,6 +484,47 @@ fn a_cli_or_model_that_cannot_run_stops_a_worker_before_it_starts() {
 }
 
 #[test]
+fn settings_and_profile_edits_from_echo_land_in_the_humans_files() {
+    let hub = Hub::new("settings");
+    hub.ok(&["sessions"]);
+    let set = hub.call(
+        "settings.set",
+        serde_json::json!({ "settings": { "maxWorkers": 6, "review": false } }),
+    );
+    assert_eq!(set["result"]["orchestrator"]["maxWorkers"], 6, "{set}");
+    assert!(
+        hub.call("settings.set", serde_json::json!({ "settings": { "theme": "x" } }))["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown setting")
+    );
+    let edited = hub.call(
+        "profile.set",
+        serde_json::json!({ "name": "lee", "fields": { "model": "anthropic/claude-opus-5-5", "effort": "" } }),
+    );
+    assert_eq!(
+        edited["result"]["path"],
+        hub.state.join("profiles/lee.md").display().to_string(),
+        "{edited}"
+    );
+    let listed = hub.call("profiles.list", serde_json::json!({ "repo": hub.repo }));
+    let lee = listed["result"]["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "lee")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (lee["level"].as_str(), lee["model"].as_str()),
+        (Some("yours"), Some("anthropic/claude-opus-5-5"))
+    );
+    assert!(lee["effort"].is_null());
+    hub.call("profile.reset", serde_json::json!({ "name": "lee" }));
+    assert!(!hub.state.join("profiles/lee.md").exists());
+}
+
+#[test]
 fn a_lesson_from_a_final_report_reaches_the_repos_lessons() {
     let hub = Hub::new("lesson");
     hub.ok(&["worker", "start", "lee", "--spec", "lesson"]);
