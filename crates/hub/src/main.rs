@@ -175,7 +175,7 @@ enum UiCommand {
     Show { target: String },
     /// Show a Worker's diff, ready for review.
     Diff { worker: String },
-    /// Show a part of Settings (window, theme, background, font, multiplexer, agents, memory, remote),
+    /// Show a part of Settings (window, theme, background, font, multiplexer, agents, worktrees, memory, remote),
     /// for a change only the human makes there, like which model Profiles run with.
     Settings {
         #[arg(default_value = "agents")]

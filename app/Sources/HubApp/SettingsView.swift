@@ -202,6 +202,8 @@ struct SettingsView: View {
                 OrchestratorSettings(agents: agents)
             }
             .onAppear(perform: refreshAgents)
+            case .worktrees:
+            page { WorktreeSettings() }
             case .memory:
             page { MemorySettings() }
             case .remote:

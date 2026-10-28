@@ -198,6 +198,14 @@ public struct DaemonClient: Sendable {
         _ = try call("memory.\(action)", params)
     }
 
+    /// A repo's worktree settings; with `patch`, sets them first (an empty value clears one).
+    public func repoSettings(_ repo: String, patch: [String: Any]? = nil) throws -> RepoSettings {
+        var params: [String: Any] = ["repo": repo]
+        if let patch { params["settings"] = patch }
+        let result = try call(patch == nil ? "repo.settings.get" : "repo.settings.set", params)
+        return try JSONDecoder().decode(RepoSettings.self, from: JSONSerialization.data(withJSONObject: result))
+    }
+
     public func agentSettings() throws -> AgentSettings {
         try decodeSettings(call("settings.get"))
     }

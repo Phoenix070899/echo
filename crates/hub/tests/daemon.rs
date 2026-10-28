@@ -600,6 +600,34 @@ fn a_new_worktree_gets_its_files_and_setup_before_its_worker_starts() {
 }
 
 #[test]
+fn a_repos_worktree_settings_are_set_from_echo_and_checked_first() {
+    let hub = Hub::new("reposet");
+    hub.ok(&["sessions"]);
+    let set = hub.call(
+        "repo.settings.set",
+        serde_json::json!({ "repo": hub.repo, "settings": { "setup": "pnpm install", "copy": [".env"] } }),
+    );
+    assert_eq!(set["result"]["setup"], "pnpm install", "{set}");
+    let bad = hub.call(
+        "repo.settings.set",
+        serde_json::json!({ "repo": hub.repo, "settings": { "copy": ["../secrets"] } }),
+    );
+    assert!(bad["error"].as_str().unwrap().contains("inside the repo"), "{bad}");
+    let got = hub.call("repo.settings.get", serde_json::json!({ "repo": hub.repo }));
+    assert_eq!(
+        got["result"]["copy"],
+        serde_json::json!([".env"]),
+        "a refused change leaves the file as it was"
+    );
+    hub.call(
+        "repo.settings.set",
+        serde_json::json!({ "repo": hub.repo, "settings": { "setup": "" } }),
+    );
+    let got = hub.call("repo.settings.get", serde_json::json!({ "repo": hub.repo }));
+    assert!(got["result"]["setup"].is_null());
+}
+
+#[test]
 fn a_lesson_from_a_final_report_reaches_the_repos_lessons() {
     let hub = Hub::new("lesson");
     hub.ok(&["worker", "start", "lee", "--spec", "lesson"]);

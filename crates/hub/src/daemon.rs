@@ -1008,6 +1008,25 @@ impl Hub {
                 }
                 Ok(json!({}))
             }
+            "repo.settings.get" | "repo.settings.set" => {
+                let root = repo::root(Path::new(str_param(p, "repo")?))?;
+                let dir = root.join(".echo");
+                if method == "repo.settings.set" {
+                    let patch = param(p, "settings")?
+                        .as_object()
+                        .context("settings must be an object")?;
+                    if let Some(key) = patch.keys().find(|k| !["copy", "setup"].contains(&k.as_str())) {
+                        bail!("unknown repo setting {key:?}; copy or setup");
+                    }
+                    // Checked before it is written, so a bad path never reaches the file.
+                    let mut check = settings::read(&dir)?;
+                    check.extend(patch.clone());
+                    repo::prep_from(&check)?;
+                    settings::update(&dir, patch)?;
+                }
+                let prep = repo::prep(&root)?;
+                Ok(json!({ "repo": root, "path": dir.join("settings.json"), "copy": prep.copy, "setup": prep.setup }))
+            }
             "settings.get" => {
                 let all = settings::read(&paths::state_dir())?;
                 Ok(json!({ "cli": all.get("cli"), "model": all.get("model"),
@@ -1992,6 +2011,7 @@ impl Hub {
                     "font",
                     "multiplexer",
                     "agents",
+                    "worktrees",
                     "memory",
                     "remote",
                 ];

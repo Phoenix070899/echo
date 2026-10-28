@@ -557,6 +557,15 @@ public struct MemoryFiles: Decodable, Equatable, Sendable {
     public let lessons: Lessons?
 }
 
+/// How a repo prepares its new worktrees, from `repo.settings.get`: ignored files to copy from
+/// the main checkout, and a setup command run before the agent starts.
+public struct RepoSettings: Decodable, Equatable, Sendable {
+    public let repo: String
+    public let path: String
+    public let copy: [String]
+    public let setup: String?
+}
+
 /// The CLIs Echo can run agents in.
 public let agentCLIs = ["claude", "codex"]
 

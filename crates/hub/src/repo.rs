@@ -109,14 +109,16 @@ pub struct Prep {
 }
 
 pub fn prep(repo: &Path) -> Result<Prep> {
-    let settings = crate::settings::read(&repo.join(".echo"))?;
+    prep_from(&crate::settings::read(&repo.join(".echo"))?)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", repo.join(".echo/settings.json").display()))
+}
+
+/// The same, from settings already read, so a change is checked before it is written.
+pub fn prep_from(settings: &serde_json::Map<String, serde_json::Value>) -> Result<Prep> {
     let copy = match settings.get("copy") {
         None => Vec::new(),
         Some(serde_json::Value::Array(all)) => all.iter().filter_map(|v| v.as_str()).map(String::from).collect(),
-        Some(_) => bail!(
-            "{}: \"copy\" is a list of paths",
-            repo.join(".echo/settings.json").display()
-        ),
+        Some(_) => bail!("\"copy\" is a list of paths"),
     };
     for path in &copy {
         if Path::new(path).is_absolute() || path.split('/').any(|part| part == "..") {
