@@ -304,6 +304,29 @@ struct FilePreviewPanel: View {
         .background(Ledger.wash)
     }
 
+    /// How the file shows: rendered or as source, and editable; one switch for all three.
+    private var modes: [PreviewMode] {
+        var modes: [PreviewMode] = content.state.hasRenderedView ? [.rendered, .source] : [.view]
+        if content.editable { modes.append(.edit) }
+        return modes
+    }
+
+    private var mode: PreviewMode {
+        if content.editing { return .edit }
+        guard content.state.hasRenderedView else { return .view }
+        return content.rendered ? .rendered : .source
+    }
+
+    private func pick(_ mode: PreviewMode) {
+        if mode == .edit { return startEditing() }
+        if content.editing {
+            stopEditing()
+            // Cancel in the save prompt keeps editing.
+            if content.editing { return }
+        }
+        if mode != .view { content.rendered = mode == .rendered }
+    }
+
     private var header: some View {
         HStack(spacing: 10) {
             Text(file.path)
@@ -320,47 +343,29 @@ struct FilePreviewPanel: View {
                     .foregroundStyle(mark == .modified || mark == .renamed ? Ledger.changed : mark == .deleted ? Ledger.fail : Ledger.done)
             }
             Spacer(minLength: 8)
+            if modes.count > 1 {
+                ModeSwitch(modes: modes, picked: mode, pick: pick)
+            }
+            HStack(spacing: 2) {
+                HeaderIcon(symbol: "folder", label: "Reveal in Finder (⇧⌘R)") { model.revealInFinder(file) }
+                if case .html = content.state {
+                    HeaderIcon(symbol: "safari", label: "Open in browser") { NSWorkspace.shared.open(file.url) }
+                }
+                HeaderIcon(symbol: "arrow.up.forward.app", label: "Open in editor (⌘O)") { model.openInEditor(file) }
+            }
             if content.editing {
-                Button("Done") { stopEditing() }
-                    .buttonStyle(.ledgerLink)
-                    .fixedSize()
-                    .help("Stops editing. Esc or ⌘E")
                 Button("Save") { save() }
-                    .buttonStyle(.ledger)
+                    .buttonStyle(.ledgerPrimary)
                     .fixedSize()
                     .disabled(!unsaved)
                     .help("Writes your changes to the file. ⌘S")
-            } else if content.editable {
-                Button("Edit") { startEditing() }
-                    .buttonStyle(.ledgerLink)
+            } else {
+                Button("Insert into terminal") { model.insertMention(file) }
+                    .buttonStyle(.ledgerPrimary)
                     .fixedSize()
-                    .help("Edit the file as text. ⌘E")
+                    .disabled(!model.terminalTypeable)
+                    .help(model.terminalTypeable ? "Types @\(file.path) into the terminal" : "The agent isn't running, so there is no terminal to type into.")
             }
-            if content.state.hasRenderedView, !content.editing {
-                Picker("View", selection: $content.rendered) {
-                    Text("Rendered").tag(true)
-                    Text("Source").tag(false)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-            }
-            Button("Reveal in Finder") { model.revealInFinder(file) }
-                .buttonStyle(.ledgerLink)
-                .fixedSize()
-            if case .html = content.state {
-                Button("Open in browser") { NSWorkspace.shared.open(file.url) }
-                    .buttonStyle(.ledgerLink)
-                    .fixedSize()
-            }
-            Button("Open") { model.openInEditor(file) }
-                .buttonStyle(.ledgerLink)
-                .fixedSize()
-            Button("Insert into terminal") { model.insertMention(file) }
-                .buttonStyle(.ledgerPrimary)
-                .fixedSize()
-                .disabled(!model.terminalTypeable)
-                .help(model.terminalTypeable ? "Types @\(file.path) into the terminal" : "The agent isn't running, so there is no terminal to type into.")
         }
         .font(.system(size: 12.5))
         .padding(.horizontal, 18)
@@ -1290,5 +1295,71 @@ final class WebPage: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             // WebKit delivers messages on the main thread.
             MainActor.assumeIsolated { target?.userContentController(controller, didReceive: message) }
         }
+    }
+}
+
+enum PreviewMode: String {
+    case rendered = "Rendered", source = "Source", view = "View", edit = "Edit"
+
+    var help: String {
+        switch self {
+        case .rendered: "Show the file as it renders"
+        case .source: "Show the file's source"
+        case .view: "Read the file"
+        case .edit: "Edit the file as text. ⌘E"
+        }
+    }
+}
+
+/// The preview header's one switch for how the file shows: the picked mode sits raised on the
+/// field, the way a repo tab sits on its strip.
+private struct ModeSwitch: View {
+    let modes: [PreviewMode]
+    let picked: PreviewMode
+    let pick: (PreviewMode) -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(modes, id: \.self) { mode in
+                Button { if mode != picked { pick(mode) } } label: {
+                    Text(mode.rawValue)
+                        .font(.system(size: 12, weight: mode == picked ? .semibold : .medium))
+                        .foregroundStyle(mode == picked ? Ledger.ink : Ledger.ink2)
+                        .padding(.horizontal, 10)
+                        .frame(height: 22)
+                        .background(mode == picked ? Ledger.pill : .clear, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(mode.help)
+                .accessibilityAddTraits(mode == picked ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(Ledger.field, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .fixedSize()
+    }
+}
+
+/// A quiet icon action in the preview header; its fill shows on hover.
+private struct HeaderIcon: View {
+    let symbol: String
+    let label: String
+    let action: () -> Void
+    @StateObject private var hover = Flag()
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13))
+                .frame(width: 26, height: 26)
+                .background(hover.on ? Ledger.fill : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(hover.on ? Ledger.ink : Ledger.ink2)
+        .onHover { hover.on = $0 }
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
