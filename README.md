@@ -69,6 +69,8 @@ A Profile's `cli` and `model` (`provider/model`) can be left out: they then come
 `echoctl worker start --cli --model` overrides all of them for one Worker.
 The CLIs are `claude` (Anthropic models) and `codex` (OpenAI models, as `openai/<model>`).
 
+A repo's `.echo/settings.json` can also prepare new worktrees: `"copy": [".env"]` copies files git ignores from the main checkout, and `"setup": "pnpm install"` runs before the agent starts.
+
 | Profile | Role |
 | --- | --- |
 | `naruto` | Implementer: one coding Task, runs its verify command |

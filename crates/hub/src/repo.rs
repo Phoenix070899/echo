@@ -99,6 +99,71 @@ pub fn new_branch_worktree(repo: &Path, branch: &str, base: &str) -> Result<Path
     add_worktree(repo, branch, repo, base)
 }
 
+/// What a repo's new worktrees get before their agent starts, from its `.echo/settings.json`:
+/// `"copy"`, files git ignores (like `.env`) taken from the main checkout, and `"setup"`, a
+/// shell command run in the worktree (like `pnpm install`).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Prep {
+    pub copy: Vec<String>,
+    pub setup: Option<String>,
+}
+
+pub fn prep(repo: &Path) -> Result<Prep> {
+    let settings = crate::settings::read(&repo.join(".echo"))?;
+    let copy = match settings.get("copy") {
+        None => Vec::new(),
+        Some(serde_json::Value::Array(all)) => all.iter().filter_map(|v| v.as_str()).map(String::from).collect(),
+        Some(_) => bail!(
+            "{}: \"copy\" is a list of paths",
+            repo.join(".echo/settings.json").display()
+        ),
+    };
+    for path in &copy {
+        if Path::new(path).is_absolute() || path.split('/').any(|part| part == "..") {
+            bail!("\"copy\" takes paths inside the repo, not {path:?}");
+        }
+    }
+    let setup = settings
+        .get("setup")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(String::from);
+    Ok(Prep { copy, setup })
+}
+
+/// Copies each of `prep.copy` from the main checkout into `worktree` where the worktree lacks
+/// it, folders whole; returns what it copied.
+pub fn copy_into(repo: &Path, worktree: &Path, prep: &Prep) -> Result<Vec<String>> {
+    fn copy(from: &Path, to: &Path) -> std::io::Result<()> {
+        if from.is_dir() {
+            std::fs::create_dir_all(to)?;
+            for entry in std::fs::read_dir(from)? {
+                let entry = entry?;
+                copy(&entry.path(), &to.join(entry.file_name()))?;
+            }
+            Ok(())
+        } else {
+            if let Some(dir) = to.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::copy(from, to).map(|_| ())
+        }
+    }
+    let mut copied = Vec::new();
+    if worktree == repo {
+        return Ok(copied);
+    }
+    for path in &prep.copy {
+        let (from, to) = (repo.join(path), worktree.join(path));
+        if from.exists() && !to.exists() {
+            copy(&from, &to).with_context(|| format!("copying {path} into {}", worktree.display()))?;
+            copied.push(path.clone());
+        }
+    }
+    Ok(copied)
+}
+
 /// A local branch and the checkout that has it, if one does.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Branch {
@@ -309,5 +374,35 @@ mod tests {
         assert_eq!(head_branch(&main), None, "a detached HEAD has no branch");
         assert_eq!(head_branch(&dir), None, "not a checkout");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_new_worktree_gets_the_ignored_files_the_repo_lists() {
+        let root = std::env::temp_dir().join(format!("hub-prep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (repo, tree) = (root.join("repo"), root.join("tree"));
+        std::fs::create_dir_all(repo.join(".echo")).unwrap();
+        std::fs::create_dir_all(repo.join("config/local")).unwrap();
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(repo.join(".env"), "KEY=1\n").unwrap();
+        std::fs::write(repo.join("config/local/a.toml"), "a").unwrap();
+        std::fs::write(tree.join(".env"), "KEY=mine\n").unwrap();
+        std::fs::write(
+            repo.join(".echo/settings.json"),
+            r#"{"copy": [".env", "config/local", "missing.txt"], "setup": " pnpm install "}"#,
+        )
+        .unwrap();
+        let prep = prep(&repo).unwrap();
+        assert_eq!(prep.setup.as_deref(), Some("pnpm install"));
+        assert_eq!(copy_into(&repo, &tree, &prep).unwrap(), ["config/local"]);
+        assert_eq!(
+            std::fs::read_to_string(tree.join(".env")).unwrap(),
+            "KEY=mine\n",
+            "the worktree's own file stays"
+        );
+        assert_eq!(std::fs::read_to_string(tree.join("config/local/a.toml")).unwrap(), "a");
+        std::fs::write(repo.join(".echo/settings.json"), r#"{"copy": ["../secrets"]}"#).unwrap();
+        assert!(super::prep(&repo).is_err());
+        assert_eq!(super::prep(&root.join("none")).unwrap(), Prep::default());
     }
 }

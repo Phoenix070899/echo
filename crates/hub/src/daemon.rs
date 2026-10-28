@@ -30,6 +30,8 @@ use crate::settings;
 
 /// How long a turn may take to start before `worker.start` gives up on it.
 const START_TIMEOUT: Duration = Duration::from_secs(90);
+/// A new worktree's setup (`pnpm install` and the like) runs before the turn can start.
+const SETUP_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// An unchanged idle screen this long, with no Final Report, is a blocker.
 const IDLE_BLOCKER: Duration = Duration::from_secs(60);
 /// Settled Workers stay on the Dashboard this long.
@@ -487,6 +489,7 @@ impl Hub {
                     picked("model").as_deref(),
                 )?;
                 if let Some((cwd, branch)) = &place {
+                    repo::copy_into(&root, cwd, &repo::prep(&root)?)?;
                     // The repo's own checkout is no worktree of its own.
                     let cwd = (cwd != &root).then(|| cwd.display().to_string());
                     db::set_agent_place(&self.db(), id, cwd.as_deref(), Some(branch))?;
@@ -563,7 +566,7 @@ impl Hub {
                 (agent_cli.program().to_string(), agent_cli.args(&self.hub_dir, &start)?)
             }
         };
-        let spawn = Spawn {
+        let mut spawn = Spawn {
             cli: agent_cli,
             program,
             args,
@@ -571,6 +574,12 @@ impl Hub {
             env: self.agent_env(None, Some(agent.id))?,
             env_remove: inherited_agent_vars(),
         };
+        // Its own worktree, started for the first time: the repo's setup runs there first.
+        if !resume && agent.cwd.is_some() {
+            if let Some(setup) = repo::prep(&repo)?.setup {
+                spawn = with_setup(spawn, &setup);
+            }
+        }
         let hub: Weak<Hub> = Arc::downgrade(self);
         let live = Live::spawn(agent.id, spawn, move |id| {
             if let Some(hub) = hub.upgrade() {
@@ -1166,6 +1175,10 @@ impl Hub {
     }
 
     fn spawn_for(&self, worker: &Worker, launch: Launch) -> Result<Spawn> {
+        let launch_kind = match launch {
+            Launch::New { .. } => LaunchKind::New,
+            Launch::Resume => LaunchKind::Resume,
+        };
         let (worker_cli, program, args) = match &self.test_agent {
             Some(agent) => {
                 let spec = match launch {
@@ -1198,13 +1211,18 @@ impl Hub {
                 )
             }
         };
-        Ok(Spawn {
+        let fresh = matches!(launch_kind, LaunchKind::New) && worker.branch.is_some();
+        let spawn = Spawn {
             cli: worker_cli,
             program,
             args,
             cwd: PathBuf::from(&worker.cwd),
             env: self.agent_env(Some(worker.id), None)?,
             env_remove: inherited_agent_vars(),
+        };
+        Ok(match repo::prep(Path::new(&worker.repo))?.setup.filter(|_| fresh) {
+            Some(setup) => with_setup(spawn, &setup),
+            None => spawn,
         })
     }
 
@@ -1296,6 +1314,11 @@ impl Hub {
         } else {
             bail!("--worktree must be current, new:<type>/<task>, or path:<abs path>");
         };
+        // A worktree of its own gets the repo's ignored files now; its setup runs in its terminal.
+        let prep = repo::prep(&repo_root)?;
+        if cwd != repo_root {
+            repo::copy_into(&repo_root, &cwd, &prep)?;
+        }
         let session_id = uuid::Uuid::new_v4().to_string();
         let id = db::insert_worker(
             &self.db(),
@@ -1320,8 +1343,9 @@ impl Hub {
         }
         self.notify();
 
+        let sets_up = branch.is_some() && prep.setup.is_some();
         let started = self.wait_until(
-            START_TIMEOUT,
+            if sets_up { SETUP_TIMEOUT } else { START_TIMEOUT },
             || false,
             || {
                 let now = db::worker(&self.db(), id)?;
@@ -1332,8 +1356,14 @@ impl Hub {
             json!({ "id": format!("w{id}"), "cwd": cwd, "branch": branch, "session_id": session_id, "title": title });
         match started.as_deref() {
             Some(state::EXITED) => {
-                let screen = self.live(id).map(|l| l.screen()).unwrap_or_default();
-                bail!("w{id} exited before starting its turn:\n{}", screen::tail(&screen, SCREEN_LINES))
+                // Its terminal may be gone already; the exit message kept its last screen.
+                let tail = match self.live(id) {
+                    Ok(live) => screen::tail(&live.screen(), SCREEN_LINES),
+                    Err(_) => db::last_message(&self.db(), id, kind::EXITED)?
+                        .map(|m| m.body.split_once("Last screen:\n").map_or(m.body.clone(), |(_, t)| t.to_string()))
+                        .unwrap_or_default(),
+                };
+                bail!("w{id} exited before starting its turn:\n{tail}")
             }
             Some(_) => Ok(view),
             None => bail!("w{id} never started its turn; read it with `echoctl worker read w{id}`, stop it with `echoctl worker close w{id}`"),
@@ -2523,4 +2553,24 @@ impl Drop for Watching<'_> {
             *count = count.saturating_sub(1);
         }
     }
+}
+
+enum LaunchKind {
+    New,
+    Resume,
+}
+
+/// Runs a new worktree's setup in the agent's own terminal, in the human's login shell so its
+/// PATH has their tools, then the agent; when the setup fails the agent is not started, and the
+/// terminal's last lines say why.
+fn with_setup(mut spawn: Spawn, setup: &str) -> Spawn {
+    const SCRIPT: &str = r#"printf 'Echo: setting up this worktree: %s\n\n' "$ECHO_SETUP"
+"${SHELL:-/bin/sh}" -lc "$ECHO_SETUP" || { status=$?; printf '\nEcho: the setup failed (exit %s), so the agent was not started.\n' "$status"; exit "$status"; }
+exec "$@""#;
+    let mut args = vec!["-c".to_string(), SCRIPT.to_string(), "sh".to_string(), spawn.program];
+    args.extend(spawn.args);
+    spawn.program = "/bin/sh".into();
+    spawn.args = args;
+    spawn.env.push(("ECHO_SETUP".into(), setup.into()));
+    spawn
 }

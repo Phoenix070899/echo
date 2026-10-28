@@ -552,6 +552,54 @@ fn the_human_adds_and_removes_preferences_and_lessons_from_echo() {
 }
 
 #[test]
+fn a_new_worktree_gets_its_files_and_setup_before_its_worker_starts() {
+    let hub = Hub::new("prep");
+    std::fs::write(hub.repo.join(".env"), "KEY=1\n").unwrap();
+    std::fs::create_dir_all(hub.repo.join(".echo")).unwrap();
+    std::fs::write(
+        hub.repo.join(".echo/settings.json"),
+        r#"{"copy": [".env"], "setup": "test -f .env && echo installed > setup-ran"}"#,
+    )
+    .unwrap();
+    let started = hub.ok(&[
+        "worker",
+        "start",
+        "lee",
+        "--spec",
+        "done quickly",
+        "--worktree",
+        "new:chore/prep",
+    ]);
+    assert!(started.contains("Started w1"), "{started}");
+    let tree = hub.state.join("worktrees/repo/chore-prep");
+    assert_eq!(std::fs::read_to_string(tree.join(".env")).unwrap(), "KEY=1\n");
+    assert_eq!(std::fs::read_to_string(tree.join("setup-ran")).unwrap(), "installed\n");
+    assert!(hub.wait().contains("done (done) from w1"));
+
+    // A setup that fails starts no agent, and the start says why.
+    std::fs::write(
+        hub.repo.join(".echo/settings.json"),
+        r#"{"setup": "echo no network; exit 3"}"#,
+    )
+    .unwrap();
+    let err = hub.fails(&[
+        "worker",
+        "start",
+        "lee",
+        "--spec",
+        "done quickly",
+        "--worktree",
+        "new:chore/broken",
+    ]);
+    assert!(
+        err.contains("the setup failed (exit 3)") && err.contains("no network"),
+        "{err}"
+    );
+    // Working in place runs no setup.
+    hub.ok(&["worker", "start", "lee", "--spec", "done quickly"]);
+}
+
+#[test]
 fn a_lesson_from_a_final_report_reaches_the_repos_lessons() {
     let hub = Hub::new("lesson");
     hub.ok(&["worker", "start", "lee", "--spec", "lesson"]);
