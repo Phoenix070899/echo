@@ -61,18 +61,19 @@ struct SettingsPage: View {
             .frame(width: 232)
             .frame(maxHeight: .infinity)
             .ledgerSheet()
+            // The section's column sits in the middle of the space beside the list.
             VStack(alignment: .leading, spacing: 0) {
                 Text(section.title)
                     .font(.system(size: 20, weight: .semibold))
-                    .padding(.horizontal, 32)
+                    .padding(.horizontal, 20)
                     .padding(.top, 24)
                     .padding(.bottom, 4)
                 SettingsView(section: section)
-                    .frame(maxWidth: 680, alignment: .topLeading)
-                    .padding(.horizontal, 12)
                     .id(section)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .frame(maxWidth: 680)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .ledgerSheet()
         }
         .focusable()
