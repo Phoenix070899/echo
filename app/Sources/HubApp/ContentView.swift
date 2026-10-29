@@ -532,7 +532,7 @@ struct LedgerSheet: View {
                     if index > 0, model.showsContent(groups[index - 1]) || model.showsContent(group) {
                         Color.clear.frame(height: 10)
                     }
-                    AgentGroupView(group: group, repo: repo)
+                    AgentGroupView(group: group, repo: repo, number: index + 1)
                 }
             }
             .padding(.bottom, 12)
@@ -545,6 +545,8 @@ struct AgentGroupView: View {
     @EnvironmentObject private var model: AppModel
     let group: AgentGroup
     let repo: String
+    /// Its place in the ledger, which ⌘ and the number shows.
+    let number: Int
     @StateObject private var showAllDone = Flag()
     @StateObject private var showAllRunning = Flag()
 
@@ -555,7 +557,7 @@ struct AgentGroupView: View {
         let agent = group.agent
         let folded = model.collapsed.contains(agent.id)
         VStack(alignment: .leading, spacing: 0) {
-            AgentHeader(group: group, repo: repo, folded: folded)
+            AgentHeader(group: group, repo: repo, folded: folded, number: number)
             if model.showsContent(group) {
                 // A small inset sets the group's contents off its header band.
                 VStack(alignment: .leading, spacing: 0) {
@@ -652,6 +654,7 @@ struct AgentHeader: View {
     let group: AgentGroup
     let repo: String
     let folded: Bool
+    let number: Int
 
     var body: some View {
         let agent = group.agent
@@ -669,6 +672,14 @@ struct AgentHeader: View {
             .accessibilityLabel(folded ? "Show \(agent.displayName)" : "Fold \(agent.displayName)")
             Button { model.select(.agent(repo: repo, id: agent.id)) } label: {
                 HStack(spacing: 8) {
+                    // Its number, for ⌘1 to ⌘9; past nine there is no shortcut, so no number.
+                    Text(number <= 9 ? "\(number)" : "")
+                        .font(Ledger.font(12, .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(selected ? Ledger.ink : Ledger.ink3)
+                        .frame(width: 12)
+                        .help(number <= 9 ? "⌘\(number)" : "")
+                        .accessibilityHidden(true)
                     AgentGlyph(kind: agent.kind).foregroundStyle(Ledger.ink3)
                     Text(agent.displayName)
                         .fontWeight(.medium)

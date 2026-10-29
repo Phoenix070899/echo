@@ -765,6 +765,14 @@ final class AppModel: ObservableObject {
         if let repo = selectedRepo, let first = agents(repo).first { select(.agent(repo: repo, id: first.id)) }
     }
 
+    /// The repo's agent at a ledger number (1 is the first), as ⌘1 to ⌘9 pick it.
+    func showAgent(number: Int) {
+        guard let repo = selectedRepo else { return }
+        let list = agents(repo)
+        guard list.indices.contains(number - 1) else { return }
+        select(.agent(repo: repo, id: list[number - 1].id))
+    }
+
     /// The next (or previous) repo tab, wrapping around.
     func cycleSession(forward: Bool) {
         let tabs = tabSessions.map(\.repo)

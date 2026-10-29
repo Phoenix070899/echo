@@ -89,9 +89,15 @@ struct HubApp: App {
                     .disabled(!model.canSplit)
 
                 Divider()
+                // ⌘ and a ledger number shows that agent; ⌥⌘ and a tab's number shows that repo.
+                ForEach(Array((model.selectedRepo.map(model.agents) ?? []).prefix(9).enumerated()), id: \.element.id) { index, agent in
+                    Button(agent.displayName) { model.showAgent(number: index + 1) }
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")))
+                }
+                Divider()
                 ForEach(Array(model.tabSessions.prefix(9).enumerated()), id: \.element.repo) { index, session in
                     Button(session.name) { model.selectSession(session.repo) }
-                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")))
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [.command, .option])
                 }
             }
         }
