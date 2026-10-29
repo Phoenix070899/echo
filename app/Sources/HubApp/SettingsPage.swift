@@ -56,7 +56,6 @@ struct SettingsPage: View {
                 }
                 .padding(.horizontal, 16)
                 .frame(height: 44)
-                .background(Ledger.band)
                 ForEach(SettingsSection.allCases) { item in
                     SectionRow(item: item, picked: item == section) { model.settingsSection = item }
                 }
