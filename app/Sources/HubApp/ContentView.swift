@@ -1304,10 +1304,16 @@ struct LedgerRow: View {
         }
     }
 
+    /// A running Worker always has one, so its row keeps its height as the status changes
+    /// (ui-ux/0052); a settled one has one only when it ended badly or without a report.
     private var detailLine: String? {
         if let progress = worker.progress { return progress }
         if worker.state == .waiting { return "Waiting on background work" }
         if worker.state == .ended { return "Ended, no Final Report" }
+        if worker.isActive {
+            if worker.state == .needsYou { return "Needs you" }
+            return worker.phase == "starting" ? "Starting" : "Working"
+        }
         // Under Done, "Done" says nothing; Failed or Blocked does.
         if !worker.isActive && worker.isTrouble { return worker.phaseLabel }
         return nil
