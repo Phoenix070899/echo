@@ -144,7 +144,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var connected = false
     /// True once the daemon could not be reached; the window says so until it is back.
     @Published private(set) var daemonDown = false
-    @Published var error: String?
+    @Published var error: String? {
+        didSet { if error == nil { errorIsUnreachable = false } }
+    }
+    /// The error shown says only that the daemon was out of reach, so reaching it clears it.
+    private var errorIsUnreachable = false
     /// A short note shown under the title bar for a few seconds; see `note(_:)`.
     @Published var notice: String?
 
@@ -616,7 +620,7 @@ final class AppModel: ObservableObject {
         } then: { sessions in
             // Every publish redraws the whole window; this runs every 5 seconds.
             if self.sessions != sessions { self.sessions = sessions }
-            if self.daemonDown { self.daemonDown = false }
+            self.daemonReached()
             for session in sessions where self.following[session.repo] == nil {
                 self.follow(repo: session.repo)
             }
@@ -808,7 +812,7 @@ final class AppModel: ObservableObject {
                     let current = DispatchQueue.main.sync { () -> Bool in
                         guard let self, self.following[repo] == generation else { return false }
                         if !self.connected { self.connected = true }
-                        if self.daemonDown { self.daemonDown = false }
+                        self.daemonReached()
                         return true
                     }
                     guard current else { return socket.shutdown() }
@@ -1222,6 +1226,20 @@ final class AppModel: ObservableObject {
         background { client in try client.call("usage.refresh") } then: { _ in }
     }
 
+    /// The daemon answered: the window stops saying it is down, and drops an error that only said
+    /// it could not be reached (bugs/0056).
+    private func daemonReached() {
+        if daemonDown { daemonDown = false }
+        if errorIsUnreachable { error = nil }
+    }
+
+    nonisolated private static func unreachable(_ error: Error) -> Bool {
+        switch error as? HubError {
+        case .connect?, .closed?: return true
+        default: return false
+        }
+    }
+
     /// Runs `work` off the main thread, then hands its result to `then`. A failure shows as the
     /// window's error, or, when `quiet`, only reaches `failed`.
     private func background<T>(
@@ -1239,7 +1257,10 @@ final class AppModel: ObservableObject {
                     if !quiet { self.error = nil }
                     then(value)
                 case .failure(let error):
-                    if !quiet { self.error = "\(error)" }
+                    if !quiet {
+                        self.error = "\(error)"
+                        self.errorIsUnreachable = Self.unreachable(error)
+                    }
                     failed?()
                 }
             }
