@@ -810,11 +810,14 @@ struct MainPanel: View {
                 }
             }
             // Previewed files cover the panel; the terminal stays attached underneath, and each
-            // file keeps its scroll and view while another tab is shown.
+            // file keeps its scroll and view while another tab is shown. Every checkout's open
+            // files stay laid out, not just this one's, so showing an agent in another checkout
+            // never lays a long file out again from scratch (bugs/0055).
             .overlay {
                 ZStack {
-                    ForEach(tabs, id: \.self) { file in
-                        FilePreviewPanel(file: file, files: model.checkoutFiles(file.root), active: model.preview == file)
+                    ForEach(model.openPreviews, id: \.self) { file in
+                        FilePreviewPanel(file: file, files: model.checkoutFiles(file.root, shown: file.root == model.selectedCheckout),
+                                         active: model.preview == file && file.root == model.selectedCheckout)
                     }
                 }
             }

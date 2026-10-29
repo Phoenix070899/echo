@@ -327,6 +327,8 @@ final class AppModel: ObservableObject {
     /// only, as review comments are.
     @Published var fileNotes: [String: [FileNote]] = [:]
     var checkouts: [String: CheckoutFiles] = [:]
+    /// Files of checkouts whose previews stay laid out while another checkout shows.
+    private var unshownCheckouts: [String: CheckoutFiles] = [:]
     private var noticeHide: DispatchWorkItem?
 
     /// Says why a key did nothing, for 4 seconds.
@@ -1313,7 +1315,16 @@ extension AppModel {
     /// The checkout's files, read and watched from the first time they are asked for. Only the
     /// selected checkout is ever shown, so every other one stops watching and is let go: each
     /// watched checkout runs git on every change inside it.
-    func checkoutFiles(_ root: String) -> CheckoutFiles {
+    /// A preview of a checkout not shown asks with `shown` false: it gets that checkout's files
+    /// unread and unwatched, and every other checkout keeps its own.
+    func checkoutFiles(_ root: String, shown: Bool = true) -> CheckoutFiles {
+        guard shown else {
+            if let files = checkouts[root] ?? unshownCheckouts[root] { return files }
+            let files = CheckoutFiles(root: root)
+            unshownCheckouts = unshownCheckouts.filter { entry in openPreviews.contains { $0.root == entry.key } }
+            unshownCheckouts[root] = files
+            return files
+        }
         for (other, files) in checkouts where other != root {
             files.stop()
             checkouts[other] = nil
