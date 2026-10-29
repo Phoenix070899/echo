@@ -49,6 +49,22 @@ enum Notifier {
         UNUserNotificationCenter.current().add(request)
     }
 
+    /// A Worker that settled: what it did, and how it ended; clicking it opens Echo on the Worker.
+    static func post(settled worker: WorkerRow, repo: String, agent: Agent?) {
+        guard isAvailable else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "\(worker.id) \(worker.profile) \(worker.phaseLabel.lowercased()): \(worker.title)"
+        let repoName = URL(fileURLWithPath: repo).lastPathComponent
+        content.subtitle = agent.map { "\(repoName), \($0.displayName)" } ?? repoName
+        content.body = worker.blocker ?? worker.finalReport?.split(separator: "\n").first.map(String.init) ?? ""
+        content.sound = .default
+        var info: [String: Any] = ["repo": repo, "worker": worker.id]
+        if let agent = worker.agent { info["agent"] = agent }
+        content.userInfo = info
+        let id = "settled-\(repo)-\(worker.id)-\(worker.settledAt ?? 0)"
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
     /// An agent's `echoctl ui notify`; clicking it opens Echo on that agent or Worker.
     static func post(message: String, id: String, repo: String, from: String?, worker: String?, agent: Int?) {
         guard isAvailable else { return }

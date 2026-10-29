@@ -402,6 +402,18 @@ func row(_ id: String, phase: String, quiet: Int, model: String? = nil, effort: 
     #expect(Agent(id: 7, kind: .terminal).displayName == "Terminal a7", "A detached HEAD has no branch to read")
 }
 
+@Test func aWorkerThatSettlesIsAnnouncedOnce() throws {
+    func snapshot(_ rows: String...) throws -> Snapshot {
+        try JSONDecoder().decode(Snapshot.self, from: Data(#"{"repo":"/r","orchestrator":{"live":true},"workers":[\#(rows.joined(separator: ","))],"needs":[]}"#.utf8))
+    }
+    let before = try snapshot(row("w1", phase: "running", quiet: 5), row("w2", phase: "running", quiet: 5),
+                              row("w3", phase: "done", quiet: 5))
+    let after = try snapshot(row("w1", phase: "done", quiet: 0), row("w2", phase: "running", quiet: 0),
+                             row("w3", phase: "done", quiet: 5), row("w4", phase: "blocked", quiet: 0))
+    #expect(after.justSettled(since: before).map(\.id) == ["w1"], "w3 was settled already; w4 is new to Echo")
+    #expect(after.justSettled(since: after).isEmpty, "the next snapshot announces nothing again")
+}
+
 @Test func aPermissionPromptNamesItsCommand() throws {
     let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(snapshotLine.utf8))
     #expect(snapshot.needs[0].promptLines == ["Bash command", "rm -rf junk"])

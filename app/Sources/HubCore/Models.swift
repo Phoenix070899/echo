@@ -398,6 +398,15 @@ public enum TerminalTarget: Hashable, Sendable {
 }
 
 /// Remembers which Needs were already announced, so each one notifies exactly once.
+extension Snapshot {
+    /// Workers running in `before` that have settled since (done, blocked, exited, or lost), for
+    /// a notification each. A Worker seen first already settled is not one.
+    public func justSettled(since before: Snapshot) -> [WorkerRow] {
+        let running = Set(before.workers.filter(\.isActive).map(\.id))
+        return workers.filter { running.contains($0.id) && !$0.isActive }
+    }
+}
+
 public struct NeedTracker: Sendable {
     private var seen: Set<String> = []
     private var primed = false

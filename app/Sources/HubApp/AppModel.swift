@@ -840,6 +840,11 @@ final class AppModel: ObservableObject {
             Notifier.post(need, repo: repo, agent: need.agent.flatMap { snapshot.agent($0) })
         }
         trackers[repo] = tracker
+        if let before {
+            for worker in snapshot.justSettled(since: before) {
+                Notifier.post(settled: worker, repo: repo, agent: worker.agent.flatMap { snapshot.agent($0) })
+            }
+        }
         // Only requests made since launch: a relaunch within the half minute does not replay them.
         for request in snapshot.ui ?? [] where request.at >= launchedAt && handledUi.insert(request.id).inserted {
             perform(request, repo: repo, snapshot: snapshot)
