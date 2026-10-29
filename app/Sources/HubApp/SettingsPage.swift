@@ -61,7 +61,8 @@ struct SettingsPage: View {
                 }
                 Spacer(minLength: 0)
             }
-            .frame(width: 232)
+            // As wide as the ledger, so the panel beside it stays put when Settings open.
+            .frame(width: model.ledgerWidth)
             .frame(maxHeight: .infinity)
             .ledgerSheet()
             // The section's column sits in the middle of the space beside the list.
