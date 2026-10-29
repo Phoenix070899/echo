@@ -791,7 +791,9 @@ struct MainPanel: View {
     var body: some View {
         let tabs = model.openPreviews.filter { $0.root == model.selectedCheckout }
         VStack(spacing: 0) {
-            if !tabs.isEmpty { PreviewTabs(files: tabs) }
+            // Always there, Terminal tab alone or not, so every terminal is the same size and
+            // switching never resizes one: a resize makes Claude Code redraw everything (ui-ux/0051).
+            if model.selection != nil { PreviewTabs(files: tabs) }
             Group {
                 switch model.selection {
                 case .agent(let repo, let id)?:
