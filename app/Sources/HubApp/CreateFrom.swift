@@ -130,7 +130,13 @@ struct CreateFromSection: View {
         let shown = form.branches.filter { text.isEmpty || $0.name.lowercased().contains(text) }.prefix(5)
         return VStack(spacing: 2) {
             if shown.isEmpty {
-                Text(form.branches.isEmpty ? "Reading branches…" : text.isEmpty ? "No branches." : "No branch matches; Return makes a new one.")
+                Group {
+                    if form.branches.isEmpty {
+                        Pending("Reading branches…")
+                    } else {
+                        Text(text.isEmpty ? "No branches." : "No branch matches; Return makes a new one.")
+                    }
+                }
                     .font(Ledger.font(12.5))
                     .foregroundStyle(Ledger.ink3)
                     .frame(maxWidth: .infinity, alignment: .leading)

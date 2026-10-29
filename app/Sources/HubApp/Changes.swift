@@ -41,7 +41,7 @@ struct ChangesView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            if state.loading { ProgressView().controlSize(.small) }
+            if state.loading { Spinner(size: 12) }
             Button("Refresh") { Task { await load() } }
                 .buttonStyle(.ledger)
                 .disabled(state.loading)

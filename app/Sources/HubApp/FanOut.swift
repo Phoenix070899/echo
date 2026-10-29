@@ -270,7 +270,7 @@ struct TryColumn: View {
                 Text("\(worker.id) \(worker.profile)").fontWeight(.medium)
                 Spacer(minLength: 4)
                 HStack(spacing: 6) {
-                    StateMark(color: worker.markColor)
+                    WorkerMark(worker: worker)
                     Text(worker.phaseLabel)
                 }
                 .font(Ledger.font(12))
@@ -353,7 +353,7 @@ struct TryColumn: View {
                 }
             }
         } else {
-            Text("Reading its changes…").foregroundStyle(Ledger.ink3)
+            Pending("Reading its changes…").foregroundStyle(Ledger.ink3)
         }
     }
 

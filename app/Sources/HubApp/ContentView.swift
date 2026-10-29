@@ -498,7 +498,7 @@ struct RailWorker: View {
     var body: some View {
         let selected = model.selection == .worker(repo: repo, id: worker.id)
         Button { model.select(.worker(repo: repo, id: worker.id)) } label: {
-            StateMark(color: worker.markColor)
+            WorkerMark(worker: worker)
                 .frame(width: 32, height: 22)
                 .background(selected ? Ledger.selected : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .overlay(alignment: .topTrailing) {
@@ -912,7 +912,7 @@ struct LiveTerminal: View {
                              keyboard: !model.modalShown && model.preview == nil && !model.treeFocused,
                              focusRequest: model.terminalFocusRequest, epoch: epoch)
             } else {
-                Text("Starting the multiplexer…")
+                Pending("Starting the multiplexer…")
                     .font(Ledger.font(12.5))
                     .foregroundStyle(TerminalTheme.color(model.appearance.theme.foreground).opacity(0.6))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1068,7 +1068,7 @@ struct WorkerHeader: View {
                 Text("\(worker.id) \(worker.profile)").fontWeight(.medium)
                 Text(worker.title).foregroundStyle(Ledger.ink2).lineLimit(1)
                 HStack(spacing: 6) {
-                    StateMark(color: worker.markColor)
+                    WorkerMark(worker: worker)
                     Text(worker.phaseLabel)
                 }
                 .font(Ledger.font(12.5))
@@ -1231,7 +1231,7 @@ struct LedgerRow: View {
         Button { model.select(.worker(repo: repo, id: worker.id)) } label: {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
-                    StateMark(color: worker.markColor)
+                    WorkerMark(worker: worker)
                     Text(worker.id)
                         .font(.system(size: 11.5, design: .monospaced))
                         .foregroundStyle(Ledger.ink3)
@@ -1389,6 +1389,7 @@ struct UsageInline: View {
     var body: some View {
         Button { model.refreshUsage() } label: {
             HStack(spacing: 14) {
+                if usage == nil || usage?.refreshing == true { Spinner(size: 10) }
                 if let usage, !usage.limits.isEmpty {
                     ForEach(usage.limits.prefix(2)) { limit in
                         HStack(spacing: 4) {

@@ -116,7 +116,12 @@ struct NewSessionModal: View {
                     Button("Cancel", action: close)
                         .buttonStyle(.ledger)
                         .keyboardShortcut(.cancelAction)
-                    Button(startTitle, action: start)
+                    Button(action: start) {
+                        HStack(spacing: 6) {
+                            if form.starting { Spinner(color: Ledger.onPrimary, size: 10) }
+                            Text(startTitle)
+                        }
+                    }
                         .buttonStyle(.ledgerPrimary)
                         .keyboardShortcut(.defaultAction)
                         .disabled(form.picked == nil || model.daemonDown || form.starting)

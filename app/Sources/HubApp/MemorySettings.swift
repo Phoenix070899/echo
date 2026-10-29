@@ -64,7 +64,7 @@ struct MemorySettings: View {
                 preferences(files.preferences)
                 lessons(files.lessons)
             } else if memory.failure == nil {
-                Section { Text("Reading…").foregroundStyle(.secondary) }
+                Section { Pending("Reading…").foregroundStyle(.secondary) }
             }
             if let failure = memory.failure {
                 Section {

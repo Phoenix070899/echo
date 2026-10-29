@@ -154,6 +154,55 @@ struct StateMark: View {
     }
 }
 
+/// Something in progress: an arc turning once a second (slower for work only waiting in the
+/// background), in the colour of what it stands for. Under Reduce Motion it stands still.
+struct Spinner: View {
+    var color: Color = Ledger.ink3
+    var size: CGFloat = 10
+    var period: Double = 1
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
+            let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+            Circle()
+                .trim(from: 0, to: 0.7)
+                .stroke(color, style: StrokeStyle(lineWidth: max(1.5, size / 6), lineCap: .round))
+                .rotationEffect(.degrees(reduceMotion ? 0 : turn * 360))
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A Worker's state mark: a spinner while it works (slower while it only waits on background
+/// work), the still square once it settles or needs the human.
+struct WorkerMark: View {
+    let worker: WorkerRow
+
+    var body: some View {
+        if worker.isActive && worker.state != .needsYou {
+            Spinner(color: worker.markColor, size: 10, period: worker.state == .waiting ? 2.4 : 1)
+        } else {
+            StateMark(color: worker.markColor)
+        }
+    }
+}
+
+/// A line saying something is being read or started, with a spinner before it.
+struct Pending: View {
+    let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Spinner(size: 10)
+            Text(text)
+        }
+    }
+}
+
 /// Text under the highlighter: reserved for things waiting on the human.
 struct Marked: View {
     let text: String

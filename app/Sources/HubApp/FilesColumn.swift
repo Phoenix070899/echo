@@ -438,7 +438,15 @@ private struct FileSearchResults: View {
                 if query.trimmingCharacters(in: .whitespaces).count < 2 {
                     note("Type 2 or more characters to search inside files.")
                 } else if hits.isEmpty {
-                    note(found.searching ? "Searching…" : "No lines match.")
+                    if found.searching {
+                        Pending("Searching…")
+                            .font(Ledger.font(12))
+                            .foregroundStyle(Ledger.ink3)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 4)
+                    } else {
+                        note("No lines match.")
+                    }
                 }
                 ForEach(order, id: \.self) { path in
                     ResultFile(path: path, ignored: files.tree.isIgnored(path)) {
@@ -696,9 +704,13 @@ private func listKey(_ press: KeyPress, ids: [String], cursor: Pick, model: AppM
 private struct FilesNote: View {
     let text: String
     var color: Color = Ledger.ink3
+    var pending = false
 
     var body: some View {
-        Text(text)
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            if pending { Spinner(color: color, size: 10) }
+            Text(text)
+        }
             .font(Ledger.font(12.5))
             .foregroundStyle(color)
             .fixedSize(horizontal: false, vertical: true)
@@ -774,7 +786,7 @@ private struct CommitsList: View {
     var body: some View {
         VStack(spacing: 0) {
             if !state.loaded {
-                FilesNote(text: "Reading commits…")
+                FilesNote(text: "Reading commits…", pending: true)
             } else if state.commits.isEmpty {
                 FilesNote(text: state.base.map { "No commits on \(files.branch ?? "this branch") yet: it matches \($0)." }
                     ?? "No commits yet.")
@@ -847,7 +859,7 @@ private struct CommitsList: View {
                                     .id(id)
                                 }
                             } else {
-                                Text("Reading files…")
+                                Pending("Reading files…")
                                     .font(Ledger.font(12))
                                     .foregroundStyle(Ledger.ink3)
                                     .padding(.leading, 30)
