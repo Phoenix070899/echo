@@ -2,50 +2,81 @@ import AppKit
 import HubCore
 import SwiftUI
 
-/// The Ledger look: cool paper, ink blue, and a highlighter that only ever means "this needs you".
-/// Every colour has a dark-mode twin.
+/// The Ledger look in Lanh's colours: warm greys, white sheets, near-black ink, and a sand
+/// highlighter that only ever means "this needs you". Every colour has a dark-mode twin, each one
+/// a step of Lanh's palette (ui-ux/0048).
 enum Ledger {
-    static let desk = dynamic(0xE9EDF2, 0x14171C) { $0.background }
-    static let paper = dynamic(0xFBFCFD, 0x1B1F26) { $0.surface }
-    static let ink = dynamic(0x14213D, 0xE6E9EF) { $0.text }
-    static let ink2 = dynamic(0x56627A, 0xA6AFBD) { CustomLook.mix($0.text, $0.surface, 0.3) }
+    static let desk = dynamic(0xF4F3F4, 0x11100F) { $0.background }
+    static let paper = dynamic(0xFFFFFF, 0x1E1C1C) { $0.surface }
+    static let ink = dynamic(0x11100F, 0xE6E6E4) { $0.text }
+    static let ink2 = dynamic(0x484543, 0xB0AEA9) { CustomLook.mix($0.text, $0.surface, 0.3) }
     /// The quietest text; still 4.5:1 or better on every fill it sits on.
-    static let ink3 = dynamic(0x616B80, 0x949DAE) { CustomLook.mix($0.text, $0.surface, 0.4) }
-    static let rule = dynamic(0xD5DBE4, 0x2E343F) { CustomLook.mix($0.surface, $0.text, 0.14) }
-    static let wash = dynamic(0xF1F4F8, 0x232832) { CustomLook.mix($0.surface, $0.text, 0.05) }
-    static let selected = dynamic(0xEEF2FA, 0x253049) { CustomLook.mix($0.surface, $0.accent, 0.12) }
+    static let ink3 = dynamic(0x605E5B, 0x898682) { CustomLook.mix($0.text, $0.surface, 0.4) }
+    static let rule = dynamic(0xE6E6E4, 0x302E2D) { CustomLook.mix($0.surface, $0.text, 0.14) }
+    static let wash = dynamic(0xF1F1F0, 0x2A2828) { CustomLook.mix($0.surface, $0.text, 0.05) }
+    static let selected = dynamic(0xE8E7E7, 0x323030) { CustomLook.mix($0.surface, $0.accent, 0.12) }
     // Areas are told apart by fills, not lines.
     /// The strip the repo tabs sit on.
-    static let strip = dynamic(0xEEF1F5, 0x20252D) { CustomLook.mix($0.background, $0.surface, 0.4) }
+    static let strip = dynamic(0xF4F3F4, 0x11100F) { CustomLook.mix($0.background, $0.surface, 0.4) }
     /// The picked repo tab.
-    static let pill = dynamic(0xFFFFFF, 0x2C323D) { CustomLook.mix($0.surface, $0.dark ? $0.text : "#ffffff", 0.1) }
+    static let pill = dynamic(0xFFFFFF, 0x302E2D) { CustomLook.mix($0.surface, $0.dark ? $0.text : "#ffffff", 0.1) }
     /// An agent's header band in the ledger, and a panel's title row.
-    static let band = dynamic(0xF4F6F9, 0x1F242C) { CustomLook.mix($0.background, $0.surface, 0.6) }
+    static let band = dynamic(0xF4F3F4, 0x181616) { CustomLook.mix($0.background, $0.surface, 0.6) }
     /// A Needs you item's card.
-    static let needCard = dynamic(0xFFFBE6, 0x2E2A16) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.12 : 0.16) }
+    static let needCard = dynamic(0xFAF1E2, 0x2B241A) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.12 : 0.16) }
     /// Secondary buttons.
-    static let fill = dynamic(0xE9EDF2, 0x2A303A) { CustomLook.mix($0.surface, $0.text, 0.09) }
+    static let fill = dynamic(0xF1F1F0, 0x2A2828) { CustomLook.mix($0.surface, $0.text, 0.09) }
+    /// The primary button, and the text on it.
+    static let primary = dynamic(0x302E2D, 0x898682) { $0.text }
+    static let onPrimary = dynamic(0xFFFFFF, 0x1E1C1C) { $0.surface }
     /// Text fields and pickers.
-    static let field = dynamic(0xEEF1F5, 0x232832) { CustomLook.mix($0.surface, $0.text, 0.06) }
+    static let field = dynamic(0xF4F3F4, 0x262424) { CustomLook.mix($0.surface, $0.text, 0.06) }
     /// The picked one of a few choices, like a mode card.
-    static let chosen = dynamic(0xDFE6F3, 0x2C3956) { CustomLook.mix($0.surface, $0.accent, 0.22) }
+    static let chosen = dynamic(0xE8E7E7, 0x323030) { CustomLook.mix($0.surface, $0.accent, 0.22) }
     /// The highlighter. Text on it is always dark ink, in both modes.
-    static let marker = dynamic(0xFFE347, 0xFFE347) { $0.highlighter }
-    static let markerInk = rgb(0x14213D)
-    static let markerWash = dynamic(0xFFFBE0, 0x302B14) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.12 : 0.14) }
-    static let run = dynamic(0x2F5BE0, 0x7C9BFF) { $0.accent }
-    static let done = dynamic(0x23804B, 0x5BC48C)
-    static let fail = dynamic(0xC63A2E, 0xF07A6F)
+    static let marker = dynamic(0xF3DBBA, 0xE7BD80) { $0.highlighter }
+    static let markerInk = rgb(0x11100F)
+    static let markerWash = dynamic(0xFAF1E2, 0x2B241A) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.12 : 0.14) }
+    static let run = dynamic(0x016FB1, 0x84CEF2) { $0.accent }
+    static let done = dynamic(0x019D4D, 0x94D6AA)
+    static let fail = dynamic(0xD74745, 0xF9AFA6)
     /// A file changed but not committed, in the Files column; amber, apart from added green.
-    static let changed = dynamic(0x9A6700, 0xE3B341)
+    static let changed = dynamic(0xBD6A01, 0xE7BD80)
     /// Lines an agent just changed in an open preview, for a moment.
-    static let justChanged = dynamic(0xFFF4C2, 0x3A3418) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.18 : 0.3) }
-    static let okWash = dynamic(0xEAF5EE, 0x1C2E24)
-    static let okInk = dynamic(0x1D5C38, 0x95DAB3)
-    static let failWash = dynamic(0xFBECEB, 0x3A1F1D)
-    static let failInk = dynamic(0x7D221D, 0xF4B6B0)
+    static let justChanged = dynamic(0xFAF1E2, 0x3A2F1E) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.18 : 0.3) }
+    static let okWash = dynamic(0xE8F6EC, 0x013512)
+    static let okInk = dynamic(0x006222, 0xC5E9D1)
+    static let failWash = dynamic(0xFEEDEA, 0x4C1010)
+    static let failInk = dynamic(0x8C1A1F, 0xFED3CC)
 
     static let mono = Font.system(size: 12, design: .monospaced)
+
+    /// Lanh's one face, used for everything but code: 350 for text, 500 for anything heavier.
+    /// Falls back to the system face when the font is not in the app (as in tests).
+    static func font(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        let light: [Font.Weight] = [.ultraLight, .thin, .light, .regular]
+        let wght = light.contains(weight) ? 350 : 500
+        let key = "\(size)-\(wght)"
+        if let font = fonts[key] { return font }
+        let descriptor = NSFontDescriptor(fontAttributes: [.family: family])
+            .addingAttributes([NSFontDescriptor.AttributeName(kCTFontVariationAttribute as String): [0x7767_6874: wght]])
+        let font: Font = NSFont(descriptor: descriptor, size: size).flatMap { $0.familyName == family ? Font($0) : nil }
+            ?? .system(size: size, weight: wght == 350 ? .regular : .medium)
+        fonts[key] = font
+        return font
+    }
+
+    private static let family = "Google Sans Flex 18pt"
+    nonisolated(unsafe) private static var fonts: [String: Font] = [:]
+
+    /// Registers Google Sans Flex from the app's Resources/Fonts; call once at launch.
+    static func registerFonts() {
+        guard let dir = Bundle.main.resourceURL?.appendingPathComponent("Fonts"),
+              let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+        for url in files where url.pathExtension == "woff2" {
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }
+    }
 
     private static func rgb(_ hex: Int) -> Color {
         Color(nsColor: nsColor(hex))
@@ -138,7 +169,8 @@ struct Marked: View {
     }
 }
 
-/// The ledger's buttons: solid ink for the action that moves work forward, a quiet fill for the rest.
+/// The ledger's buttons: Lanh's primary for the action that moves work forward, a quiet fill for
+/// the rest; 28 pt tall, or 32 pt when large, on the row radius.
 struct LedgerButtonStyle: ButtonStyle {
     var primary = false
     var large = false
@@ -155,13 +187,13 @@ struct LedgerButtonStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .font(.system(size: large ? 13 : 12, weight: .semibold))
+                .font(Ledger.font(large ? 14 : 13, .medium))
                 .lineLimit(1)
                 .padding(.horizontal, large ? 14 : 10)
-                .padding(.vertical, large ? 8 : 5)
-                .foregroundStyle(primary ? Ledger.paper : Ledger.ink)
-                .background(primary ? Ledger.ink : Ledger.fill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.45)
+                .frame(minHeight: large ? 32 : 28)
+                .foregroundStyle(primary ? Ledger.onPrimary : Ledger.ink)
+                .background(primary ? Ledger.primary : Ledger.fill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .opacity(isEnabled ? 1 : 0.45)
                 .contentShape(Rectangle())
         }
     }
@@ -177,7 +209,7 @@ extension ButtonStyle where Self == LedgerButtonStyle {
 struct LinkButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12.5, weight: .medium))
+            .font(Ledger.font(13, .medium))
             .foregroundStyle(Ledger.run)
             .opacity(configuration.isPressed ? 0.6 : 1)
             .contentShape(Rectangle())
@@ -189,17 +221,17 @@ extension ButtonStyle where Self == LinkButtonStyle {
 }
 
 extension View {
-    /// A sheet of paper on the desk, set apart by its fill alone.
+    /// A sheet of paper on the desk, set apart by its fill alone, on Lanh's panel radius.
     func ledgerSheet() -> some View {
-        background(Ledger.paper, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        background(Ledger.paper, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     /// A text field filled rather than outlined; pair with `.textFieldStyle(.plain)`.
     func ledgerField() -> some View {
-        padding(.horizontal, 10)
+        padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(Ledger.field, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(Ledger.field, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -211,9 +243,9 @@ struct SectionHeader<Trailing: View>: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(title).font(.system(size: 14, weight: .semibold))
+            Text(title).font(Ledger.font(14, .semibold))
             if let count {
-                Text("\(count)").font(.system(size: 12.5)).foregroundStyle(Ledger.ink3).monospacedDigit()
+                Text("\(count)").font(Ledger.font(12.5)).foregroundStyle(Ledger.ink3).monospacedDigit()
             }
             Spacer(minLength: 8)
             trailing()

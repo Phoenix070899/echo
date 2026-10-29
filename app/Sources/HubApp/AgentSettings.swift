@@ -118,7 +118,7 @@ struct AgentsSettings: View {
             TextField("Model", text: $agents.model, prompt: Text("the CLI's own default"))
                 .onSubmit { agents.set("model", agents.model.trimmingCharacters(in: .whitespaces)) }
             Text("Every agent's default. A repo's .echo/settings.json and a Profile's own CLI and model come first. Name models as provider/model, like openai/gpt-5.6-terra.")
-                .font(.caption)
+                .font(Ledger.font(11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -133,7 +133,7 @@ struct AgentsSettings: View {
                 LabeledContent("Runs with", value: "\(profile.cli ?? "claude") \(profile.model)")
                 if let problem = profile.problem {
                     Text(problem)
-                        .font(.caption)
+                        .font(Ledger.font(11))
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -147,7 +147,7 @@ struct AgentsSettings: View {
                     ForEach(["low", "medium", "high", "xhigh"], id: \.self) { Text($0).tag($0) }
                 }
                 Text(profile.description)
-                    .font(.caption)
+                    .font(Ledger.font(11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
@@ -161,14 +161,14 @@ struct AgentsSettings: View {
                 }
             }
             Text("A change to Echo's own Profile is saved as yours, in ~/.echo/profiles; Reset goes back to Echo's. A change applies to Workers started after it.")
-                .font(.caption)
+                .font(Ledger.font(11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         if let failure = agents.failure {
             Section {
                 Text(failure)
-                    .font(.caption)
+                    .font(Ledger.font(11))
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -207,7 +207,7 @@ struct OrchestratorSettings: View {
                 Toggle("Merge verified branches without asking", isOn: Binding(
                     get: { rules.mergeWithoutAsking }, set: { agents.set("mergeWithoutAsking", $0) }))
                 Text("Applies to Orchestrators started or resumed after a change. Anything else you want them to do goes in your Preferences: tell an Orchestrator.")
-                    .font(.caption)
+                    .font(Ledger.font(11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

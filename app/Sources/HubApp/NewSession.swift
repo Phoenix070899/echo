@@ -25,7 +25,7 @@ struct NewSessionModal: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Start a session")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(Ledger.font(20, .semibold))
                         .accessibilityAddTraits(.isHeader)
                     Text("Pick how you want to work, then a git repo.")
                         .foregroundStyle(Ledger.ink2)
@@ -53,7 +53,7 @@ struct NewSessionModal: View {
                     .padding(.top, 18)
                 if repos.isEmpty {
                     Text("No repos yet. Choose the folder of a git repo to start.")
-                        .font(.system(size: 12.5))
+                        .font(Ledger.font(12.5))
                         .foregroundStyle(Ledger.ink2)
                         .padding(.horizontal, 24)
                 } else {
@@ -84,7 +84,7 @@ struct NewSessionModal: View {
                 // Name and model share a row, keeping the dialog short enough for small windows.
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text("Name")
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(Ledger.font(12.5, .semibold))
                         .foregroundStyle(Ledger.ink2)
                         .frame(width: 44, alignment: .leading)
                     TextField(namePlaceholder, text: $form.name)
@@ -104,7 +104,7 @@ struct NewSessionModal: View {
 
                 if let note = joinNote {
                     Text(note)
-                        .font(.system(size: 12.5))
+                        .font(Ledger.font(12.5))
                         .foregroundStyle(Ledger.ink2)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 24)
@@ -289,7 +289,7 @@ struct FieldLabel: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 12.5, weight: .semibold))
+            .font(Ledger.font(12.5, .semibold))
             .foregroundStyle(Ledger.ink2)
             .padding(.horizontal, 24)
             .padding(.bottom, 6)
@@ -309,13 +309,13 @@ struct ModeCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     AgentGlyph(kind: kind)
-                    Text(title).fontWeight(.semibold)
+                    Text(title).fontWeight(.medium)
                     Spacer(minLength: 0)
                     Image(systemName: picked ? "largecircle.fill.circle" : "circle")
                         .foregroundStyle(picked ? Ledger.ink : Ledger.ink3)
                 }
                 Text(detail)
-                    .font(.system(size: 12.5))
+                    .font(Ledger.font(12.5))
                     .foregroundStyle(Ledger.ink2)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
@@ -344,7 +344,7 @@ struct RepoChoice: View {
                 Image(systemName: picked ? "largecircle.fill.circle" : "circle")
                     .foregroundStyle(picked ? Ledger.ink : Ledger.ink3)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(info.name).fontWeight(.semibold)
+                    Text(info.name).fontWeight(.medium)
                     Text(info.shortPath)
                         .font(Ledger.mono)
                         .foregroundStyle(Ledger.ink2)
@@ -354,7 +354,7 @@ struct RepoChoice: View {
                 Spacer(minLength: 8)
                 if let status {
                     Text(status)
-                        .font(.system(size: 12))
+                        .font(Ledger.font(12))
                         .foregroundStyle(Ledger.ink2)
                 }
             }
@@ -384,7 +384,7 @@ struct RenameModal: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 0) {
                 Text("Rename \(agent.isOrchestrator ? "Orchestrator" : "session")")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(Ledger.font(18, .semibold))
                     .accessibilityAddTraits(.isHeader)
                     .padding(.horizontal, 24)
                     .padding(.top, 20)

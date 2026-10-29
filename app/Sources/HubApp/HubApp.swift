@@ -8,9 +8,14 @@ struct HubApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel.shared
 
+    init() {
+        Ledger.registerFonts()
+    }
+
     var body: some Scene {
         Window("Echo", id: "main") {
             ContentView()
+                .font(Ledger.font(13))
                 .modifier(LookRefresh())
                 .environmentObject(model)
                 .frame(minWidth: 900, minHeight: 560)

@@ -187,7 +187,7 @@ struct FilePreviewPanel: View {
                 .equatable()
             if cut {
                 Text("Only the first 1 MB is shown. Open the file to read the rest.")
-                    .font(.system(size: 12.5))
+                    .font(Ledger.font(12.5))
                     .foregroundStyle(Ledger.ink2)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 9)
@@ -204,7 +204,7 @@ struct FilePreviewPanel: View {
             Divider().overlay(Ledger.rule)
             HStack {
                 Text("\(content.pageErrors.count) error\(content.pageErrors.count == 1 ? "" : "s") in the page")
-                    .fontWeight(.semibold)
+                    .fontWeight(.medium)
                     .foregroundStyle(Ledger.fail)
                 Spacer(minLength: 8)
                 Button("Clear") { content.pageErrors = [] }.buttonStyle(.ledgerLink)
@@ -217,7 +217,7 @@ struct FilePreviewPanel: View {
                     .textSelection(.enabled)
             }
         }
-        .font(.system(size: 12.5))
+        .font(Ledger.font(12.5))
         .padding(.horizontal, 18)
         .padding(.bottom, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -242,7 +242,7 @@ struct FilePreviewPanel: View {
                 } else {
                     let files = Set(notes.map(\.path)).count
                     Text("\(notes.count) note\(notes.count == 1 ? "" : "s")\(files > 1 ? " in \(files) files" : "")")
-                        .fontWeight(.semibold)
+                        .fontWeight(.medium)
                     Button("Discard") { model.fileNotes[file.root] = nil }
                         .buttonStyle(.ledgerLink)
                 }
@@ -257,7 +257,7 @@ struct FilePreviewPanel: View {
                               : "The agent isn't running, so there is no terminal to send to.")
                 }
             }
-            .font(.system(size: 12.5))
+            .font(Ledger.font(12.5))
             .padding(.horizontal, 18)
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -270,7 +270,7 @@ struct FilePreviewPanel: View {
         HStack(spacing: 10) {
             if content.changedOnDisk {
                 Text("\(file.name) changed on disk while you were editing it.")
-                    .fontWeight(.semibold)
+                    .fontWeight(.medium)
                     .foregroundStyle(Ledger.changed)
                     .lineLimit(1)
                 Spacer(minLength: 8)
@@ -297,7 +297,7 @@ struct FilePreviewPanel: View {
                 Spacer(minLength: 8)
             }
         }
-        .font(.system(size: 12.5))
+        .font(Ledger.font(12.5))
         .padding(.horizontal, 18)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -367,7 +367,7 @@ struct FilePreviewPanel: View {
                     .help(model.terminalTypeable ? "Types @\(file.path) into the terminal" : "The agent isn't running, so there is no terminal to type into.")
             }
         }
-        .font(.system(size: 12.5))
+        .font(Ledger.font(12.5))
         .padding(.horizontal, 18)
         .padding(.vertical, 8)
         .background(Ledger.paper)
@@ -419,8 +419,8 @@ struct FilePreviewPanel: View {
 
     private func message(_ title: String, detail: String, actions: Bool = false) -> some View {
         VStack(spacing: 10) {
-            Text(title).font(.system(size: 15, weight: .semibold))
-            Text(detail).font(.system(size: 13)).foregroundStyle(Ledger.ink2)
+            Text(title).font(Ledger.font(15, .semibold))
+            Text(detail).font(Ledger.font(13)).foregroundStyle(Ledger.ink2)
             if actions {
                 HStack(spacing: 8) {
                     Button("Open") { model.openInEditor(file) }.buttonStyle(.ledgerPrimary)
@@ -454,14 +454,14 @@ struct PreviewTabs: View {
             Spacer(minLength: 8)
             if model.preview != nil {
                 Text("Esc returns to the terminal")
-                    .font(.system(size: 12))
+                    .font(Ledger.font(12))
                     .foregroundStyle(Ledger.ink3)
                     .fixedSize()
                     .padding(.trailing, 6)
                     .padding(.bottom, 6)
             }
         }
-        .font(.system(size: 13, weight: .medium))
+        .font(Ledger.font(13, .medium))
         .padding(.top, 6)
         .padding(.horizontal, 8)
         .background(Ledger.band, in: Rectangle())
@@ -472,7 +472,7 @@ struct PreviewTabs: View {
             tab(active: model.preview == nil) {
                 Button { model.preview = nil } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "terminal").font(.system(size: 11))
+                        Image(systemName: "terminal").font(Ledger.font(11))
                         Text("Terminal").fixedSize()
                     }
                     .contentShape(Rectangle())
@@ -496,7 +496,7 @@ struct PreviewTabs: View {
                                 .accessibilityLabel("Unsaved changes")
                         }
                         Button { model.closePreview(file) } label: {
-                            Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                            Image(systemName: "xmark").font(Ledger.font(9, .bold))
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(Ledger.ink3)
@@ -844,7 +844,7 @@ private struct MarkdownView: View, Equatable {
                     .id(index)
                 }
             }
-            .font(.system(size: 14))
+            .font(Ledger.font(14))
             .foregroundStyle(Ledger.ink)
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
@@ -907,7 +907,7 @@ struct MarkdownBlockView: View {
                     }
                 }
             }
-            .font(.system(size: 12.5))
+            .font(Ledger.font(12.5))
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -915,7 +915,7 @@ struct MarkdownBlockView: View {
         case .heading(let level, let text):
             VStack(alignment: .leading, spacing: 8) {
                 Text(inline(text, code: codeSize))
-                    .font(.system(size: [26, 20, 16.5, 15, 14, 13.5][min(level, 6) - 1], weight: .semibold))
+                    .font(Ledger.font([26, 20, 16.5, 15, 14, 13.5][min(level, 6) - 1], .medium))
                     .foregroundStyle(level == 6 ? Ledger.ink2 : Ledger.ink)
                 if level <= 2 { Rectangle().fill(Ledger.rule).frame(height: 1) }
             }
@@ -938,7 +938,7 @@ struct MarkdownBlockView: View {
         case .code(let code, let language):
             VStack(alignment: .leading, spacing: 6) {
                 if !language.isEmpty {
-                    Text(language).font(.system(size: 11)).foregroundStyle(Ledger.ink3)
+                    Text(language).font(Ledger.font(11)).foregroundStyle(Ledger.ink3)
                 }
                 ScrollView(.horizontal) {
                     Text(code)
@@ -962,7 +962,7 @@ struct MarkdownBlockView: View {
     private func marker(ordered: Int?, depth: Int, checked: Bool?) -> some View {
         if let checked {
             Image(systemName: checked ? "checkmark.square.fill" : "square")
-                .font(.system(size: 12.5))
+                .font(Ledger.font(12.5))
                 .foregroundStyle(checked ? Ledger.done : Ledger.ink3)
         } else if let ordered {
             Text("\(ordered).").monospacedDigit().foregroundStyle(Ledger.ink2)
@@ -992,7 +992,7 @@ private struct NoteableBlock<Content: View>: View {
                 if hover.on || marked {
                     Button(action: note) {
                         Image(systemName: "plus.bubble.fill")
-                            .font(.system(size: 12))
+                            .font(Ledger.font(12))
                             .foregroundStyle(Ledger.run)
                             .frame(width: 22, height: 22)
                             .contentShape(Rectangle())
@@ -1021,7 +1021,7 @@ private struct MarkdownTable: View {
     var body: some View {
         TableLayout(columns: header.count) {
             ForEach(header.indices, id: \.self) { column in
-                cell(header[column], row: -1, column: column).fontWeight(.semibold)
+                cell(header[column], row: -1, column: column).fontWeight(.medium)
             }
             ForEach(rows.indices, id: \.self) { row in
                 ForEach(header.indices, id: \.self) { column in
@@ -1040,7 +1040,7 @@ private struct MarkdownTable: View {
         case .trailing: .topTrailing
         }
         return Text(inlineMarkdown(text))
-            .font(.system(size: 13))
+            .font(Ledger.font(13))
             .lineSpacing(2)
             .multilineTextAlignment(alignment == .topTrailing ? .trailing : alignment == .top ? .center : .leading)
             .fixedSize(horizontal: false, vertical: true)
@@ -1323,7 +1323,7 @@ private struct ModeSwitch: View {
             ForEach(modes, id: \.self) { mode in
                 Button { if mode != picked { pick(mode) } } label: {
                     Text(mode.rawValue)
-                        .font(.system(size: 12, weight: mode == picked ? .semibold : .medium))
+                        .font(Ledger.font(12, .medium))
                         .foregroundStyle(mode == picked ? Ledger.ink : Ledger.ink2)
                         .padding(.horizontal, 10)
                         .frame(height: 22)
@@ -1351,7 +1351,7 @@ private struct HeaderIcon: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 13))
+                .font(Ledger.font(13))
                 .frame(width: 26, height: 26)
                 .background(hover.on ? Ledger.fill : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .contentShape(Rectangle())

@@ -11,10 +11,10 @@ struct MenuBarView: View {
         let waiting = model.sessions.filter { model.snapshot($0.repo).needsYouCount > 0 }
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("Needs you").font(.system(size: 15, weight: .semibold))
+                Text("Needs you").font(Ledger.font(15, .semibold))
                 if !waiting.isEmpty {
                     Text("\(model.needsYouCount) across \(waiting.count) session\(waiting.count == 1 ? "" : "s")")
-                        .font(.system(size: 12.5))
+                        .font(Ledger.font(12.5))
                         .foregroundStyle(Ledger.ink3)
                 }
             }
@@ -24,14 +24,14 @@ struct MenuBarView: View {
 
             if waiting.isEmpty {
                 Text("Nothing is waiting on you.")
-                    .font(.system(size: 12.5))
+                    .font(Ledger.font(12.5))
                     .foregroundStyle(Ledger.ink2)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 6)
             }
             ForEach(waiting) { session in
                 Text(session.name)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(Ledger.font(12, .semibold))
                     .foregroundStyle(Ledger.ink2)
                     .padding(.horizontal, 14)
                     .padding(.top, 10)
@@ -43,7 +43,7 @@ struct MenuBarView: View {
 
             Color.clear.frame(height: 10)
             Text(summary)
-                .font(.system(size: 12.5))
+                .font(Ledger.font(12.5))
                 .foregroundStyle(Ledger.ink2)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 4)
@@ -53,13 +53,13 @@ struct MenuBarView: View {
             MenuRow(title: "Quit Echo", shortcut: "⌘Q") { NSApp.terminate(nil) }
                 .keyboardShortcut("q")
             Text("Quitting the app leaves every Worker running.")
-                .font(.system(size: 11.5))
+                .font(Ledger.font(11.5))
                 .foregroundStyle(Ledger.ink3)
                 .padding(.horizontal, 14)
                 .padding(.top, 2)
                 .padding(.bottom, 10)
         }
-        .font(.system(size: 13))
+        .font(Ledger.font(13))
         .foregroundStyle(Ledger.ink)
         .frame(width: 380)
         .background(Ledger.paper)

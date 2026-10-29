@@ -176,12 +176,12 @@ public struct CustomLook: Codable, Equatable, Sendable, Identifiable {
         self.highlighter = highlighter
     }
 
-    /// Echo's own Ledger colours, to start from.
+    /// Echo's own Ledger colours, in Lanh's palette, to start from.
     public static let light = CustomLook(
-        name: "Echo Light", dark: false, background: "#e9edf2", surface: "#fbfcfd", text: "#14213d", accent: "#2f5be0", highlighter: "#ffe347"
+        name: "Echo Light", dark: false, background: "#f4f3f4", surface: "#ffffff", text: "#11100f", accent: "#016fb1", highlighter: "#f3dbba"
     )
     public static let dark = CustomLook(
-        name: "Echo Dark", dark: true, background: "#14171c", surface: "#1b1f26", text: "#e6e9ef", accent: "#7c9bff", highlighter: "#ffe347"
+        name: "Echo Dark", dark: true, background: "#11100f", surface: "#1e1c1c", text: "#e6e6e4", accent: "#84cef2", highlighter: "#e7bd80"
     )
 
     /// Echo's own looks, then one made from each terminal preset.

@@ -48,7 +48,7 @@ struct SettingsPage: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     Text("Settings")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(Ledger.font(13, .semibold))
                     Spacer()
                     Button("Done") { model.hideSettings() }
                         .buttonStyle(.ledgerLink)
@@ -68,7 +68,7 @@ struct SettingsPage: View {
             // The section's column sits in the middle of the space beside the list.
             VStack(alignment: .leading, spacing: 0) {
                 Text(section.title)
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(Ledger.font(20, .semibold))
                     .padding(.horizontal, 20)
                     .padding(.top, 24)
                     .padding(.bottom, 4)
@@ -109,21 +109,20 @@ private struct SectionRow: View {
         Button(action: pick) {
             HStack(spacing: 10) {
                 Image(systemName: item.icon)
-                    .font(.system(size: 13))
-                    .foregroundStyle(picked ? Ledger.run : Ledger.ink2)
+                    .font(Ledger.font(13))
+                    .foregroundStyle(picked ? Ledger.ink : Ledger.ink2)
                     .frame(width: 20)
                 Text(item.title)
-                    .fontWeight(picked ? .semibold : .regular)
+                    .fontWeight(picked ? .medium : .regular)
                     .foregroundStyle(Ledger.ink)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
             .frame(height: 36)
             .frame(maxWidth: .infinity)
-            .background(picked ? Ledger.selected : .clear)
-            .overlay(alignment: .leading) {
-                if picked { Rectangle().fill(Ledger.run).frame(width: 3) }
-            }
+            // Lanh's rows: a rounded fill inset from the column's edges, no bar.
+            .background(picked ? Ledger.selected : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(.horizontal, 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

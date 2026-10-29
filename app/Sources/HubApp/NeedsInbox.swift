@@ -18,7 +18,7 @@ struct NeedItem: View {
                 Marked(need.headline)
                     .lineLimit(1)
                 Spacer(minLength: 6)
-                Text(age).font(.system(size: 12)).foregroundStyle(Ledger.ink3).monospacedDigit()
+                Text(age).font(Ledger.font(12)).foregroundStyle(Ledger.ink3).monospacedDigit()
             }
             .contentShape(Rectangle())
             .onTapGesture(perform: open)
@@ -115,7 +115,7 @@ struct NeedItem: View {
         case .idlePrompt:
             HStack(spacing: 8) {
                 Text("Idle at its prompt with no Final Report. The Orchestrator nudges it.")
-                    .font(.system(size: 12.5))
+                    .font(Ledger.font(12.5))
                     .foregroundStyle(Ledger.ink2)
                 Spacer(minLength: 4)
                 Button("Open", action: open).buttonStyle(.ledger)
@@ -123,7 +123,7 @@ struct NeedItem: View {
         case .other:
             HStack(alignment: .top, spacing: 8) {
                 Text(need.body.split(separator: "\n").prefix(3).joined(separator: "\n"))
-                    .font(.system(size: 12.5))
+                    .font(Ledger.font(12.5))
                     .foregroundStyle(Ledger.ink2)
                 Spacer(minLength: 4)
                 Button("Open", action: open).buttonStyle(.ledger)

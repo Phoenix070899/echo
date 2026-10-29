@@ -40,7 +40,7 @@ private struct FilesTree: View {
             case .commits: CommitsList(files: files, root: root, state: commits)
             }
             Text(model.filesTab.hint)
-                .font(.system(size: 12))
+                .font(Ledger.font(12))
                 .foregroundStyle(Ledger.ink3)
                 .lineLimit(1)
                 .padding(.horizontal, 14)
@@ -58,13 +58,13 @@ private struct FilesTree: View {
             FileSearchResults(files: files, root: root, query: search.text)
         } else if let problem = files.problem {
             Text(problem)
-                .font(.system(size: 12.5))
+                .font(Ledger.font(12.5))
                 .foregroundStyle(Ledger.failInk)
                 .padding(14)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else if files.loaded && rows.isEmpty {
             Text("No files here yet.")
-                .font(.system(size: 12.5))
+                .font(Ledger.font(12.5))
                 .foregroundStyle(Ledger.ink3)
                 .padding(14)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -114,7 +114,7 @@ private struct FilesTree: View {
         HStack(spacing: 8) {
             if let branch = files.branch {
                 HStack(spacing: 4) {
-                    Image(systemName: "arrow.triangle.branch").font(.system(size: 10.5))
+                    Image(systemName: "arrow.triangle.branch").font(Ledger.font(10.5))
                     Text(branch).font(.system(size: 12, design: .monospaced)).lineLimit(1).truncationMode(.middle)
                 }
                 .foregroundStyle(Ledger.ink2)
@@ -134,7 +134,7 @@ private struct FilesTree: View {
             }
             Button { model.hideFiles() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(Ledger.font(11, .semibold))
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
@@ -143,7 +143,7 @@ private struct FilesTree: View {
             .help("Hide Files (⇧⌘E)")
             .accessibilityLabel("Hide Files")
         }
-        .font(.system(size: 13))
+        .font(Ledger.font(13))
         .padding(.leading, 14)
         .padding(.trailing, 8)
         .padding(.vertical, 8)
@@ -271,16 +271,16 @@ private struct FileRow: View {
         HStack(spacing: 6) {
             if entry.isFolder {
                 Image(systemName: open ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(Ledger.font(9, .semibold))
                     .foregroundStyle(Ledger.ink3)
                     .frame(width: 10)
                 Image(systemName: "folder.fill")
-                    .font(.system(size: 12))
+                    .font(Ledger.font(12))
                     .foregroundStyle(Ledger.ink3)
             } else {
                 Spacer().frame(width: 10)
                 Image(systemName: "doc")
-                    .font(.system(size: 11.5))
+                    .font(Ledger.font(11.5))
                     .foregroundStyle(Ledger.ink3)
             }
             Text(entry.name)
@@ -301,15 +301,14 @@ private struct FileRow: View {
                 EmptyView()
             }
         }
-        .font(.system(size: 13))
+        .font(Ledger.font(13))
         .padding(.leading, 10 + CGFloat(entry.depth) * 14)
         .padding(.trailing, 12)
         .frame(height: 24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear)
-        .overlay(alignment: .leading) {
-            if picked { Rectangle().fill(Ledger.run).frame(width: 3) }
-        }
+        // Lanh's rows: a rounded fill inset from the column's edges, no bar.
+        .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: click)
         .onHover { hover.on = $0 }
@@ -369,7 +368,7 @@ private struct FilesSearchField: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11.5)).foregroundStyle(Ledger.ink3)
+            Image(systemName: "magnifyingglass").font(Ledger.font(11.5)).foregroundStyle(Ledger.ink3)
             TextField("Search files and text", text: $query)
                 .textFieldStyle(.plain)
                 .focused($focused)
@@ -380,14 +379,14 @@ private struct FilesSearchField: View {
                 }
             if !query.isEmpty {
                 Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 12))
+                    Image(systemName: "xmark.circle.fill").font(Ledger.font(12))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Ledger.ink3)
                 .accessibilityLabel("Clear search")
             }
         }
-        .font(.system(size: 12.5))
+        .font(Ledger.font(12.5))
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background(Ledger.field, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -427,7 +426,7 @@ private struct FileSearchResults: View {
                             Image(systemName: model.searchIgnoredFiles ? "checkmark.square.fill" : "square")
                             Text("Ignored files")
                         }
-                        .font(.system(size: 11.5))
+                        .font(Ledger.font(11.5))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -484,12 +483,12 @@ private struct FileSearchResults: View {
 
     private func section(_ title: String, count: Int, @ViewBuilder trailing: () -> some View = { EmptyView() }) -> some View {
         HStack(spacing: 6) {
-            Text(title).fontWeight(.semibold)
+            Text(title).fontWeight(.medium)
             Text("\(count)").foregroundStyle(Ledger.ink3).monospacedDigit()
             Spacer(minLength: 8)
             trailing()
         }
-        .font(.system(size: 12))
+        .font(Ledger.font(12))
         .padding(.horizontal, 14)
         .padding(.top, 10)
         .padding(.bottom, 4)
@@ -497,7 +496,7 @@ private struct FileSearchResults: View {
 
     private func note(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12))
+            .font(Ledger.font(12))
             .foregroundStyle(Ledger.ink3)
             .padding(.horizontal, 14)
             .padding(.vertical, 4)
@@ -520,16 +519,16 @@ private struct ResultFile: View {
         let name = (path as NSString).lastPathComponent
         let folder = (path as NSString).deletingLastPathComponent
         HStack(spacing: 6) {
-            Image(systemName: "doc").font(.system(size: 11.5)).foregroundStyle(Ledger.ink3)
+            Image(systemName: "doc").font(Ledger.font(11.5)).foregroundStyle(Ledger.ink3)
             Text(name).foregroundStyle(ignored ? Ledger.ink3 : Ledger.ink).lineLimit(1)
             Text(folder)
-                .font(.system(size: 12))
+                .font(Ledger.font(12))
                 .foregroundStyle(Ledger.ink3)
                 .lineLimit(1)
                 .truncationMode(.head)
             Spacer(minLength: 0)
         }
-        .font(.system(size: 13))
+        .font(Ledger.font(13))
         .padding(.horizontal, 14)
         .frame(height: 24)
         .background(hover.on ? Ledger.wash : Color.clear)
@@ -606,7 +605,7 @@ private struct FilesTabBar: View {
                             Text("\(count)").foregroundStyle(Ledger.ink3).monospacedDigit()
                         }
                     }
-                    .font(.system(size: 12.5, weight: picked ? .semibold : .regular))
+                    .font(Ledger.font(12.5, picked ? .medium : .regular))
                     .foregroundStyle(picked ? Ledger.ink : Ledger.ink2)
                     .padding(.bottom, 7)
                     .overlay(alignment: .bottom) {
@@ -700,7 +699,7 @@ private struct FilesNote: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 12.5))
+            .font(Ledger.font(12.5))
             .foregroundStyle(color)
             .fixedSize(horizontal: false, vertical: true)
             .padding(14)
@@ -781,7 +780,7 @@ private struct CommitsList: View {
                     ?? "No commits yet.")
             } else {
                 Text(summary)
-                    .font(.system(size: 12))
+                    .font(Ledger.font(12))
                     .foregroundStyle(Ledger.ink3)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -833,7 +832,7 @@ private struct CommitsList: View {
                             if let changed = state.files[commit.hash] {
                                 if changed.isEmpty {
                                     Text("No files changed.")
-                                        .font(.system(size: 12))
+                                        .font(Ledger.font(12))
                                         .foregroundStyle(Ledger.ink3)
                                         .padding(.leading, 30)
                                         .frame(height: 24)
@@ -849,7 +848,7 @@ private struct CommitsList: View {
                                 }
                             } else {
                                 Text("Reading files…")
-                                    .font(.system(size: 12))
+                                    .font(Ledger.font(12))
                                     .foregroundStyle(Ledger.ink3)
                                     .padding(.leading, 30)
                                     .frame(height: 24)
@@ -903,12 +902,12 @@ private struct CommitRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: open ? "chevron.down" : "chevron.right")
-                .font(.system(size: 9, weight: .semibold))
+                .font(Ledger.font(9, .semibold))
                 .foregroundStyle(Ledger.ink3)
                 .frame(width: 10)
             VStack(alignment: .leading, spacing: 2) {
                 Text(commit.subject.isEmpty ? "(no message)" : commit.subject)
-                    .font(.system(size: 13))
+                    .font(Ledger.font(13))
                     .foregroundStyle(Ledger.ink)
                     .lineLimit(1)
                 HStack(spacing: 6) {
@@ -916,7 +915,7 @@ private struct CommitRow: View {
                     Text(commit.author).lineLimit(1)
                     Text(commit.when).lineLimit(1)
                 }
-                .font(.system(size: 11.5))
+                .font(Ledger.font(11.5))
                 .foregroundStyle(Ledger.ink3)
             }
             Spacer(minLength: 0)
@@ -925,10 +924,9 @@ private struct CommitRow: View {
         .padding(.trailing, 12)
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear)
-        .overlay(alignment: .leading) {
-            if picked { Rectangle().fill(Ledger.run).frame(width: 3) }
-        }
+        // Lanh's rows: a rounded fill inset from the column's edges, no bar.
+        .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: click)
         .onHover { hover.on = $0 }
@@ -958,13 +956,13 @@ private struct ChangedFileRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "doc").font(.system(size: 11.5)).foregroundStyle(Ledger.ink3)
+            Image(systemName: "doc").font(Ledger.font(11.5)).foregroundStyle(Ledger.ink3)
             Text((file.path as NSString).lastPathComponent)
                 .foregroundStyle(gitMarkColor(file.mark))
                 .lineLimit(1)
                 .layoutPriority(1)
             Text((file.path as NSString).deletingLastPathComponent)
-                .font(.system(size: 12))
+                .font(Ledger.font(12))
                 .foregroundStyle(Ledger.ink3)
                 .lineLimit(1)
                 .truncationMode(.head)
@@ -974,15 +972,14 @@ private struct ChangedFileRow: View {
                 .foregroundStyle(gitMarkColor(file.mark))
                 .accessibilityLabel(gitMarkLabel(file.mark))
         }
-        .font(.system(size: 13))
+        .font(Ledger.font(13))
         .padding(.leading, 14 + indent)
         .padding(.trailing, 12)
         .frame(height: 24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear)
-        .overlay(alignment: .leading) {
-            if picked { Rectangle().fill(Ledger.run).frame(width: 3) }
-        }
+        // Lanh's rows: a rounded fill inset from the column's edges, no bar.
+        .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: click)
         .onHover { hover.on = $0 }

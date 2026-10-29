@@ -33,7 +33,7 @@ struct ChangesView: View {
         return HStack(spacing: 10) {
             if state.loaded {
                 Text("\(files.count) file\(files.count == 1 ? "" : "s") changed")
-                    .fontWeight(.semibold)
+                    .fontWeight(.medium)
                 Text("+\(added)").foregroundStyle(Ledger.okInk)
                 Text("-\(removed)").foregroundStyle(Ledger.failInk)
                 Text(worker.branch.map { "on \($0), since it branched" } ?? "uncommitted in the repo, yours included")
@@ -46,7 +46,7 @@ struct ChangesView: View {
                 .buttonStyle(.ledger)
                 .disabled(state.loading)
         }
-        .font(.system(size: 12.5))
+        .font(Ledger.font(12.5))
         .padding(.horizontal, 18)
         .padding(.vertical, 8)
         .background(Ledger.paper)
@@ -75,7 +75,7 @@ struct ChangesView: View {
                         }
                         if state.truncated {
                             Text("The diff is cut at 2 MB. Read the rest in \(worker.branch == nil ? "the repo" : "the worktree").")
-                                .font(.system(size: 12.5))
+                                .font(Ledger.font(12.5))
                                 .foregroundStyle(Ledger.ink2)
                                 .padding(18)
                         }
@@ -138,7 +138,7 @@ struct ChangesView: View {
     private func lines(of file: DiffFile, at index: Int) -> some View {
         if file.binary {
             Text("A binary file; no lines to show.")
-                .font(.system(size: 12.5))
+                .font(Ledger.font(12.5))
                 .foregroundStyle(Ledger.ink3)
                 .padding(.horizontal, 18)
                 .padding(.vertical, 8)
@@ -183,7 +183,7 @@ struct ChangesView: View {
                     .foregroundStyle(Ledger.ink3)
                     .lineLimit(1)
             } else {
-                Text("\(comments.count) comment\(comments.count == 1 ? "" : "s")").fontWeight(.semibold)
+                Text("\(comments.count) comment\(comments.count == 1 ? "" : "s")").fontWeight(.medium)
                 Button("Discard") { model.reviews[key] = nil }
                     .buttonStyle(.ledgerLink)
             }
@@ -205,7 +205,7 @@ struct ChangesView: View {
                 }
             }
         }
-        .font(.system(size: 12.5))
+        .font(Ledger.font(12.5))
         .padding(.horizontal, 18)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -219,9 +219,9 @@ struct ChangesView: View {
 
     private func message(_ title: String, detail: String) -> some View {
         VStack(spacing: 6) {
-            Text(title).font(.system(size: 15, weight: .semibold))
+            Text(title).font(Ledger.font(15, .semibold))
             Text(detail)
-                .font(.system(size: 13))
+                .font(Ledger.font(13))
                 .foregroundStyle(Ledger.ink2)
                 .multilineTextAlignment(.center)
                 .textSelection(.enabled)
@@ -289,7 +289,7 @@ struct DiffFileHeader: View {
         Button(action: toggle) {
             HStack(spacing: 8) {
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(Ledger.font(10, .semibold))
                     .foregroundStyle(Ledger.ink3)
                     .frame(width: 12)
                 Text(file.path)
@@ -305,7 +305,7 @@ struct DiffFileHeader: View {
                 Text("+\(file.additions)").foregroundStyle(Ledger.okInk)
                 Text("-\(file.deletions)").foregroundStyle(Ledger.failInk)
             }
-            .font(.system(size: 12))
+            .font(Ledger.font(12))
             .padding(.horizontal, 18)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -331,7 +331,7 @@ struct DiffLineRow: View {
             Group {
                 if commentable && (hover.on || marked) {
                     Image(systemName: "plus.bubble.fill")
-                        .font(.system(size: 11))
+                        .font(Ledger.font(11))
                         .foregroundStyle(Ledger.run)
                         .padding(.trailing, 8)
                 } else {
@@ -403,14 +403,14 @@ struct CommentCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(text)
-                .font(.system(size: 13))
+                .font(Ledger.font(13))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
             HStack(spacing: 14) {
                 Button("Edit", action: edit).buttonStyle(.ledgerLink)
                 Button("Delete", action: delete).buttonStyle(.ledgerLink)
             }
-            .font(.system(size: 12))
+            .font(Ledger.font(12))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
@@ -436,7 +436,7 @@ struct CommentEditor: View {
         VStack(alignment: .leading, spacing: 8) {
             TextField(placeholder, text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .font(Ledger.font(13))
                 .lineLimit(2...8)
                 .ledgerField()
                 .focused($focused)

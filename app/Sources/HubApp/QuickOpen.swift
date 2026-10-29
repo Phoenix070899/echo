@@ -23,7 +23,7 @@ struct QuickOpen: View {
                     Image(systemName: "magnifyingglass").foregroundStyle(Ledger.ink3)
                     TextField("Go to a repo, agent, Worker or command", text: $search.query)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 16))
+                        .font(Ledger.font(16))
                         // Search terms, not prose: no completion panel over the results.
                         .autocorrectionDisabled()
                         .textContentType(.none)
@@ -38,7 +38,7 @@ struct QuickOpen: View {
 
                 if results.isEmpty {
                     Text("Nothing matches \u{201C}\(search.query)\u{201D}.")
-                        .font(.system(size: 13))
+                        .font(Ledger.font(13))
                         .foregroundStyle(Ledger.ink2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(16)
@@ -211,13 +211,13 @@ struct QuickOpenRow: View {
         Button(action: run) {
             HStack(spacing: 10) {
                 Image(systemName: item.icon)
-                    .font(.system(size: 12))
+                    .font(Ledger.font(12))
                     .foregroundStyle(Ledger.ink3)
                     .frame(width: 18)
                 Text(item.title).lineLimit(1)
                 Spacer(minLength: 12)
                 Text(item.detail)
-                    .font(.system(size: 12))
+                    .font(Ledger.font(12))
                     .foregroundStyle(Ledger.ink3)
                     .lineLimit(1)
             }

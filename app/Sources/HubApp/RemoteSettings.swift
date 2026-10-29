@@ -13,14 +13,14 @@ struct RemoteSettings: View {
                 .disabled(remote.status == nil || remote.busy)
             if let line = remote.line {
                 Text(line.text)
-                    .font(.caption)
+                    .font(Ledger.font(11))
                     .foregroundStyle(line.problem ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
             if remote.status?.tailscale == "missing" {
                 Link("Get Tailscale for this Mac and your phone", destination: URL(string: "https://tailscale.com/download")!)
-                    .font(.caption)
+                    .font(Ledger.font(11))
             }
             if let status = remote.status, status.enabled, status.url != nil || status.tailscale == "test", let link = status.pairLink {
                 HStack(alignment: .top, spacing: 16) {
@@ -29,7 +29,7 @@ struct RemoteSettings: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Scan with your phone's camera to pair it.")
                         Text("Then tap Share, Add to Home Screen, open Echo from there, and turn on notifications in its Settings.")
-                            .font(.caption)
+                            .font(Ledger.font(11))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 8) {
@@ -45,7 +45,7 @@ struct RemoteSettings: View {
                 .padding(.vertical, 4)
             }
             Text("Your agents' ledger, Needs, and screens on your phone, through Tailscale only. Whoever has the pairing link can drive your agents; keep it private.")
-                .font(.caption)
+                .font(Ledger.font(11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

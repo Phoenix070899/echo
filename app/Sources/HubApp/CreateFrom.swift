@@ -48,7 +48,7 @@ struct CreateFromSection: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center) {
                 (Text("Create from ").foregroundStyle(Ledger.ink2) + Text("(optional)").foregroundStyle(Ledger.ink3))
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(Ledger.font(12.5, .semibold))
                 Spacer(minLength: 8)
                 basePicker
             }
@@ -108,9 +108,9 @@ struct CreateFromSection: View {
                 Text(form.base.isEmpty ? "HEAD" : form.base)
                     .font(.system(size: 12, design: .monospaced))
                     .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
+                Image(systemName: "chevron.up.chevron.down").font(Ledger.font(9, .semibold))
             }
-            .font(.system(size: 12))
+            .font(Ledger.font(12))
             .foregroundStyle(Ledger.ink2)
             .padding(.horizontal, 9)
             .frame(height: 26)
@@ -131,7 +131,7 @@ struct CreateFromSection: View {
         return VStack(spacing: 2) {
             if shown.isEmpty {
                 Text(form.branches.isEmpty ? "Reading branches…" : text.isEmpty ? "No branches." : "No branch matches; Return makes a new one.")
-                    .font(.system(size: 12.5))
+                    .font(Ledger.font(12.5))
                     .foregroundStyle(Ledger.ink3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 6)
@@ -150,7 +150,7 @@ struct CreateFromSection: View {
                             .truncationMode(.middle)
                         Spacer(minLength: 8)
                         Text(place(of: branch))
-                            .font(.system(size: 12))
+                            .font(Ledger.font(12))
                             .foregroundStyle(Ledger.ink3)
                     }
                     .padding(.horizontal, 10)
@@ -212,7 +212,7 @@ struct CreateFromSection: View {
 
     private func note(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 12.5))
+            .font(Ledger.font(12.5))
             .foregroundStyle(color)
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
@@ -229,10 +229,10 @@ private struct TabButton: View {
     var body: some View {
         Button(action: pick) {
             HStack(spacing: 6) {
-                Image(systemName: tab.icon).font(.system(size: 12))
+                Image(systemName: tab.icon).font(Ledger.font(12))
                 Text(tab.title)
             }
-            .font(.system(size: 13, weight: picked ? .semibold : .regular))
+            .font(Ledger.font(13, picked ? .medium : .regular))
             .foregroundStyle(picked ? Ledger.ink : Ledger.ink3)
             .padding(.bottom, 8)
             .overlay(alignment: .bottom) {

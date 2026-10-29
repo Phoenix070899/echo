@@ -34,7 +34,7 @@ struct ContentView: View {
                 agents
             }
         }
-        .font(.system(size: 13))
+        .font(Ledger.font(13))
         .foregroundStyle(Ledger.ink)
         .tint(Ledger.run)
         .background(Ledger.desk)
@@ -114,7 +114,7 @@ struct TitleBar: View {
             HStack(spacing: 18) {
                 HStack(spacing: 8) {
                     EchoMark().frame(width: 22, height: 22)
-                    Text("Echo").font(.system(size: 14, weight: .semibold)).foregroundStyle(Ledger.ink)
+                    Text("Echo").font(Ledger.font(14, .semibold)).foregroundStyle(Ledger.ink)
                 }
                 Spacer(minLength: 16)
                 if model.sessions.isEmpty && !model.daemonDown {
@@ -134,7 +134,7 @@ struct TitleBar: View {
             .padding(.leading, model.fullScreen ? 16 : 86)
             .padding(.trailing, 16)
         }
-        .font(.system(size: 12.5))
+        .font(Ledger.font(12.5))
         .frame(height: Self.height)
     }
 
@@ -149,17 +149,17 @@ struct SearchField: View {
     var body: some View {
         Button { model.quickOpenShown = true } label: {
             HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").font(.system(size: 13, weight: .semibold))
+                Image(systemName: "magnifyingglass").font(Ledger.font(13, .semibold))
                 Text("Search repos, agents, Workers and commands")
                 Spacer(minLength: 8)
                 Text("⌘K")
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(Ledger.font(11.5, .semibold))
                     .foregroundStyle(Ledger.ink2)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Ledger.strip, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             }
-            .font(.system(size: 13.5))
+            .font(Ledger.font(13.5))
             .foregroundStyle(Ledger.ink2)
             .padding(.horizontal, 12)
             .frame(width: 520, height: 30)
@@ -213,7 +213,7 @@ struct RepoTabs: View {
             }
             NewSessionMenu()
         }
-        .font(.system(size: 13))
+        .font(Ledger.font(13))
         .padding(6)
         .background(Ledger.strip, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .padding(.horizontal, 8)
@@ -240,7 +240,7 @@ struct RepoTab: View {
                 Text(session.name).fontWeight(.medium)
                 if needs > 0 {
                     Text("\(needs)")
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(Ledger.font(11.5, .semibold))
                         .foregroundStyle(Ledger.markerInk)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -289,7 +289,7 @@ struct NewSessionMenu: View {
             .disabled(model.selectedRepo == nil)
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 12, weight: .semibold))
+                .font(Ledger.font(12, .semibold))
                 .frame(width: 26, height: 26)
                 .contentShape(Rectangle())
         }
@@ -387,7 +387,7 @@ struct LedgerToggle: View {
         let title = model.ledgerCollapsed ? "Expand ledger" : "Collapse ledger"
         Button { model.toggleLedger() } label: {
             Image(systemName: "sidebar.left")
-                .font(.system(size: 14))
+                .font(Ledger.font(14))
                 .foregroundStyle(Ledger.ink2)
                 .frame(width: 32, height: 28)
                 .contentShape(Rectangle())
@@ -405,7 +405,7 @@ struct SettingsButton: View {
     var body: some View {
         Button { model.showSettings() } label: {
             Image(systemName: "gearshape")
-                .font(.system(size: 14))
+                .font(Ledger.font(14))
                 .foregroundStyle(Ledger.ink2)
                 .frame(width: 32, height: 28)
                 .contentShape(Rectangle())
@@ -429,7 +429,7 @@ struct LedgerRail: View {
                     VStack(spacing: 2) {
                         if snapshot.needsYouCount > 0 {
                             Text("\(snapshot.needsYouCount)")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(Ledger.font(11, .semibold))
                                 .foregroundStyle(Ledger.markerInk)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
@@ -603,7 +603,7 @@ struct AgentGroupView: View {
                             SubHeader(title: "Done", count: group.settled.count) {
                                 HStack(spacing: 12) {
                                     if unread > 0 {
-                                        Text("\(unread) unread").font(.system(size: 12)).foregroundStyle(Ledger.ink3)
+                                        Text("\(unread) unread").font(Ledger.font(12)).foregroundStyle(Ledger.ink3)
                                     }
                                     if group.settled.count > Self.doneShown {
                                         Button(showAllDone.on ? "Show fewer" : "Show all") { showAllDone.on.toggle() }
@@ -618,7 +618,7 @@ struct AgentGroupView: View {
                                     } label: {
                                         Image(systemName: "ellipsis")
                                             .rotationEffect(.degrees(90))
-                                            .font(.system(size: 12.5, weight: .medium))
+                                            .font(Ledger.font(12.5, .medium))
                                             .foregroundStyle(Ledger.run)
                                             .frame(width: 16, height: 16)
                                             .contentShape(Rectangle())
@@ -659,7 +659,7 @@ struct AgentHeader: View {
         HStack(spacing: 8) {
             Button { model.toggleCollapsed(agent.id) } label: {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(Ledger.font(10, .semibold))
                     .rotationEffect(.degrees(folded ? 0 : 90))
                     .foregroundStyle(Ledger.ink3)
                     .frame(width: 22, height: 26)
@@ -671,28 +671,28 @@ struct AgentHeader: View {
                 HStack(spacing: 8) {
                     AgentGlyph(kind: agent.kind).foregroundStyle(Ledger.ink3)
                     Text(agent.displayName)
-                        .fontWeight(.semibold)
+                        .fontWeight(.medium)
                         .italic(agent.name == nil)
                         .foregroundStyle(agent.name == nil ? Ledger.ink2 : Ledger.ink)
                         .lineLimit(1)
                     Text(meta)
-                        .font(.system(size: 12))
+                        .font(Ledger.font(12))
                         .foregroundStyle(Ledger.ink3)
                         .lineLimit(1)
                     Spacer(minLength: 6)
                     if folded && !group.running.isEmpty {
-                        Text("\(group.running.count) running").font(.system(size: 12)).foregroundStyle(Ledger.ink2)
+                        Text("\(group.running.count) running").font(Ledger.font(12)).foregroundStyle(Ledger.ink2)
                     }
                     if !group.needs.isEmpty {
                         Text("\(group.needs.count)")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(Ledger.font(11, .semibold))
                             .foregroundStyle(Ledger.markerInk)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .background(Ledger.marker, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                     }
                     Circle().fill(agent.live ? Ledger.done : Ledger.ink3).frame(width: 7, height: 7)
-                    Text(state).font(.system(size: 12)).foregroundStyle(Ledger.ink2)
+                    Text(state).font(Ledger.font(12)).foregroundStyle(Ledger.ink2)
                 }
                 .contentShape(Rectangle())
             }
@@ -705,10 +705,9 @@ struct AgentHeader: View {
         // The whole row selects the agent, padding included; the chevron keeps its own click.
         .contentShape(Rectangle())
         .onTapGesture { model.select(.agent(repo: repo, id: agent.id)) }
-        .background { Rectangle().fill(selected ? Ledger.selected : Color.clear) }
-        .overlay(alignment: .leading) {
-            if selected { Rectangle().fill(agent.live ? Ledger.run : Ledger.ink3).frame(width: 3) }
-        }
+        // Lanh's rows: a rounded fill inset from the column's edges, no bar.
+        .background(selected ? Ledger.selected : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 8)
         .contextMenu {
             Button("Rename…") { model.renaming = agent }
             if agent.isTerminal {
@@ -753,8 +752,8 @@ struct SubHeader<Trailing: View>: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Ledger.ink2)
-            Text("\(count)").font(.system(size: 12)).foregroundStyle(Ledger.ink3).monospacedDigit()
+            Text(title).font(Ledger.font(12, .semibold)).foregroundStyle(Ledger.ink2)
+            Text("\(count)").font(Ledger.font(12)).foregroundStyle(Ledger.ink3).monospacedDigit()
             Spacer(minLength: 8)
             trailing()
         }
@@ -823,9 +822,9 @@ struct AgentPanel: View {
         VStack(spacing: 0) {
             PanelHeader {
                 AgentGlyph(kind: agent.kind).foregroundStyle(Ledger.ink3)
-                Text(agent.displayName).fontWeight(.semibold).lineLimit(1)
+                Text(agent.displayName).fontWeight(.medium).lineLimit(1)
                 Text(meta)
-                    .font(.system(size: 12.5))
+                    .font(Ledger.font(12.5))
                     .foregroundStyle(Ledger.ink3)
                     .lineLimit(1)
                 Spacer(minLength: 8)
@@ -833,7 +832,7 @@ struct AgentPanel: View {
                 } else if agent.live {
                     Button { model.stopAgent(agent.id) } label: {
                         Image(systemName: "stop.circle")
-                            .font(.system(size: 14))
+                            .font(Ledger.font(14))
                             .foregroundStyle(Ledger.ink2)
                             .frame(width: 26, height: 26)
                             .contentShape(Rectangle())
@@ -896,7 +895,7 @@ struct LiveTerminal: View {
                              focusRequest: model.terminalFocusRequest)
             } else {
                 Text("Starting the multiplexer…")
-                    .font(.system(size: 12.5))
+                    .font(Ledger.font(12.5))
                     .foregroundStyle(TerminalTheme.color(model.appearance.theme.foreground).opacity(0.6))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -967,9 +966,9 @@ struct FirstLaunch: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Start your first session")
-                .font(.system(size: 28, weight: .semibold))
+                .font(Ledger.font(28, .semibold))
             Text("A session is an Orchestrator, or Claude Code on its own, working in one git repo. You talk to it; it hands Tasks to Workers and reports back. Workers keep running when this window is closed.")
-                .font(.system(size: 15))
+                .font(Ledger.font(15))
                 .foregroundStyle(Ledger.ink2)
                 .fixedSize(horizontal: false, vertical: true)
             Button("Open a repo") { model.showNewSession() }
@@ -1007,7 +1006,7 @@ struct WorkerPanel: View {
                         Text("Typing here is an Intervention. \(worker.id) does what you ask and tells the Orchestrator.")
                             .lineLimit(1)
                     }
-                    .font(.system(size: 12.5))
+                    .font(Ledger.font(12.5))
                     .foregroundStyle(Ledger.ink2)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 9)
@@ -1048,13 +1047,13 @@ struct WorkerHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                Text("\(worker.id) \(worker.profile)").fontWeight(.semibold)
+                Text("\(worker.id) \(worker.profile)").fontWeight(.medium)
                 Text(worker.title).foregroundStyle(Ledger.ink2).lineLimit(1)
                 HStack(spacing: 6) {
                     StateMark(color: worker.markColor)
                     Text(worker.phaseLabel)
                 }
-                .font(.system(size: 12.5))
+                .font(Ledger.font(12.5))
                 .foregroundStyle(worker.markColor)
                 .padding(.leading, 4)
                 Spacer(minLength: 8)
@@ -1098,7 +1097,7 @@ struct WorkerHeader: View {
 
 enum Fact {
     static func label(_ text: String) -> some View {
-        Text(text).font(.system(size: 11.5)).foregroundStyle(Ledger.ink3)
+        Text(text).font(Ledger.font(11.5)).foregroundStyle(Ledger.ink3)
     }
 
     static func value(_ text: String, mono: Bool = false) -> some View {
@@ -1119,7 +1118,7 @@ struct FinalReportView: View {
             VStack(alignment: .leading, spacing: 30) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(worker.finalReport == nil ? "No Final Report" : "Final Report")
-                        .font(.system(size: 30, weight: .bold))
+                        .font(Ledger.font(30, .bold))
                     Spacer(minLength: 8)
                     if let report = worker.finalReport {
                         Button("Copy report") {
@@ -1134,7 +1133,7 @@ struct FinalReportView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             if let title = section.title {
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text(title).font(.system(size: 19, weight: .semibold))
+                                    Text(title).font(Ledger.font(19, .semibold))
                                     Rectangle().fill(Ledger.rule).frame(height: 1)
                                 }
                             }
@@ -1154,7 +1153,7 @@ struct FinalReportView: View {
                         .foregroundStyle(Ledger.ink2)
                 }
             }
-            .font(.system(size: 15))
+            .font(Ledger.font(15))
             .foregroundStyle(Ledger.ink)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
@@ -1220,12 +1219,12 @@ struct LedgerRow: View {
                         .foregroundStyle(Ledger.ink3)
                         .frame(width: 32, alignment: .leading)
                     Text(worker.profile)
-                        .font(.system(size: 12.5))
+                        .font(Ledger.font(12.5))
                         .foregroundStyle(Ledger.ink2)
                         .lineLimit(1)
                         .frame(width: 56, alignment: .leading)
                     Text(worker.title)
-                        .fontWeight(unread ? .semibold : .regular)
+                        .fontWeight(unread ? .medium : .regular)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .foregroundStyle(worker.isTrouble ? Ledger.fail : Ledger.ink)
@@ -1236,7 +1235,7 @@ struct LedgerRow: View {
                     }
                     TimelineView(.periodic(from: .now, by: 5)) { context in
                         Text(formatAge(worker.quietFor(at: context.date)))
-                            .font(.system(size: 12))
+                            .font(Ledger.font(12))
                             .monospacedDigit()
                             .foregroundStyle(Ledger.ink3)
                     }
@@ -1255,7 +1254,7 @@ struct LedgerRow: View {
                         }
                         if let line = detailLine {
                             Text(line)
-                                .font(.system(size: 12))
+                                .font(Ledger.font(12))
                                 .foregroundStyle(Ledger.ink2)
                                 .lineLimit(1)
                                 .contentTransition(.opacity)
@@ -1268,10 +1267,9 @@ struct LedgerRow: View {
             .padding(.trailing, 16)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(selected ? Ledger.selected : hovering.on ? Ledger.wash : Color.clear)
-            .overlay(alignment: .leading) {
-                if selected { Rectangle().fill(Ledger.run).frame(width: 3) }
-            }
+            // Lanh's rows: a rounded fill inset from the column's edges, no bar.
+            .background(selected ? Ledger.selected : hovering.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(.horizontal, 8)
             .contentShape(Rectangle())
             .animation(.easeOut(duration: 0.15), value: selected)
             .animation(.easeOut(duration: 0.12), value: hovering.on)
@@ -1303,11 +1301,11 @@ struct ConfirmationLine: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
+            Image(systemName: "checkmark").font(Ledger.font(11, .bold))
             Text(text).lineLimit(2)
             Spacer(minLength: 0)
         }
-        .font(.system(size: 12.5))
+        .font(Ledger.font(12.5))
         .foregroundStyle(Ledger.okInk)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -1327,7 +1325,7 @@ struct Hint: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 12.5))
+            .font(Ledger.font(12.5))
             .foregroundStyle(Ledger.ink2)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 16)
@@ -1340,8 +1338,8 @@ struct EmptyLedger: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                Text("Orchestrator").fontWeight(.semibold)
-                Text("not started").font(.system(size: 12.5))
+                Text("Orchestrator").fontWeight(.medium)
+                Text("not started").font(Ledger.font(12.5))
             }
             .foregroundStyle(Ledger.ink3)
             .padding(.horizontal, 16)
@@ -1372,7 +1370,7 @@ struct UsageInline: View {
                         HStack(spacing: 4) {
                             Text(limit.name).foregroundStyle(Ledger.ink2)
                             Text("\(limit.percent)%")
-                                .fontWeight(.semibold)
+                                .fontWeight(.medium)
                                 .monospacedDigit()
                                 .foregroundStyle(limit.percent >= 90 ? Ledger.fail : Ledger.ink)
                             // Counts down between snapshots, which repeat an unchanged `resets`.
@@ -1413,9 +1411,9 @@ struct DisconnectedBanner: View {
         HStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle")
             VStack(alignment: .leading, spacing: 2) {
-                Text("Can’t reach the daemon").fontWeight(.semibold)
+                Text("Can’t reach the daemon").fontWeight(.medium)
                 Text("Workers keep running inside it. The ledger shows the last update and reconnects on its own; approving and replying wait until then.")
-                    .font(.system(size: 12.5))
+                    .font(Ledger.font(12.5))
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
@@ -1443,7 +1441,7 @@ struct ErrorBanner: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Dismiss")
         }
-        .font(.system(size: 12.5))
+        .font(Ledger.font(12.5))
         .foregroundStyle(Ledger.failInk)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -1461,7 +1459,7 @@ struct NoticeBanner: View {
             Text(text).lineLimit(2)
             Spacer(minLength: 8)
         }
-        .font(.system(size: 12.5))
+        .font(Ledger.font(12.5))
         .foregroundStyle(Ledger.ink2)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)

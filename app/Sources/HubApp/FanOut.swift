@@ -20,7 +20,7 @@ struct FanOutModal: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Fan out a Task")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(Ledger.font(20, .semibold))
                         .accessibilityAddTraits(.isHeader)
                     Text("Several Workers try the same Task, each on its own branch. Compare what they did, then keep one.")
                         .foregroundStyle(Ledger.ink2)
@@ -77,7 +77,7 @@ struct FanOutModal: View {
                                 .autocorrectionDisabled()
                                 .ledgerField()
                             Text(branchNote)
-                                .font(.system(size: 12))
+                                .font(Ledger.font(12))
                                 .foregroundStyle(Ledger.ink3)
                         }
                     }
@@ -87,7 +87,7 @@ struct FanOutModal: View {
 
                 if let note = orchestratorNote {
                     Text(note)
-                        .font(.system(size: 12.5))
+                        .font(Ledger.font(12.5))
                         .foregroundStyle(Ledger.ink2)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 24)
@@ -95,7 +95,7 @@ struct FanOutModal: View {
                 }
                 if let problem = form.problem {
                     Text(problem)
-                        .font(.system(size: 12.5))
+                        .font(Ledger.font(12.5))
                         .foregroundStyle(Ledger.failInk)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
@@ -137,7 +137,7 @@ struct FanOutModal: View {
 
     private func label(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12.5, weight: .semibold))
+            .font(Ledger.font(12.5, .semibold))
             .foregroundStyle(Ledger.ink2)
             .frame(width: 56, alignment: .leading)
     }
@@ -223,12 +223,12 @@ struct CompareView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(kept == nil ? "\(tries.count) tries of \(title)" : "The kept try of \(title)")
-                    .fontWeight(.semibold)
+                    .fontWeight(.medium)
                 Text(kept ?? "Each try works on its own branch. Keep one: its branch is merged into the repo and the others close.")
                     .foregroundStyle(kept == nil ? Ledger.ink3 : Ledger.okInk)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .font(.system(size: 12.5))
+            .font(Ledger.font(12.5))
             .padding(.horizontal, 18)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -267,13 +267,13 @@ struct TryColumn: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text("\(worker.id) \(worker.profile)").fontWeight(.semibold)
+                Text("\(worker.id) \(worker.profile)").fontWeight(.medium)
                 Spacer(minLength: 4)
                 HStack(spacing: 6) {
                     StateMark(color: worker.markColor)
                     Text(worker.phaseLabel)
                 }
-                .font(.system(size: 12))
+                .font(Ledger.font(12))
                 .foregroundStyle(worker.markColor)
             }
             Text(worker.branch ?? worker.place)
@@ -305,7 +305,7 @@ struct TryColumn: View {
             }
             .padding(.top, 2)
         }
-        .font(.system(size: 12.5))
+        .font(Ledger.font(12.5))
         .padding(14)
         .background(Ledger.wash, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         // Read again as it works and when it settles.
@@ -345,7 +345,7 @@ struct TryColumn: View {
                             Text("+\(file.additions)").foregroundStyle(Ledger.okInk)
                             Text("-\(file.deletions)").foregroundStyle(Ledger.failInk)
                         }
-                        .font(.system(size: 11.5))
+                        .font(Ledger.font(11.5))
                     }
                     if files.count > 8 {
                         Text("and \(files.count - 8) more").foregroundStyle(Ledger.ink3)
@@ -364,7 +364,7 @@ struct TryColumn: View {
                 ForEach(Array(ReportSection.parse(text).enumerated()), id: \.offset) { _, section in
                     VStack(alignment: .leading, spacing: 2) {
                         if let title = section.title {
-                            Text(title).fontWeight(.semibold)
+                            Text(title).fontWeight(.medium)
                         }
                         Text(section.body)
                             .foregroundStyle(Ledger.ink2)

@@ -27,7 +27,7 @@ struct SettingsView: View {
                         Text(model.appearance.theme.isDark
                              ? "Dark, because the terminal theme is dark."
                              : "Light, because the terminal theme is light.")
-                            .font(.caption)
+                            .font(Ledger.font(11))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -52,7 +52,7 @@ struct SettingsView: View {
                         ColorPicker("Accent", selection: lookColour(\.accent), supportsOpacity: false)
                         ColorPicker("Highlighter", selection: lookColour(\.highlighter), supportsOpacity: false)
                         Text("Lines, fields, and cards are mixed from these. Mode sets the system controls and the done, failed, and changed colours.")
-                            .font(.caption)
+                            .font(Ledger.font(11))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -64,7 +64,7 @@ struct SettingsView: View {
                     Section {
                         HStack {
                             Text(draft.look == model.customLook ? "Applied." : "Not applied yet.")
-                                .font(.caption)
+                                .font(Ledger.font(11))
                                 .foregroundStyle(.secondary)
                             Spacer()
                             Button("Revert") { draft.look = model.customLook }
@@ -142,12 +142,12 @@ struct SettingsView: View {
                     if let path = model.appearance.backgroundImage {
                         if !FileManager.default.fileExists(atPath: path) {
                             Text("The image is gone; terminals show the theme background.")
-                                .font(.caption)
+                                .font(Ledger.font(11))
                                 .foregroundStyle(.orange)
                         }
                     }
                     Text("Choose an image to show behind every terminal. Text and coloured cells stay solid; dim or blur the image until the text reads easily.")
-                        .font(.caption)
+                        .font(Ledger.font(11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -161,7 +161,7 @@ struct SettingsView: View {
                     }
                     if NSFont(name: model.appearance.fontName, size: 12) == nil {
                         Text("Not installed; the system monospaced font is used.")
-                            .font(.caption)
+                            .font(Ledger.font(11))
                             .foregroundStyle(.orange)
                     }
                 }
@@ -188,11 +188,11 @@ struct SettingsView: View {
                         }
                     }
                     Text(help)
-                        .font(.caption)
+                        .font(Ledger.font(11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Text("A change applies to terminals opened after it.")
-                        .font(.caption)
+                        .font(Ledger.font(11))
                         .foregroundStyle(.secondary)
                 }
             }

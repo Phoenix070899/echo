@@ -69,7 +69,7 @@ struct MemorySettings: View {
             if let failure = memory.failure {
                 Section {
                     Text(failure)
-                        .font(.caption)
+                        .font(Ledger.font(11))
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
@@ -93,7 +93,7 @@ struct MemorySettings: View {
                 let lines = prefs.bullets.filter { $0.section == section }
                 if !lines.isEmpty {
                     Text(section)
-                        .font(.caption.weight(.semibold))
+                        .font(Ledger.font(11, .medium))
                         .foregroundStyle(.secondary)
                     ForEach(lines, id: \.self) { bullet in
                         BulletRow(text: bullet.text) { memory.remove("preferences", bullet) }
@@ -153,7 +153,7 @@ struct MemorySettings: View {
     private func footer(_ text: String, path: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(text)
-                .font(.caption)
+                .font(Ledger.font(11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
@@ -181,7 +181,7 @@ private struct BulletRow: View {
             Spacer(minLength: 8)
             Button(action: remove) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(Ledger.font(10, .semibold))
                     .frame(width: 20, height: 20)
                     .contentShape(Rectangle())
             }

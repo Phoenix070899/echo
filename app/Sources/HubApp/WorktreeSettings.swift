@@ -73,23 +73,23 @@ struct WorktreeSettings: View {
                     Text(URL(fileURLWithPath: session.repo).lastPathComponent).tag(Optional(session.repo))
                 }
             }
-            TextField(text: $worktrees.setup, prompt: Text("pnpm install")) { Text("Setup").font(.system(size: 13)) }
+            TextField(text: $worktrees.setup, prompt: Text("pnpm install")) { Text("Setup").font(Ledger.font(13)) }
                 .font(.system(size: 12, design: .monospaced))
             Text("Runs in each new worktree before its agent starts, in your login shell, where you can watch it. When it fails, the agent does not start.")
-                .font(.caption)
+                .font(Ledger.font(11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            TextField(text: $worktrees.copy, prompt: Text(".env"), axis: .vertical) { Text("Copy").font(.system(size: 13)) }
+            TextField(text: $worktrees.copy, prompt: Text(".env"), axis: .vertical) { Text("Copy").font(Ledger.font(13)) }
                 .font(.system(size: 12, design: .monospaced))
                 .lineLimit(1...6)
             Text("Files git ignores, one per line, copied from the main checkout into each new worktree that lacks them; a folder is copied whole.")
-                .font(.caption)
+                .font(Ledger.font(11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 if let path = worktrees.saved?.path {
                     Text(worktrees.changed ? "Not saved yet." : "Saved in \(URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent)/settings.json; commit it to share with your team.")
-                        .font(.caption)
+                        .font(Ledger.font(11))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -109,7 +109,7 @@ struct WorktreeSettings: View {
         if let failure = worktrees.failure {
             Section {
                 Text(failure)
-                    .font(.caption)
+                    .font(Ledger.font(11))
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
