@@ -51,9 +51,9 @@ public struct Agent: Decodable, Equatable, Identifiable, Sendable {
         }
     }
 
-    /// Its name, or until the first request names it, what it is and its id ("Orchestrator a3",
-    /// as `echoctl attach a3` reads), so two unnamed ones read apart.
-    public var displayName: String { name ?? "\(kindName) a\(id)" }
+    /// Its name, or until the first request names it, the branch it works on; on a detached
+    /// HEAD, what it is and its id ("Orchestrator a3", as `echoctl attach a3` reads).
+    public var displayName: String { name ?? branch ?? head ?? "\(kindName) a\(id)" }
 }
 
 /// One agent's share of a repo's ledger: what it is waiting on, and its Workers.

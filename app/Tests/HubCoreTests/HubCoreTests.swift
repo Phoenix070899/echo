@@ -395,6 +395,13 @@ func row(_ id: String, phase: String, quiet: Int, model: String? = nil, effort: 
     #expect(groups[2].agent.displayName == "Claude Code a3")
 }
 
+@Test func anUnnamedAgentReadsAsItsBranch() {
+    #expect(Agent(id: 4, kind: .orchestrator, branch: "fix-login", head: "fix-login").displayName == "fix-login")
+    #expect(Agent(id: 5, kind: .terminal, head: "main").displayName == "main", "In the repo's checkout, its branch there")
+    #expect(Agent(id: 6, kind: .orchestrator, name: "Rerank", head: "main").displayName == "Rerank", "A name wins")
+    #expect(Agent(id: 7, kind: .terminal).displayName == "Terminal a7", "A detached HEAD has no branch to read")
+}
+
 @Test func aPermissionPromptNamesItsCommand() throws {
     let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(snapshotLine.utf8))
     #expect(snapshot.needs[0].promptLines == ["Bash command", "rm -rf junk"])

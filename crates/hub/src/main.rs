@@ -506,7 +506,12 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     println!(
                         "  a{:<4} {live:<8} {kind:<13} {}",
                         agent["id"],
-                        agent["name"].as_str().unwrap_or("(unnamed)")
+                        // Unnamed, it reads as its branch, the way Echo shows it.
+                        agent["name"]
+                            .as_str()
+                            .or(agent["branch"].as_str())
+                            .or(agent["head"].as_str())
+                            .unwrap_or("(unnamed)")
                     );
                 }
             }
