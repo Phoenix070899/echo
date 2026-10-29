@@ -4,7 +4,7 @@ import HubCore
 import SwiftUI
 
 /// What a terminal pane runs: the target's own terminal, or the human's multiplexer around it.
-enum PaneCommand: Equatable {
+enum PaneCommand: Hashable {
     /// `echoctl attach --echo <target>`, relaying the daemon's terminal.
     case attach
     /// The multiplexer line from the daemon, run by `echoctl mux` in a login shell; the agent sits in
@@ -24,24 +24,26 @@ struct TerminalPane: NSViewRepresentable {
     let keyboard: Bool
     /// Changes when the human selects what this pane shows, even if it already shows it.
     let focusRequest: Int
+    /// Part of what a kept terminal is kept under, so one made for an earlier state of the target
+    /// (an agent since stopped or started) is never shown again.
+    var epoch = ""
 
     func makeCoordinator() -> Coordinator { Coordinator(client: client) }
 
-    func makeNSView(context: Context) -> GhosttyView {
+    /// A plain host the pane's terminal sits in, filling it: switching swaps the terminal inside
+    /// for a kept one (`TerminalCache`) rather than starting a new one.
+    func makeNSView(context: Context) -> NSView {
         let coordinator = context.coordinator
-        let view = GhosttyView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
-        view.onDrop = { [weak coordinator] text in coordinator?.type(text) }
-        view.onSettled = { [weak coordinator] in coordinator?.settled() }
-        view.onExit = { [weak coordinator] seconds in MainActor.assumeIsolated { coordinator?.exited(after: seconds) } }
-        coordinator.view = view
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+        coordinator.host = host
         GhosttyRuntime.shared.apply(appearance)
         coordinator.keyboard = keyboard
         coordinator.focusRequest = focusRequest
-        if coordinator.show(target, command), keyboard { Self.focus(view) }
-        return view
+        if coordinator.show(target, command, epoch), keyboard { Self.focus(coordinator.view) }
+        return host
     }
 
-    func updateNSView(_ view: GhosttyView, context: Context) {
+    func updateNSView(_ host: NSView, context: Context) {
         let coordinator = context.coordinator
         GhosttyRuntime.shared.apply(appearance)
         let regained = keyboard && !coordinator.keyboard
@@ -49,27 +51,29 @@ struct TerminalPane: NSViewRepresentable {
         coordinator.keyboard = keyboard
         coordinator.focusRequest = focusRequest
         if !keyboard {
-            Self.unfocus(view)
-            coordinator.show(target, command)
+            Self.unfocus(coordinator.view)
+            coordinator.show(target, command, epoch)
             return
         }
         // Focus moves to the terminal only when it starts showing something new, a modal closes,
         // or the human selects it again, never on a redraw, so a reply being typed in the ledger
         // keeps its focus.
-        if coordinator.show(target, command) || regained || requested { Self.focus(view) }
+        if coordinator.show(target, command, epoch) || regained || requested { Self.focus(coordinator.view) }
     }
 
-    static func dismantleNSView(_ view: GhosttyView, coordinator: Coordinator) {
-        view.stop()
+    /// The terminal goes on running out of sight, kept for when its target shows again.
+    static func dismantleNSView(_ host: NSView, coordinator: Coordinator) {
+        coordinator.putAway()
     }
 
-    private static func unfocus(_ view: GhosttyView) {
-        guard let window = view.window, window.firstResponder === view else { return }
+    private static func unfocus(_ view: GhosttyView?) {
+        guard let view, let window = view.window, window.firstResponder === view else { return }
         window.makeFirstResponder(nil)
     }
 
     /// Gives the terminal the keyboard once it is in a window.
-    private static func focus(_ view: GhosttyView) {
+    private static func focus(_ view: GhosttyView?) {
+        guard let view else { return }
         DispatchQueue.main.async {
             guard let window = view.window, window.firstResponder !== view else { return }
             window.makeFirstResponder(view)
@@ -80,7 +84,10 @@ struct TerminalPane: NSViewRepresentable {
         let client: DaemonClient
         private(set) var target: TerminalTarget?
         private var command = PaneCommand.attach
-        weak var view: GhosttyView?
+        private var epoch = ""
+        weak var host: NSView?
+        /// The terminal in the host now; strong, since a kept one has no other owner while shown.
+        private(set) var view: GhosttyView?
         /// Whether the pane last had leave to hold the keyboard.
         var keyboard = true
         /// The last selection's focus request this pane has acted on.
@@ -129,16 +136,38 @@ struct TerminalPane: NSViewRepresentable {
         }
 
         /// Shows `target` through `command`, unless already showing it so. Returns whether it
-        /// changed. It starts at once when the pane's size has settled, else when it does.
+        /// changed. A terminal kept from before shows at once, already drawn; a new one starts
+        /// when the pane's size has settled.
         @discardableResult
-        func show(_ target: TerminalTarget, _ command: PaneCommand) -> Bool {
-            guard target != self.target || command != self.command else { return false }
+        func show(_ target: TerminalTarget, _ command: PaneCommand, _ epoch: String) -> Bool {
+            guard target != self.target || command != self.command || epoch != self.epoch else { return false }
+            putAway()
             self.target = target
             self.command = command
+            self.epoch = epoch
             generation += 1
-            view?.stop()
-            if view?.isSettled == true { start() }
+            let key = TerminalCache.Key(target: target, command: command, epoch: epoch)
+            let view = TerminalCache.shared.take(key) ?? GhosttyView(frame: host?.bounds ?? .zero)
+            view.onDrop = { [weak self] text in self?.type(text) }
+            view.onSettled = { [weak self] in self?.settled() }
+            view.onExit = { [weak self] seconds in MainActor.assumeIsolated { self?.exited(after: seconds) } }
+            view.frame = host?.bounds ?? view.frame
+            view.autoresizingMask = [.width, .height]
+            host?.addSubview(view)
+            self.view = view
+            if view.surface == nil, view.isSettled { start() }
             return true
+        }
+
+        /// Takes the terminal out of the host, keeping it running for the next time its target
+        /// shows; one that never started is just dropped.
+        func putAway() {
+            guard let view, let target else { return }
+            self.view = nil
+            if view.window?.firstResponder === view { view.window?.makeFirstResponder(nil) }
+            view.removeFromSuperview()
+            guard view.surface != nil else { return }
+            TerminalCache.shared.keep(view, as: TerminalCache.Key(target: target, command: command, epoch: epoch))
         }
 
         /// The pane's first layout settled: a terminal that waited for it attaches now.
@@ -181,6 +210,45 @@ struct TerminalPane: NSViewRepresentable {
             guard hub.contains(" ") else { return "direct:\(hub) \(args)" }
             return "'" + hub.replacingOccurrences(of: "'", with: "'\\''") + "' " + args
         }
+    }
+}
+
+/// Terminals out of sight, still running, so showing their target again is instant: no new
+/// shell, no multiplexer attaching, no redraw from scratch. Each holds a process (a multiplexer
+/// client or `echoctl attach`), so only the most recently shown few are kept. Main thread only,
+/// like the views it holds.
+final class TerminalCache {
+    static let shared = TerminalCache()
+    static let limit = 12
+
+    struct Key: Hashable {
+        let target: TerminalTarget
+        let command: PaneCommand
+        let epoch: String
+    }
+
+    /// Oldest first.
+    private var kept: [(key: Key, view: GhosttyView)] = []
+
+    /// The terminal kept under `key`, no longer kept, ready to show.
+    func take(_ key: Key) -> GhosttyView? {
+        guard let index = kept.firstIndex(where: { $0.key == key }) else { return nil }
+        return kept.remove(at: index).view
+    }
+
+    /// Keeps a running terminal out of sight; one that exits meanwhile is let go. Past the limit,
+    /// the one shown longest ago ends.
+    func keep(_ view: GhosttyView, as key: Key) {
+        take(key)?.stop()
+        view.onDrop = nil
+        view.onSettled = nil
+        view.onExit = { [weak self, weak view] _ in
+            guard let self, let view else { return }
+            self.kept.removeAll { $0.view === view }
+            view.stop()
+        }
+        kept.append((key, view))
+        while kept.count > Self.limit { kept.removeFirst().view.stop() }
     }
 }
 
@@ -483,7 +551,7 @@ final class GhosttyView: NSView, NSTextInputClient {
         let center = NotificationCenter.default
         center.removeObserver(self, name: NSWindow.didChangeScreenNotification, object: nil)
         center.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
-        guard let window else { return }
+        guard let window else { return syncOcclusion() }
         center.addObserver(self, selector: #selector(screenChanged), name: NSWindow.didChangeScreenNotification, object: window)
         center.addObserver(self, selector: #selector(syncOcclusion), name: NSWindow.didChangeOcclusionStateNotification, object: window)
         syncScale()
@@ -491,10 +559,11 @@ final class GhosttyView: NSView, NSTextInputClient {
         syncOcclusion()
     }
 
-    /// The surface draws only while its window can be seen, and redraws as soon as it can again.
+    /// The surface draws only while its window can be seen, and redraws as soon as it can again;
+    /// a kept terminal, out of any window, draws nothing.
     @objc private func syncOcclusion() {
-        guard let surface, let window else { return }
-        ghostty_surface_set_occlusion(surface, window.occlusionState.contains(.visible))
+        guard let surface else { return }
+        ghostty_surface_set_occlusion(surface, window?.occlusionState.contains(.visible) ?? false)
     }
 
     @objc private func screenChanged() {

@@ -868,9 +868,9 @@ struct AgentPanel: View {
                     .disabled(model.daemonDown)
                 }
             }
-            LiveTerminal(target: .agent(id: agent.id))
-                // A new pane whenever the agent starts or stops, so one without the multiplexer
-                // attaches to whichever runs now: the agent, or its shell.
+            // A new terminal whenever the agent starts or stops, so one without the multiplexer
+            // attaches to whichever runs now: the agent, or its shell.
+            LiveTerminal(target: .agent(id: agent.id), epoch: "\(agent.live)")
                 .id("\(agent.id) \(agent.live)")
         }
     }
@@ -896,6 +896,8 @@ struct AgentPanel: View {
 struct LiveTerminal: View {
     @EnvironmentObject private var model: AppModel
     let target: TerminalTarget
+    /// Changes when a terminal kept for `target` no longer fits it (`TerminalCache`).
+    var epoch = ""
 
     var body: some View {
         let command = model.paneCommand(for: target)
@@ -903,7 +905,7 @@ struct LiveTerminal: View {
             if let command {
                 TerminalPane(target: target, command: command, client: model.client, appearance: model.appearance,
                              keyboard: !model.modalShown && model.preview == nil && !model.treeFocused,
-                             focusRequest: model.terminalFocusRequest)
+                             focusRequest: model.terminalFocusRequest, epoch: epoch)
             } else {
                 Text("Starting the multiplexer…")
                     .font(Ledger.font(12.5))
