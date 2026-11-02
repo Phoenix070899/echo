@@ -639,8 +639,21 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Mux => {
             use std::os::unix::process::CommandExt;
             let line = std::env::var("HUB_MUX").context("HUB_MUX names the multiplexer command to run")?;
-            let mut shell = std::process::Command::new(daemon::user_shell());
-            shell.args(["-l", "-c", &line]);
+            // The running daemon's environment is the human's, so a plain sh runs the line with it;
+            // a login shell takes far longer to start (features/0047). With no daemon to ask, one
+            // is not started from here, with Echo's bare environment: a login shell runs it instead.
+            let mut shell = match mux_env() {
+                Some(env) => {
+                    let mut shell = std::process::Command::new("/bin/sh");
+                    shell.args(["-c", &line]).envs(env);
+                    shell
+                }
+                None => {
+                    let mut shell = std::process::Command::new(daemon::user_shell());
+                    shell.args(["-l", "-c", &line]);
+                    shell
+                }
+            };
             // What the agent that started Echo set must not reach the human's shells.
             for key in daemon::inherited_agent_vars() {
                 shell.env_remove(key);
@@ -650,6 +663,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The running daemon's `shell.env`, without starting a daemon when none runs.
+fn mux_env() -> Option<std::collections::BTreeMap<String, String>> {
+    let mut stream = std::os::unix::net::UnixStream::connect(paths::socket()).ok()?;
+    proto::write_line(&mut stream, &json!({ "method": "shell.env", "params": {} })).ok()?;
+    let reply = proto::into_result(proto::read_line(&mut std::io::BufReader::new(stream)).ok()?).ok()?;
+    serde_json::from_value(reply).ok()
 }
 
 fn print_message(m: &Value) {

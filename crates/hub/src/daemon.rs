@@ -847,6 +847,7 @@ impl Hub {
             }
             "sessions.list" => self.list_sessions(),
             "mux.command" => self.mux_command(p),
+            "shell.env" => Ok(json!(shell_env())),
             "usage.refresh" => {
                 self.refresh_usage();
                 Ok(json!({}))
@@ -2420,6 +2421,21 @@ fn login_shell() -> String {
         .ok()
         .filter(|shell| !shell.is_empty())
         .unwrap_or_else(|| "/bin/zsh".into())
+}
+
+/// The daemon's environment as a shell in Echo's terminal should get it: the human's own, since
+/// the daemon starts from a login shell, less what names an agent or the terminal that started the
+/// daemon. A multiplexer pane runs with it rather than starting a login shell (features/0047).
+pub fn shell_env() -> std::collections::BTreeMap<String, String> {
+    std::env::vars()
+        .filter(|(key, _)| {
+            !is_agent_var(key)
+                && !matches!(
+                    key.as_str(),
+                    "TERM" | "COLORTERM" | "TERMINFO" | "TERM_PROGRAM" | "TERM_PROGRAM_VERSION" | "TERM_SESSION_ID"
+                )
+        })
+        .collect()
 }
 
 pub fn inherited_agent_vars() -> Vec<String> {

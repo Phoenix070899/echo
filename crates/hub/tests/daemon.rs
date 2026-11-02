@@ -1419,6 +1419,21 @@ fn a_multiplexer_line_names_its_session_and_dir() {
 }
 
 #[test]
+fn a_multiplexer_line_runs_with_the_daemons_environment() {
+    let hub = Hub::new("muxenv");
+    hub.ok(&["status"]);
+    let env = hub.call("shell.env", serde_json::json!({}));
+    assert!(env["result"]["HUB_TEST_AGENT"].is_string(), "{env}");
+    assert!(
+        env["result"].get("TERM").is_none(),
+        "the pane's terminal names itself: {env}"
+    );
+    // The pane's own environment lacks HUB_TEST_AGENT; only the daemon's has it.
+    let pane = MuxPane::start(&hub, "printf 'agent=%s\\n' \"${HUB_TEST_AGENT##*/}\"");
+    pane.wait_for("agent=fake-agent.sh");
+}
+
+#[test]
 fn a_multiplexer_shows_an_agent_and_follows_it_through_restarts() {
     let hub = Hub::new("mux");
     let repo = hub.repo_key();
