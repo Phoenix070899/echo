@@ -75,7 +75,9 @@ lines = open(sys.argv[1]).read().split('\n')
 start = next(i for i, l in enumerate(lines) if 'Main Thread' in l or 'com.apple.main-thread' in l)
 end = next(i for i in range(start + 1, len(lines)) if re.match(r'^\s{4}\d+ Thread_', lines[i]) or lines[i].startswith('Total number'))
 total = int(lines[start].split()[0])
-idle = sum(int(m.group(1)) for l in lines[start + 1:end] if (m := re.search(r'(\d+) mach_msg2_trap', l)))
+# Idle is only the run loop waiting for work; a wait anywhere else, like a call to the window
+# server, holds the main thread as much as work does.
+idle = sum(int(m.group(1)) for l in lines[start + 1:end] if (m := re.search(r'(\d+) __CFRunLoopServiceMachPort', l)))
 print(total - idle)
 EOF
 }
