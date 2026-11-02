@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import HubCore
 import SwiftUI
 
@@ -133,20 +134,90 @@ struct MenuRow: View {
     }
 }
 
-/// The menu bar shows Echo's mark and how many things need the human, and nothing else.
-struct MenuBarLabel: View {
-    let count: Int
+/// The menu bar item: Echo's mark and how many things need the human, and nothing else; a click
+/// shows `MenuBarView` below it. Built in AppKit, not as a SwiftUI MenuBarExtra: that one set its
+/// image again on every change to the app's state, and macOS redrew it on every display and
+/// Space each time, which made switching between agents slow (bugs/0061).
+@MainActor
+final class MenuBarItem: NSObject {
+    private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let panel = MenuBarPanel()
+    private var watches: [AnyCancellable] = []
+    private var clicks: Any?
 
-    var body: some View {
-        if count > 0 {
-            HStack(spacing: 3) {
-                Image(nsImage: EchoGlyph.image)
-                Text("\(count)")
-            }
-        } else {
-            Image(nsImage: EchoGlyph.image)
+    init(model: AppModel) {
+        super.init()
+        if let button = item.button {
+            button.image = EchoGlyph.image
+            button.imagePosition = .imageLeading
+            button.target = self
+            button.action = #selector(toggle)
+        }
+        let content = NSHostingController(rootView: MenuBarView().environmentObject(model))
+        content.sizingOptions = [.preferredContentSize]
+        panel.contentViewController = content
+        panel.contentView?.wantsLayer = true
+        panel.contentView?.layer?.cornerRadius = 10
+        panel.contentView?.layer?.masksToBounds = true
+        watches.append(model.$snapshots
+            .map { $0.values.reduce(0) { $0 + $1.needsYouCount } }
+            .removeDuplicates()
+            .sink { [weak self] count in self?.item.button?.title = count > 0 ? "\(count)" : "" })
+        // Grows and shrinks from its top edge, under the item.
+        watches.append(NotificationCenter.default.publisher(for: NSWindow.didResizeNotification, object: panel)
+            .sink { [weak self] _ in self?.place() })
+        watches.append(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification, object: panel)
+            .sink { [weak self] _ in self?.close() })
+        panel.onEscape = { [weak self] in self?.close() }
+    }
+
+    @objc private func toggle() {
+        panel.isVisible ? close() : open()
+    }
+
+    private func open() {
+        place()
+        panel.makeKeyAndOrderFront(nil)
+        // A click anywhere outside Echo closes it, as it does a menu.
+        clicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            MainActor.assumeIsolated { self?.close() }
         }
     }
+
+    private func close() {
+        if let clicks { NSEvent.removeMonitor(clicks) }
+        clicks = nil
+        panel.orderOut(nil)
+    }
+
+    private func place() {
+        guard let button = item.button, let window = button.window else { return }
+        let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+        let size = panel.frame.size
+        var x = anchor.minX
+        if let screen = window.screen?.visibleFrame { x = min(max(x, screen.minX + 8), screen.maxX - size.width - 8) }
+        panel.setFrameOrigin(NSPoint(x: x, y: anchor.minY - 4 - size.height))
+    }
+}
+
+/// A panel that takes the keyboard, for answering in place, without bringing Echo to the front.
+private final class MenuBarPanel: NSPanel {
+    var onEscape: (() -> Void)?
+
+    init() {
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        isFloatingPanel = true
+        level = .popUpMenu
+        backgroundColor = .clear
+        isOpaque = false
+        hasShadow = true
+        hidesOnDeactivate = false
+        collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+    }
+
+    override var canBecomeKey: Bool { true }
+
+    override func cancelOperation(_ sender: Any?) { onEscape?() }
 }
 
 /// The app's mark at menu bar size: one solid square and two fading echoes behind it, drawn as a

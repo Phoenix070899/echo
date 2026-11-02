@@ -101,17 +101,13 @@ struct HubApp: App {
                 }
             }
         }
-
-        MenuBarExtra {
-            MenuBarView().environmentObject(model)
-        } label: {
-            MenuBarLabel(count: model.needsYouCount)
-        }
-        .menuBarExtraStyle(.window)
     }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    /// In AppKit, outside the Scene, so changes to the model never touch it (bugs/0061).
+    private var menuBarItem: MenuBarItem?
+
     /// Closing the window keeps the app in the menu bar, so notifications keep coming.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
@@ -125,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UNUserNotificationCenter.current().delegate = self
         }
         AppModel.shared.start()
+        menuBarItem = MenuBarItem(model: AppModel.shared)
     }
 
     func userNotificationCenter(
