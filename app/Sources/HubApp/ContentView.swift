@@ -486,6 +486,7 @@ struct RailAgent: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .prewarmsTerminal(.agent(id: agent.id), epoch: "\(agent.live)")
         .help("\(agent.displayName), \(agent.live ? "live" : agent.isOrchestrator ? "stopped" : "ended")")
     }
 }
@@ -509,6 +510,7 @@ struct RailWorker: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .prewarmsTerminal(model.terminalTarget(repo, worker))
         .help("\(worker.id) \(worker.profile): \(worker.title)\n\(worker.phaseLabel), quiet for \(formatAge(worker.quietFor()))")
     }
 }
@@ -716,6 +718,7 @@ struct AgentHeader: View {
         // The whole row selects the agent, padding included; the chevron keeps its own click.
         .contentShape(Rectangle())
         .onTapGesture { model.select(.agent(repo: repo, id: agent.id)) }
+        .prewarmsTerminal(.agent(id: agent.id), epoch: "\(agent.live)")
         // Lanh's rows: a rounded fill inset from the column's edges, no bar.
         .background(selected ? Ledger.selected : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .padding(.horizontal, 8)
@@ -929,6 +932,42 @@ struct LiveTerminal: View {
     }
 }
 
+extension View {
+    /// The pointer resting on this row starts `target`'s terminal out of sight, so a click on it
+    /// shows the terminal at once (ui-ux/0058).
+    func prewarmsTerminal(_ target: TerminalTarget?, epoch: String = "") -> some View {
+        modifier(PrewarmOnHover(target: target, epoch: epoch))
+    }
+}
+
+private struct PrewarmOnHover: ViewModifier {
+    @EnvironmentObject private var model: AppModel
+    let target: TerminalTarget?
+    let epoch: String
+    @StateObject private var dwell = Dwell()
+
+    /// Long enough that sweeping the pointer past rows starts nothing; short enough to finish
+    /// before a usual click.
+    private static let rest = Duration.milliseconds(120)
+
+    func body(content: Content) -> some View {
+        content.onHover { inside in
+            dwell.task?.cancel()
+            guard inside, let target else { return }
+            dwell.task = Task { @MainActor in
+                try? await Task.sleep(for: Self.rest)
+                guard !Task.isCancelled else { return }
+                model.prewarm(target, epoch: epoch)
+            }
+        }
+    }
+}
+
+/// A pending pointer rest, for views that would otherwise need `@State`.
+private final class Dwell: ObservableObject {
+    var task: Task<Void, Never>?
+}
+
 /// What sits behind a terminal: the theme background, or the chosen image, blurred and dimmed by it.
 struct TerminalBackdrop: View {
     let appearance: TerminalAppearance
@@ -1017,8 +1056,8 @@ struct WorkerPanel: View {
                     ChangesView(repo: repo, worker: worker)
                 } else if model.workerView(repo, worker) == .compare, let fanout = worker.fanout {
                     CompareView(repo: repo, fanout: fanout)
-                } else if worker.isActive, worker.live, let number = worker.number {
-                    LiveTerminal(target: .worker(id: number))
+                } else if let target = model.terminalTarget(repo, worker) {
+                    LiveTerminal(target: target)
                     HStack(spacing: 10) {
                         Image(systemName: "info.circle")
                         Text("Typing here is an Intervention. \(worker.id) does what you ask and tells the Orchestrator.")
@@ -1295,6 +1334,7 @@ struct LedgerRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering.on = $0 }
+        .prewarmsTerminal(model.terminalTarget(repo, worker))
         .help("\(worker.id) \(worker.profile): \(worker.title)\n\(worker.phaseLabel), quiet for \(formatAge(worker.quietFor()))")
         .contextMenu {
             if worker.settledAt != nil {

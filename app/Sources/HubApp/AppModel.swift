@@ -394,6 +394,10 @@ final class AppModel: ObservableObject {
     /// Targets whose multiplexer command failed: they show their plain terminal.
     @Published private(set) var muxFailed: Set<TerminalTarget> = []
     private var muxPending: Set<TerminalTarget> = []
+    /// Terminals to start out of sight once their multiplexer lines come back, with their epochs.
+    private var prewarmWanted: [TerminalTarget: String] = [:]
+    /// The pending start of the shown agent's neighbours' terminals.
+    private var neighbourPrewarm: Task<Void, Never>?
 
     private static func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
         UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(T.self, from: $0) }
@@ -746,6 +750,23 @@ final class AppModel: ObservableObject {
         }
         UserDefaults.standard.set(selection.repo, forKey: Self.lastRepoKey)
         if case .agent(_, let id) = selection { collapsed.remove(id) }
+        prewarmNeighbours(of: selection)
+    }
+
+    /// Half a second after an agent shows, the agents above and below it in the ledger start their
+    /// terminals out of sight, so ⌘ and a neighbour's number shows it at once (ui-ux/0059).
+    private func prewarmNeighbours(of selection: Selection) {
+        neighbourPrewarm?.cancel()
+        guard case .agent(let repo, let id) = selection else { return }
+        neighbourPrewarm = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let self, !Task.isCancelled else { return }
+            let list = self.agents(repo)
+            guard let index = list.firstIndex(where: { $0.id == id }) else { return }
+            for neighbour in [index - 1, index + 1] where list.indices.contains(neighbour) {
+                self.prewarm(.agent(id: list[neighbour].id), epoch: "\(list[neighbour].live)")
+            }
+        }
     }
 
     /// Switches to a repo, back to whatever it last showed, else its first agent.
@@ -954,10 +975,23 @@ final class AppModel: ObservableObject {
         } then: { mux in
             self.muxPending.remove(target)
             self.muxShells[target] = MuxShell(command: mux.command, session: mux.session)
+            if let epoch = self.prewarmWanted.removeValue(forKey: target) {
+                self.prewarm(target, epoch: epoch)
+            }
         } failed: {
             self.muxPending.remove(target)
             self.muxFailed.insert(target)
         }
+    }
+
+    /// The pointer rested on `target`'s row: its terminal starts out of sight, so a click on the
+    /// row shows it at once (ui-ux/0058).
+    func prewarm(_ target: TerminalTarget, epoch: String) {
+        guard let command = paneCommand(for: target) else {
+            prewarmWanted[target] = epoch
+            return ensureMux(target)
+        }
+        TerminalPane.prewarm(target, command: command, epoch: epoch, client: client)
     }
 
     /// The multiplexer in `target`'s pane exited after `seconds`: the human quit it, so the
@@ -1066,6 +1100,12 @@ final class AppModel: ObservableObject {
 
     func workerView(_ repo: String, _ worker: WorkerRow) -> WorkerView {
         workerViews[Self.workerKey(repo, worker)] ?? .main
+    }
+
+    /// The terminal `worker`'s panel shows, if it shows one: its own, while it works.
+    func terminalTarget(_ repo: String, _ worker: WorkerRow) -> TerminalTarget? {
+        guard workerView(repo, worker) == .main, worker.isActive, worker.live, let number = worker.number else { return nil }
+        return .worker(id: number)
     }
 
     func show(_ view: WorkerView, repo: String, worker: WorkerRow) {

@@ -30,6 +30,21 @@ struct TerminalPane: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(client: client) }
 
+    /// Starts `target`'s terminal out of sight, at the size the last pane settled at, and keeps it,
+    /// so showing `target` next is instant (ui-ux/0058). Nothing happens when it is already kept
+    /// or shown, or before any terminal has shown.
+    static func prewarm(_ target: TerminalTarget, command: PaneCommand, epoch: String, client: DaemonClient) {
+        let key = TerminalCache.Key(target: target, command: command, epoch: epoch)
+        guard Coordinator.hub != nil, let size = GhosttyView.settledSize,
+              !TerminalCache.shared.has(key), !TerminalCache.shared.shown.contains(key) else { return }
+        let coordinator = Coordinator(client: client)
+        let host = NSView(frame: NSRect(origin: .zero, size: size))
+        coordinator.host = host
+        coordinator.show(target, command, epoch)
+        coordinator.view?.settleNow()
+        coordinator.putAway()
+    }
+
     /// A plain host the pane's terminal sits in, filling it: switching swaps the terminal inside
     /// for a kept one (`TerminalCache`) rather than starting a new one.
     func makeNSView(context: Context) -> NSView {
@@ -142,6 +157,7 @@ struct TerminalPane: NSViewRepresentable {
         func show(_ target: TerminalTarget, _ command: PaneCommand, _ epoch: String) -> Bool {
             guard target != self.target || command != self.command || epoch != self.epoch else { return false }
             putAway()
+            TerminalCache.shared.shown.append(TerminalCache.Key(target: target, command: command, epoch: epoch))
             self.target = target
             self.command = command
             self.epoch = epoch
@@ -164,10 +180,12 @@ struct TerminalPane: NSViewRepresentable {
         func putAway() {
             guard let view, let target else { return }
             self.view = nil
+            let key = TerminalCache.Key(target: target, command: command, epoch: epoch)
+            TerminalCache.shared.shown.firstIndex(of: key).map { _ = TerminalCache.shared.shown.remove(at: $0) }
             if view.window?.firstResponder === view { view.window?.makeFirstResponder(nil) }
             view.removeFromSuperview()
             guard view.surface != nil else { return }
-            TerminalCache.shared.keep(view, as: TerminalCache.Key(target: target, command: command, epoch: epoch))
+            TerminalCache.shared.keep(view, as: key)
         }
 
         /// The pane's first layout settled: a terminal that waited for it attaches now.
@@ -175,7 +193,7 @@ struct TerminalPane: NSViewRepresentable {
             if view?.surface == nil { start() }
         }
 
-        private static var hub: String?
+        fileprivate static var hub: String?
 
         /// Starts the surface for the current target, finding `echoctl` first if need be.
         private func start() {
@@ -229,6 +247,10 @@ final class TerminalCache {
 
     /// Oldest first.
     private var kept: [(key: Key, view: GhosttyView)] = []
+    /// What panes show now, each once per pane showing it.
+    var shown: [Key] = []
+
+    func has(_ key: Key) -> Bool { kept.contains { $0.key == key } }
 
     /// The terminal kept under `key`, no longer kept, ready to show.
     func take(_ key: Key) -> GhosttyView? {
@@ -508,18 +530,44 @@ final class GhosttyView: NSView, NSTextInputClient {
         find.place(in: bounds)
         guard !isSettled, size.width > 0, size.height > 0 else { return }
         settle?.cancel()
+        // A size an earlier pane settled at is the panel's real size, not a first guess: every
+        // terminal in it has one size (ui-ux/0051), so a new one starts without waiting (ui-ux/0058).
+        if window != nil, Self.settledSizes.contains(size) { return settleNow() }
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.isSettled else { return }
             self.isSettled = true
+            let size = self.frame.size
+            Self.settledSizes = Array(([size] + Self.settledSizes.filter { $0 != size }).prefix(4))
             self.onSettled?()
         }
         settle = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
     }
 
+    /// Takes the current frame as the pane's real size, without waiting for it to hold still.
+    func settleNow() {
+        guard !isSettled else { return }
+        settle?.cancel()
+        isSettled = true
+        onSettled?()
+    }
+
+    /// The last few sizes a pane's layout held still at, newest first.
+    private static var settledSizes: [NSSize] = []
+    /// The size the last pane settled at, which a terminal started out of sight takes.
+    static var settledSize: NSSize? { settledSizes.first }
+
+    /// Pixels for `size`: by the window, or by the main screen for a terminal started out of sight,
+    /// so it starts at the size it will show at (ui-ux/0058).
+    private func backing(_ size: NSSize) -> NSSize {
+        if window != nil { return convertToBacking(size) }
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        return NSSize(width: size.width * scale, height: size.height * scale)
+    }
+
     private func syncSize() {
         guard let surface else { return }
-        let pixels = convertToBacking(bounds.size)
+        let pixels = backing(bounds.size)
         ghostty_surface_set_size(surface, UInt32(max(pixels.width, 1)), UInt32(max(pixels.height, 1)))
     }
 
@@ -531,7 +579,7 @@ final class GhosttyView: NSView, NSTextInputClient {
             CATransaction.commit()
         }
         guard let surface, bounds.width > 0, bounds.height > 0 else { return syncSize() }
-        let pixels = convertToBacking(bounds)
+        let pixels = backing(bounds.size)
         ghostty_surface_set_content_scale(surface, pixels.width / bounds.width, pixels.height / bounds.height)
         syncSize()
     }
@@ -557,6 +605,8 @@ final class GhosttyView: NSView, NSTextInputClient {
         syncScale()
         syncDisplay()
         syncOcclusion()
+        // Laid out before it joined the window, at a size a pane settled at before.
+        if !isSettled, Self.settledSizes.contains(frame.size) { settleNow() }
     }
 
     /// The surface draws only while its window can be seen, and redraws as soon as it can again;
