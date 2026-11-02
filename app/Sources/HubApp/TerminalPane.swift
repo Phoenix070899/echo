@@ -49,7 +49,9 @@ struct TerminalPane: NSViewRepresentable {
     /// for a kept one (`TerminalCache`) rather than starting a new one.
     func makeNSView(context: Context) -> NSView {
         let coordinator = context.coordinator
-        let host = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+        // At the size terminals settle at, so a kept terminal put in it keeps its size: a resize
+        // makes the multiplexer and the agent redraw everything (bugs/0063).
+        let host = NSView(frame: NSRect(origin: .zero, size: GhosttyView.settledSize ?? NSSize(width: 800, height: 500)))
         coordinator.host = host
         GhosttyRuntime.shared.apply(appearance)
         coordinator.keyboard = keyboard
@@ -470,7 +472,7 @@ final class GhosttyView: NSView, NSTextInputClient {
         config.platform_tag = GHOSTTY_PLATFORM_MACOS
         config.platform = ghostty_platform_u(macos: ghostty_platform_macos_s(nsview: Unmanaged.passUnretained(self).toOpaque()))
         config.userdata = Unmanaged.passUnretained(self).toOpaque()
-        config.scale_factor = Double(window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2)
+        config.scale_factor = Double(window?.backingScaleFactor ?? Self.screenScale)
         config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
         var env = extra
         if let state = ProcessInfo.processInfo.environment["HUB_STATE"] { env["HUB_STATE"] = state }
@@ -488,6 +490,7 @@ final class GhosttyView: NSView, NSTextInputClient {
             }
         }
         guard surface != nil else { return show(problem: "libghostty could not open a terminal.") }
+        syncedPixels = nil
         syncScale()
         syncDisplay()
         syncOcclusion()
@@ -508,6 +511,7 @@ final class GhosttyView: NSView, NSTextInputClient {
         find.close()
         guard let surface else { return }
         self.surface = nil
+        syncedPixels = nil
         ghostty_surface_free(surface)
     }
 
@@ -561,18 +565,26 @@ final class GhosttyView: NSView, NSTextInputClient {
     /// so it starts at the size it will show at (ui-ux/0058).
     private func backing(_ size: NSSize) -> NSSize {
         if window != nil { return convertToBacking(size) }
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
-        return NSSize(width: size.width * scale, height: size.height * scale)
+        return NSSize(width: size.width * Self.screenScale, height: size.height * Self.screenScale)
     }
+
+    /// The scale of the last window a terminal was in. Asking `NSScreen` instead waits on the
+    /// window server, for about 10 ms on every switch (bugs/0063).
+    private static var screenScale: CGFloat = NSScreen.main?.backingScaleFactor ?? 2
+    /// The pixel size last given to the surface; the same size again changes nothing.
+    private var syncedPixels: NSSize?
 
     private func syncSize() {
         guard let surface else { return }
         let pixels = backing(bounds.size)
+        guard pixels != syncedPixels else { return }
+        syncedPixels = pixels
         ghostty_surface_set_size(surface, UInt32(max(pixels.width, 1)), UInt32(max(pixels.height, 1)))
     }
 
     private func syncScale() {
         if let window {
+            Self.screenScale = window.backingScaleFactor
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             layer?.contentsScale = window.backingScaleFactor
