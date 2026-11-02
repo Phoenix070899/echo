@@ -69,21 +69,16 @@ private struct FilesTree: View {
                 .padding(14)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(rows) { entry in
-                            FileRow(entry: entry, root: root, mark: mark(entry), ignored: files.tree.isIgnored(entry.path),
-                                    open: model.openFolders(root).contains(entry.path),
-                                    picked: cursor == entry.path) {
-                                focused = true
-                                activate(entry)
-                            }
-                            .id(entry.path)
-                        }
-                    }
-                    .padding(.vertical, 6)
+            let open = model.openFolders(root)
+            // A wrapper takes the keyboard: the list itself never does, so a click keeps it here.
+            ZStack {
+                FileList(rows: rows.map { FileListRow(entry: $0, mark: mark($0), ignored: files.tree.isIgnored($0.path),
+                                                      open: open.contains($0.path)) },
+                         root: root, cursor: cursor, typeable: model.terminalTypeable) { entry in
+                    focused = true
+                    activate(entry)
                 }
+            }
                 .focusable()
                 .focused($focused)
                 .focusEffectDisabled()
@@ -103,10 +98,6 @@ private struct FilesTree: View {
                 .onChange(of: model.terminalFocusRequest) { focused = false }
                 .onChange(of: focused) { model.filesFocused(.files, focused) }
                 .onDisappear { model.filesFocused(.files, false) }
-                .onChange(of: cursor) {
-                    if let cursor { proxy.scrollTo(cursor) }
-                }
-            }
         }
     }
 
@@ -253,97 +244,7 @@ enum RowMark: Equatable {
     case folder
 }
 
-private struct FileRow: View {
-    @EnvironmentObject private var model: AppModel
-    let entry: FileEntry
-    let root: String
-    let mark: RowMark?
-    /// Covered by .gitignore: drawn dim.
-    let ignored: Bool
-    let open: Bool
-    let picked: Bool
-    let click: () -> Void
-    @StateObject private var hover = Flag()
-
-    private var file: FileRef { FileRef(root: root, path: entry.path) }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if entry.isFolder {
-                Image(systemName: open ? "chevron.down" : "chevron.right")
-                    .font(Ledger.font(9, .semibold))
-                    .foregroundStyle(Ledger.ink3)
-                    .frame(width: 10)
-                Image(systemName: "folder.fill")
-                    .font(Ledger.font(12))
-                    .foregroundStyle(Ledger.ink3)
-            } else {
-                Spacer().frame(width: 10)
-                Image(systemName: "doc")
-                    .font(Ledger.font(11.5))
-                    .foregroundStyle(Ledger.ink3)
-            }
-            Text(entry.name)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .foregroundStyle(nameColor)
-            Spacer(minLength: 6)
-            switch mark {
-            case .file(let git)?:
-                Text(git.rawValue)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(color(git))
-                    .accessibilityLabel(label(git))
-            case .folder?:
-                Circle().fill(Ledger.changed).frame(width: 6, height: 6)
-                    .accessibilityLabel("Has changes")
-            case nil:
-                EmptyView()
-            }
-        }
-        .font(Ledger.font(13))
-        .padding(.leading, 10 + CGFloat(entry.depth) * 14)
-        .padding(.trailing, 12)
-        .frame(height: 24)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Lanh's rows: a rounded fill inset from the column's edges, no bar.
-        .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .padding(.horizontal, 8)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: click)
-        .onHover { hover.on = $0 }
-        .onDrag { NSItemProvider(object: file.url as NSURL) }
-        .contextMenu {
-            if !entry.isFolder {
-                Button("Preview") { model.preview = file }
-                Button("Insert into Terminal") { model.insertMention(file) }
-                    .disabled(!model.terminalTypeable)
-                Button("Open") { model.openInEditor(file) }
-                Divider()
-            }
-            Button("Reveal in Finder") { model.revealInFinder(file) }
-            Button("Copy Path") { model.copyPath(file) }
-        }
-        .help(entry.path)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(picked ? [.isButton, .isSelected] : .isButton)
-    }
-
-    private var nameColor: Color {
-        switch mark {
-        case .file(.modified)?, .file(.renamed)?: Ledger.changed
-        case .file(.added)?, .file(.untracked)?: Ledger.done
-        case .file(.deleted)?: Ledger.fail
-        default: ignored ? Ledger.ink3 : Ledger.ink
-        }
-    }
-
-    private func color(_ mark: GitMark) -> Color { gitMarkColor(mark) }
-
-    private func label(_ mark: GitMark) -> String { gitMarkLabel(mark) }
-}
-
-private func gitMarkColor(_ mark: GitMark) -> Color {
+func gitMarkColor(_ mark: GitMark) -> Color {
     switch mark {
     case .modified, .renamed: Ledger.changed
     case .added, .untracked: Ledger.done
@@ -351,7 +252,7 @@ private func gitMarkColor(_ mark: GitMark) -> Color {
     }
 }
 
-private func gitMarkLabel(_ mark: GitMark) -> String {
+func gitMarkLabel(_ mark: GitMark) -> String {
     switch mark {
     case .modified: "Modified"
     case .added: "Added"

@@ -58,12 +58,23 @@ enum Ledger {
         let wght = light.contains(weight) ? 350 : 500
         let key = "\(size)-\(wght)"
         if let font = fonts[key] { return font }
-        let descriptor = NSFontDescriptor(fontAttributes: [.family: family])
-            .addingAttributes([NSFontDescriptor.AttributeName(kCTFontVariationAttribute as String): [0x7767_6874: wght]])
-        let font: Font = NSFont(descriptor: descriptor, size: size).flatMap { $0.familyName == family ? Font($0) : nil }
-            ?? .system(size: size, weight: wght == 350 ? .regular : .medium)
+        let font: Font = lanh(size, wght).map(Font.init) ?? .system(size: size, weight: wght == 350 ? .regular : .medium)
         fonts[key] = font
         return font
+    }
+
+    /// `font`'s face as an NSFont, for text AppKit draws.
+    static func nsFont(_ size: CGFloat, _ weight: Font.Weight = .regular) -> NSFont {
+        let light: [Font.Weight] = [.ultraLight, .thin, .light, .regular]
+        let wght = light.contains(weight) ? 350 : 500
+        return lanh(size, wght) ?? .systemFont(ofSize: size, weight: wght == 350 ? .regular : .medium)
+    }
+
+    /// Google Sans Flex at `wght`, if the app has it.
+    private static func lanh(_ size: CGFloat, _ wght: Int) -> NSFont? {
+        let descriptor = NSFontDescriptor(fontAttributes: [.family: family])
+            .addingAttributes([NSFontDescriptor.AttributeName(kCTFontVariationAttribute as String): [0x7767_6874: wght]])
+        return NSFont(descriptor: descriptor, size: size).flatMap { $0.familyName == family ? $0 : nil }
     }
 
     private static let family = "Google Sans Flex 18pt"
