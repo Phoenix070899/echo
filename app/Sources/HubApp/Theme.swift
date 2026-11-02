@@ -156,6 +156,8 @@ struct StateMark: View {
 
 /// Something in progress: an arc turning once a second (slower for work only waiting in the
 /// background), in the colour of what it stands for. Under Reduce Motion it stands still.
+/// Core Animation turns it, off the main thread: a SwiftUI animation laid the whole window out
+/// again on every frame for every spinner on screen (bugs/0062).
 struct Spinner: View {
     var color: Color = Ledger.ink3
     var size: CGFloat = 10
@@ -163,15 +165,98 @@ struct Spinner: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
-            let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
-            Circle()
-                .trim(from: 0, to: 0.7)
-                .stroke(color, style: StrokeStyle(lineWidth: max(1.5, size / 6), lineCap: .round))
-                .rotationEffect(.degrees(reduceMotion ? 0 : turn * 360))
+        SpinnerArc(color: NSColor(color), lineWidth: max(1.5, size / 6), period: reduceMotion ? nil : period)
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct SpinnerArc: NSViewRepresentable {
+    let color: NSColor
+    let lineWidth: CGFloat
+    /// Seconds a turn takes; nil stands still.
+    let period: Double?
+
+    func makeNSView(context: Context) -> SpinnerArcView { SpinnerArcView() }
+
+    func updateNSView(_ view: SpinnerArcView, context: Context) {
+        view.update(color: color, lineWidth: lineWidth, period: period)
+    }
+}
+
+final class SpinnerArcView: NSView {
+    private let arc = CAShapeLayer()
+    private var color = NSColor.clear
+    private var period: Double?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        arc.fillColor = nil
+        arc.lineCap = .round
+        layer?.addSublayer(arc)
+    }
+
+    required init?(coder: NSCoder) { fatalError("SpinnerArcView is built in code") }
+
+    func update(color: NSColor, lineWidth: CGFloat, period: Double?) {
+        self.color = color
+        arc.lineWidth = lineWidth
+        if period != self.period {
+            self.period = period
+            spin()
         }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
+        resolveColor()
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        arc.frame = bounds
+        let inset = arc.lineWidth / 2
+        let radius = max(0, min(bounds.width, bounds.height) / 2 - inset)
+        let path = CGMutablePath()
+        // From 3 o'clock, clockwise on screen (the layer's y runs up), as SwiftUI's trimmed circle did.
+        path.addArc(center: CGPoint(x: bounds.midX, y: bounds.midY), radius: radius,
+                    startAngle: 0, endAngle: -0.7 * 2 * .pi, clockwise: true)
+        arc.path = path
+        CATransaction.commit()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        resolveColor()
+    }
+
+    /// Leaving a window drops a layer's animations; coming back starts the turn again.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        spin()
+    }
+
+    /// A spinner sits inside rows and buttons; clicks go to them.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    private func resolveColor() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        effectiveAppearance.performAsCurrentDrawingAppearance { arc.strokeColor = color.cgColor }
+        CATransaction.commit()
+    }
+
+    private func spin() {
+        arc.removeAnimation(forKey: "turn")
+        guard let period, window != nil else { return }
+        let turn = CABasicAnimation(keyPath: "transform.rotation.z")
+        turn.fromValue = 0
+        // Clockwise on screen: the layer's y runs up.
+        turn.toValue = -2 * Double.pi
+        turn.duration = period
+        turn.repeatCount = .infinity
+        turn.isRemovedOnCompletion = false
+        arc.add(turn, forKey: "turn")
     }
 }
 
