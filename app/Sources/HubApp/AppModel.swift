@@ -164,7 +164,7 @@ final class AppModel: ObservableObject {
     @Published var showIgnoredFiles = UserDefaults.standard.bool(forKey: "showIgnoredFiles") {
         didSet {
             UserDefaults.standard.set(showIgnoredFiles, forKey: "showIgnoredFiles")
-            for files in checkouts.values { files.start(showIgnored: showIgnoredFiles) }
+            if let root = recentCheckouts.first { checkouts[root]?.start(showIgnored: showIgnoredFiles) }
         }
     }
     /// Text search reads ignored files too; off by default, as build folders make it slow.
@@ -331,6 +331,10 @@ final class AppModel: ObservableObject {
     /// only, as review comments are.
     @Published var fileNotes: [String: [FileNote]] = [:]
     var checkouts: [String: CheckoutFiles] = [:]
+    /// The checkouts in `checkouts`, the shown one first, then the ones shown before it.
+    private var recentCheckouts: [String] = []
+    /// How many checkouts keep their last files, unwatched, to show at once when shown again.
+    private static let keptCheckouts = 4
     /// Files of checkouts whose previews stay laid out while another checkout shows.
     private var unshownCheckouts: [String: CheckoutFiles] = [:]
     private var noticeHide: DispatchWorkItem?
@@ -1379,8 +1383,9 @@ extension AppModel {
     }
 
     /// The checkout's files, read and watched from the first time they are asked for. Only the
-    /// selected checkout is ever shown, so every other one stops watching and is let go: each
-    /// watched checkout runs git on every change inside it.
+    /// selected checkout is ever shown, so every other one stops watching: each watched checkout
+    /// runs git on every change inside it. The last few keep what they read, unwatched, so showing
+    /// one again shows its files at once while git reads them again (features/0048).
     /// A preview of a checkout not shown asks with `shown` false: it gets that checkout's files
     /// unread and unwatched, and every other checkout keeps its own.
     func checkoutFiles(_ root: String, shown: Bool = true) -> CheckoutFiles {
@@ -1391,10 +1396,10 @@ extension AppModel {
             unshownCheckouts[root] = files
             return files
         }
-        for (other, files) in checkouts where other != root {
-            files.stop()
-            checkouts[other] = nil
-        }
+        for (other, files) in checkouts where other != root { files.stop() }
+        recentCheckouts = [root] + recentCheckouts.filter { $0 != root }
+        for gone in recentCheckouts.dropFirst(Self.keptCheckouts) { checkouts[gone] = nil }
+        recentCheckouts = Array(recentCheckouts.prefix(Self.keptCheckouts))
         if let files = checkouts[root] {
             files.start(showIgnored: showIgnoredFiles)
             return files

@@ -20,6 +20,8 @@ final class CheckoutFiles: ObservableObject {
     /// Ignored folders listed on demand; each re-read lists them again, as git does not.
     private var filled: Set<String> = []
     private var stream: FSEventStreamRef?
+    /// Stopped since it last read: what it holds may be out of date.
+    private var stopped = false
     /// Folders git ignores, as the watcher names them, so a build writing inside one reads nothing.
     private var ignoredFolders: Set<String> = []
     private var pending: DispatchWorkItem?
@@ -30,10 +32,12 @@ final class CheckoutFiles: ObservableObject {
         self.root = root
     }
 
-    /// Starts reading and watching; showing ignored files reads them too.
+    /// Starts reading and watching; showing ignored files reads them too. Started again after
+    /// `stop`, it reads again, showing what it read before until then.
     func start(showIgnored: Bool) {
-        if self.showIgnored != showIgnored || !loaded {
+        if self.showIgnored != showIgnored || !loaded || stopped {
             self.showIgnored = showIgnored
+            stopped = false
             reload()
         }
         if stream == nil { watch() }
@@ -164,21 +168,30 @@ final class CheckoutFiles: ObservableObject {
         }
     }
 
-    /// Many events arrive at once while an agent writes; only the last one reads the folder.
+    /// Many events arrive at once while an agent writes: the first change reads the folder 0.2 s
+    /// later, and while changes keep coming it is read at most every `readGap` (ui-ux/0060).
     private func changed() {
-        pending?.cancel()
+        guard pending == nil else { return }
         let read = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            self.pending = nil
+            self.lastRead = Date()
             self.generation += 1
             self.reload()
         }
         pending = read
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: read)
+        let wait = max(0.2, Self.readGap - Date().timeIntervalSince(lastRead))
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: read)
     }
+
+    private static let readGap: TimeInterval = 2
+    private var lastRead = Date.distantPast
 
     /// Stops watching; a read already running still finishes.
     func stop() {
         pending?.cancel()
+        pending = nil
+        stopped = true
         guard let stream else { return }
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)
