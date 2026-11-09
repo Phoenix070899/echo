@@ -2,6 +2,7 @@
 //! and the clients attached to it.
 
 use std::io::{Read, Write};
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -21,6 +22,9 @@ const SCROLLBACK: usize = 0;
 /// behind, like a stopped `echoctl attach`, is let go rather than held in memory without limit; it
 /// attaches again to a fresh screen.
 const BACKLOG: usize = 1024;
+/// vt100 0.16 panics when a one-row screen wraps a line, so the parsed screen keeps two rows at
+/// least even when the terminal itself is one row tall.
+const MIN_ROWS: u16 = 2;
 
 pub struct Spawn {
     /// Whose screen it is, so the watcher reads it right.
@@ -82,7 +86,7 @@ impl Live {
             cli: spawn.cli,
             writer: Mutex::new(pair.master.take_writer()?),
             master: Mutex::new(pair.master),
-            parser: Mutex::new(vt100::Parser::new(ROWS, COLS, SCROLLBACK)),
+            parser: Mutex::new(parser(ROWS, COLS)),
             subscribers: Mutex::new(Vec::new()),
             killer: Mutex::new(child.clone_killer()),
             blocker: Mutex::new(None),
@@ -118,7 +122,7 @@ impl Live {
             .lock()
             .unwrap()
             .retain(|subscriber| subscriber.try_send(Arc::clone(&chunk)).is_ok());
-        parser.process(bytes);
+        feed(&mut parser, bytes);
     }
 
     pub fn is_alive(&self) -> bool {
@@ -157,7 +161,7 @@ impl Live {
             pixel_width: 0,
             pixel_height: 0,
         })?;
-        parser.screen_mut().set_size(rows, cols);
+        parser.screen_mut().set_size(rows.max(MIN_ROWS), cols);
         Ok(())
     }
 
@@ -171,5 +175,40 @@ impl Live {
 
     pub fn kill(&self) {
         let _ = self.killer.lock().unwrap().kill();
+    }
+}
+
+fn parser(rows: u16, cols: u16) -> vt100::Parser {
+    vt100::Parser::new(rows.max(MIN_ROWS), cols, SCROLLBACK)
+}
+
+/// Parses `bytes` into the screen. A vt100 panic would poison the parser's lock and stop this
+/// terminal's output for good, freezing its program once the holder's buffers fill; the screen
+/// starts over blank instead, and the program's next redraw fills it again.
+fn feed(parser: &mut vt100::Parser, bytes: &[u8]) {
+    if std::panic::catch_unwind(AssertUnwindSafe(|| parser.process(bytes))).is_err() {
+        let (rows, cols) = parser.screen().size();
+        *parser = vt100::Parser::new(rows, cols, SCROLLBACK);
+        eprintln!("hubd: the screen parser failed; the screen starts over");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_parser_panic_starts_the_screen_over() {
+        let mut parser = vt100::Parser::new(1, 10, SCROLLBACK);
+        feed(&mut parser, b"0123456789abc");
+        feed(&mut parser, b"still here");
+        assert!(parser.screen().contents().contains("still here"));
+    }
+
+    #[test]
+    fn a_one_row_terminal_wraps_lines() {
+        let mut parser = parser(1, 10);
+        parser.process(b"0123456789abc");
+        assert!(parser.screen().contents().contains("abc"));
     }
 }
