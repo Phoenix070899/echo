@@ -65,5 +65,5 @@ The long-running process that owns every Worker's terminal, worktree, and messag
 _Avoid_: server, backend, runtime
 
 **Echo**:
-The native macOS app (formerly Hub App): one tab per repo, a ledger grouped by agent (Needs you, Running, Done), and one terminal; it only views and drives the Hub Daemon. The CLI and daemon keep the name `echoctl`.
+The native macOS app (formerly Hub App): one tab per repo, a ledger grouped by agent (Needs you, Running, Done), and one terminal, plus a side terminal (the human's own shell per checkout, under the Files column); it only views and drives the Hub Daemon. The CLI and daemon keep the name `echoctl`.
 _Avoid_: Hub App, client, GUI, frontend

@@ -63,6 +63,9 @@ struct HubApp: App {
                     .disabled(model.chatTarget == nil)
                 Button(model.filesShown ? "Hide Files" : "Show Files") { model.toggleFiles() }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
+                Button(model.sideShown ? "Hide Terminal" : "Show Terminal") { model.toggleSide() }
+                    .keyboardShortcut("`", modifiers: .control)
+                    .disabled(model.selectedCheckout == nil)
                 Button(model.changesSelected ? "Hide Changes" : "Show Changes") { model.toggleChanges() }
                     .keyboardShortcut("d", modifiers: [.command, .option])
                     .disabled(model.selectedWorker == nil)

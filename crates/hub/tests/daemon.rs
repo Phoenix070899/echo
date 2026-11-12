@@ -2391,3 +2391,33 @@ fn a_renewed_orchestrators_chat_scrolls_back_into_its_earlier_session() {
         (Some(first.as_str()), Some(false))
     );
 }
+
+#[test]
+fn a_checkouts_side_shell_runs_commands_outlives_the_daemon_and_stops() {
+    let hub = Hub::new("side");
+    hub.ok(&["status"]);
+    let dir = std::fs::canonicalize(&hub.repo).unwrap().display().to_string();
+    let status = || hub.call("side.status", serde_json::json!({ "path": dir, "lines": 20 }))["result"].clone();
+    let shows = |text: &str| status()["screen"].as_str().unwrap_or("").contains(text);
+    // Asking never starts one.
+    assert_eq!(status()["live"], false);
+    let mut write = serde_json::json!({ "side": dir });
+    write["text"] = serde_json::json!("echo side-$(basename \"$PWD\")-$((2+3))\r");
+    hub.eventually("the shell to run the line", || {
+        hub.call("terminal.write", write.clone());
+        shows("side-repo-5")
+    });
+    assert_eq!(status()["live"], true);
+    assert!(status()["quiet_ms"].as_u64().is_some());
+
+    // A crashed daemon leaves it running; the next takes it over with its screen.
+    kill_listener(&hub.state.join("hubd.sock"));
+    hub.ok(&["status"]);
+    hub.eventually("the next daemon to take the shell over", || status()["live"] == true && shows("side-repo-5"));
+
+    assert_eq!(hub.call("side.stop", serde_json::json!({ "path": dir }))["ok"], true);
+    hub.eventually("the shell to stop", || status()["live"] == false);
+    // A path that is not a folder is refused.
+    let refused = hub.call("terminal.write", serde_json::json!({ "side": "relative", "text": "x" }));
+    assert_eq!(refused["ok"], false, "{refused}");
+}

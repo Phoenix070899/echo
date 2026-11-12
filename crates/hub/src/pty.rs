@@ -57,6 +57,9 @@ pub struct Live {
     pub handed: Mutex<Option<Instant>>,
     alive: AtomicBool,
     started: Instant,
+    /// When output last arrived, as milliseconds since `started`; a side shell is busy while it
+    /// is recent.
+    last_output: std::sync::atomic::AtomicU64,
 }
 
 impl Live {
@@ -145,6 +148,7 @@ impl Live {
             handed: Mutex::new(None),
             alive: AtomicBool::new(true),
             started,
+            last_output: std::sync::atomic::AtomicU64::new(0),
         });
         let reading = Arc::clone(&live);
         std::thread::spawn(move || {
@@ -167,6 +171,8 @@ impl Live {
     /// parser; the parser lock is held throughout, so a new subscriber's snapshot and its first
     /// chunk still line up.
     fn output(&self, bytes: &[u8]) {
+        self.last_output
+            .store(self.started.elapsed().as_millis() as u64, Ordering::Relaxed);
         let mut parser = self.parser.lock().unwrap();
         let chunk = Arc::new(bytes.to_vec());
         self.subscribers
@@ -182,6 +188,12 @@ impl Live {
 
     pub fn age(&self) -> std::time::Duration {
         self.started.elapsed()
+    }
+
+    /// How long since output last arrived; the terminal's age before any has.
+    pub fn quiet_for(&self) -> std::time::Duration {
+        let last = std::time::Duration::from_millis(self.last_output.load(Ordering::Relaxed));
+        self.started.elapsed().saturating_sub(last)
     }
 
     /// The visible screen as plain text.

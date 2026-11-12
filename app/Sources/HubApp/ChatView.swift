@@ -295,7 +295,7 @@ private struct ChatBottom: View {
 
     /// Typing into a Worker is an Intervention (CONTEXT.md); the box says so.
     private var placeholder: String {
-        guard case .worker = target else { return "Message" }
+        guard case .worker = target else { return "Reply to Claude…" }
         return "Intervention: \(target.label) does what you ask and tells the Orchestrator"
     }
 
@@ -322,20 +322,14 @@ private struct ChatBottom: View {
     }
 
     private func field(_ state: ChatState) -> some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            Button(action: attach) {
-                Image(systemName: "paperclip")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Ledger.ink2)
-                    .frame(width: 22, height: 26)
-            }
-            .buttonStyle(.plain)
-            .help("Attach files or images")
-            .accessibilityLabel("Attach")
+        VStack(alignment: .leading, spacing: 0) {
             TextField(placeholder, text: $composer.text, axis: .vertical)
                 .lineLimit(1...10)
                 .textFieldStyle(.plain)
-                .font(Ledger.font(14))
+                .font(Ledger.font(15))
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 6)
                 .focused($focused)
                 .onKeyPress(.return, phases: .down) { press in
                     // Shift-Return is a new line; Return completes a command, or sends.
@@ -372,23 +366,54 @@ private struct ChatBottom: View {
                     interrupt()
                     return .handled
                 }
-            Button(action: send) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Ledger.onPrimary)
-                    .frame(width: 26, height: 26)
-                    .background(canSend ? Ledger.primary : Ledger.ink3, in: Circle())
+            HStack(spacing: 6) {
+                Button(action: attach) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Ledger.ink2)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Attach files or images")
+                .accessibilityLabel("Attach")
+                Spacer(minLength: 8)
+                if let name = modelName {
+                    Text(name).font(Ledger.font(13)).foregroundStyle(Ledger.ink3).lineLimit(1)
+                }
+                Button(action: send) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Ledger.onPrimary)
+                        .frame(width: 32, height: 32)
+                        .background(Ledger.primary.opacity(canSend ? 1 : 0.4),
+                                    in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSend)
+                .help("Send (Return). Shift-Return adds a line.")
+                .accessibilityLabel("Send")
             }
-            .buttonStyle(.plain)
-            .disabled(!canSend)
-            .help("Send (Return). Shift-Return adds a line.")
-            .accessibilityLabel("Send")
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 7)
-        .padding(.vertical, 7)
-        .background(Ledger.field, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Ledger.rule))
+        .background(Ledger.field, in: RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous)
+            .strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
+        .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
+    }
+
+    /// The model the agent runs, as Claude's box names it beside the send button.
+    private var modelName: String? {
+        let raw: String?
+        switch target {
+        case .agent(let id): raw = model.agents(repo).first { $0.id == id }?.model
+        case .worker(let number): raw = model.snapshot(repo).workers.first { $0.number == number }?.model
+        default: raw = nil
+        }
+        guard let raw else { return nil }
+        let name = AgentLine.short(raw)
+        return name.prefix(1).uppercased() + name.dropFirst()
     }
 
     private var canSend: Bool {
@@ -493,7 +518,7 @@ private struct WorkingRow: View {
 
     private func row(step: String, spinner: String?) -> some View {
         HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
+            Spinner(color: Ledger.primary, size: 14, period: 1.4)
             Text(step).foregroundStyle(Ledger.ink2).lineLimit(1).truncationMode(.middle)
             if let spinner, let open = spinner.range(of: " (") {
                 Text(spinner[open.upperBound...].dropLast().description).foregroundStyle(Ledger.ink3).lineLimit(1)
@@ -501,7 +526,7 @@ private struct WorkingRow: View {
             Spacer(minLength: 8)
             Text("Esc to interrupt").foregroundStyle(Ledger.ink3)
         }
-        .font(Ledger.font(12.5))
+        .font(Ledger.font(13))
     }
 }
 
@@ -553,15 +578,15 @@ private struct UserBubble: View {
                     Text("From Orchestrator").font(Ledger.font(12, .medium)).foregroundStyle(Ledger.ink3)
                 }
                 Text(text)
-                    .font(Ledger.font(14))
+                    .font(Ledger.font(15))
                     .foregroundStyle(Ledger.ink)
-                    .lineSpacing(4)
+                    .lineSpacing(5)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Ledger.wash, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Ledger.bubble, in: RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous))
             if fromOrchestrator { Spacer(minLength: 80) }
         }
     }
@@ -587,7 +612,7 @@ private struct FinalReportCard: View {
                         let blocks = parseMarkdown(section.body)
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                                MarkdownBlockView(block: block, leading: 5, codeSize: 13)
+                                MarkdownBlockView(block: block, leading: 6, codeSize: 13)
                                     .padding(.top, index == 0 ? 0 : MarkdownBlockView.gap(blocks[index - 1], block))
                             }
                         }
@@ -604,7 +629,7 @@ private struct FinalReportCard: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Ledger.rule))
+        .overlay(RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous).strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
     }
 }
 
@@ -616,11 +641,11 @@ private struct ReplyView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                MarkdownBlockView(block: block, leading: 5, codeSize: 13)
+                MarkdownBlockView(block: block, leading: 6, codeSize: 13)
                     .padding(.top, index == 0 ? 0 : MarkdownBlockView.gap(blocks[index - 1], block))
             }
         }
-        .font(Ledger.font(14))
+        .font(Ledger.font(15))
         .foregroundStyle(Ledger.ink)
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
@@ -648,6 +673,32 @@ private struct EventLine: View {
     }
 }
 
+/// Claude's mark for a tool call: a symbol by what the tool does.
+private func toolIcon(_ name: String?) -> String {
+    switch name {
+    case "Bash", "BashOutput", "KillShell": return "terminal"
+    case "Edit", "MultiEdit", "Write", "NotebookEdit": return "pencil"
+    case "Read": return "doc.text"
+    case "Grep", "Glob": return "magnifyingglass"
+    case "WebFetch", "WebSearch": return "globe"
+    case "Task", "Agent": return "person.2"
+    default: return "wrench.and.screwdriver"
+    }
+}
+
+private extension View {
+    /// A tool call's card: Claude's half-point border on the canvas.
+    func toolCard() -> some View {
+        clipShape(RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous)
+                .strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
+    }
+}
+
+private struct Hairline: View {
+    var body: some View { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
+}
+
 /// Several tool calls in a row, folded to "6 tool calls" until opened.
 private struct ToolGroup: View {
     let id: String
@@ -656,9 +707,9 @@ private struct ToolGroup: View {
 
     var body: some View {
         let open = feed.open.contains(id)
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             Button { feed.toggle(id) } label: {
-                FoldLabel(open: open, failed: run.contains(where: \.failed)) {
+                FoldLabel(icon: "wrench.and.screwdriver", open: open, failed: run.contains(where: \.failed)) {
                     Text("\(run.count) tool calls").foregroundStyle(Ledger.ink2)
                     Text(run.compactMap(\.tool).uniqued().joined(separator: ", "))
                         .foregroundStyle(Ledger.ink3)
@@ -667,12 +718,13 @@ private struct ToolGroup: View {
             }
             .buttonStyle(.plain)
             if open {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(run) { item in ToolRow(item: item, feed: feed) }
+                ForEach(run) { item in
+                    Hairline()
+                    ToolRow(item: item, feed: feed, framed: false)
                 }
-                .padding(.leading, 16)
             }
         }
+        .toolCard()
     }
 }
 
@@ -680,12 +732,14 @@ private struct ToolGroup: View {
 private struct ToolRow: View {
     let item: ChatItem
     @ObservedObject var feed: ChatFeed
+    /// Alone it is a card of its own; inside a group it is a row of the group's card.
+    var framed = true
 
     var body: some View {
         let open = feed.open.contains(item.id)
-        VStack(alignment: .leading, spacing: 6) {
+        let column = VStack(alignment: .leading, spacing: 0) {
             Button { feed.toggle(item.id) } label: {
-                FoldLabel(open: open, failed: item.failed) {
+                FoldLabel(icon: toolIcon(item.tool), open: open, failed: item.failed) {
                     Text(item.tool ?? "Tool").fontWeight(.medium).foregroundStyle(Ledger.ink2)
                     Text(item.summary ?? "")
                         .font(Ledger.mono)
@@ -695,29 +749,41 @@ private struct ToolRow: View {
                 }
             }
             .buttonStyle(.plain)
-            if open { ToolDetail(item: item).padding(.leading, 16) }
+            if open {
+                Hairline()
+                ToolDetail(item: item).padding(12)
+            }
         }
+        if framed { column.toolCard() } else { column }
     }
 }
 
 private struct FoldLabel<Content: View>: View {
+    let icon: String
     let open: Bool
     let failed: Bool
     @ViewBuilder let content: Content
 
     var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .semibold))
-                .rotationEffect(.degrees(open ? 90 : 0))
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
                 .foregroundStyle(Ledger.ink3)
-                .frame(width: 10)
+                .frame(width: 16)
             content
             if failed {
                 Image(systemName: "exclamationmark.circle").foregroundStyle(Ledger.fail)
             }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .rotationEffect(.degrees(open ? 90 : 0))
+                .foregroundStyle(Ledger.ink3)
         }
-        .font(Ledger.font(12.5))
+        .font(Ledger.font(13))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 }
@@ -748,7 +814,7 @@ private struct ToolDetail: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Ledger.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .background(Ledger.wash, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         }
     }
 }
@@ -770,7 +836,7 @@ private struct EditLines: View {
             }
         }
         .textSelection(.enabled)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
     }
 
     private var lines: [(added: Bool, text: String)] {
@@ -808,15 +874,16 @@ private struct CommandList: View {
                     .font(Ledger.font(12.5))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(index == pick ? Ledger.selected : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .background(index == pick ? Ledger.selected : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(4)
-        .background(Ledger.paper, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Ledger.rule))
+        .background(Ledger.field, in: RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous).strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
+        .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
     }
 }
 

@@ -111,7 +111,7 @@ struct CreateFromSection: View {
             .foregroundStyle(Ledger.ink2)
             .padding(.horizontal, 9)
             .frame(height: 26)
-            .background(Ledger.fill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .background(Ledger.fill, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -164,7 +164,7 @@ struct CreateFromSection: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(form.pickedBranch == branch.name ? Ledger.chosen : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                                in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -346,7 +346,7 @@ private struct BaseBranchSearch: View {
             .foregroundStyle(Ledger.ink)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .background(picked ? Ledger.chosen : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(picked ? Ledger.chosen : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

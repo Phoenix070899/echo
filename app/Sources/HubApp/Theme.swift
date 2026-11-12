@@ -2,110 +2,82 @@ import AppKit
 import HubCore
 import SwiftUI
 
-/// The Ledger look in Astryx's neutral theme: a flat grey ramp, white sheets on a light-grey desk,
-/// black ink, and a yellow highlighter that only ever means "this needs you". Every colour has a
-/// dark-mode twin, each one a value of Astryx's palette or a blend of two (ui-ux/0077).
+/// The Ledger look in Claude's own app: its warm greys (bg-200 for the window and sidebar, bg-100
+/// for the chat canvas, bg-300 for a user's bubble and hovers), near-black ink, a 0.5 pt hairline
+/// for borders, and the clay accent for the one action that moves work forward (ui-ux/0085).
 enum Ledger {
-    static let desk = dynamic(0xF1F1F1, 0x1B1B1B) { $0.background }
-    static let paper = dynamic(0xFFFFFF, 0x262626) { $0.surface }
-    static let ink = dynamic(0x000000, 0xFFFFFF) { $0.text }
-    static let ink2 = dynamic(0x474747, 0xC6C6C6) { CustomLook.mix($0.text, $0.surface, 0.3) }
+    /// The window, and the sidebar that sits flat on it.
+    static let desk = dynamic(0xF5F4ED, 0x1F1E1D) { $0.background }
+    /// The chat canvas and every panel beside it.
+    static let paper = dynamic(0xFAF9F5, 0x262624) { $0.surface }
+    static let ink = dynamic(0x141413, 0xFAF9F5) { $0.text }
+    static let ink2 = dynamic(0x3D3D3A, 0xC2C0B6) { CustomLook.mix($0.text, $0.surface, 0.3) }
     /// The quietest text; still 4.5:1 or better on every fill it sits on.
-    static let ink3 = dynamic(0x6B6B6B, 0x9E9E9E) { CustomLook.mix($0.text, $0.surface, 0.4) }
-    static let rule = dynamic(0xEBEBEB, 0x3A3A3A) { CustomLook.mix($0.surface, $0.text, 0.14) }
-    static let wash = dynamic(0xF1F1F1, 0x303030) { CustomLook.mix($0.surface, $0.text, 0.05) }
-    static let selected = dynamic(0xE2E2E2, 0x3A3A3A) { CustomLook.mix($0.surface, $0.accent, 0.12) }
+    static let ink3 = dynamic(0x6B6A64, 0x9C9A92) { CustomLook.mix($0.text, $0.surface, 0.4) }
+    /// Claude's border: ink at 15 % on the canvas.
+    static let rule = dynamic(0xDDDACF, 0x3F3E3B) { CustomLook.mix($0.surface, $0.text, 0.14) }
+    /// A hovered row, and a code block's fill.
+    static let wash = dynamic(0xEFEDE4, 0x30302E) { CustomLook.mix($0.surface, $0.text, 0.05) }
+    /// The row picked in the sidebar.
+    static let selected = dynamic(0xE8E6DC, 0x3A3936) { CustomLook.mix($0.surface, $0.accent, 0.12) }
+    /// The human's message bubble: Claude's bg-300, darker than the canvas in both modes.
+    static let bubble = dynamic(0xF0EEE6, 0x141413) { CustomLook.mix($0.surface, $0.text, 0.07) }
     // Areas are told apart by fills, not lines.
-    /// The strip the repo tabs sit on.
-    static let strip = dynamic(0xF1F1F1, 0x1B1B1B) { CustomLook.mix($0.background, $0.surface, 0.4) }
-    /// The picked repo tab.
-    static let pill = dynamic(0xFFFFFF, 0x303030) { CustomLook.mix($0.surface, $0.dark ? $0.text : "#ffffff", 0.1) }
-    /// An agent's header band in the ledger, and a panel's title row.
-    static let band = dynamic(0xF6F6F6, 0x202020) { CustomLook.mix($0.background, $0.surface, 0.6) }
+    static let strip = dynamic(0xF5F4ED, 0x1F1E1D) { CustomLook.mix($0.background, $0.surface, 0.4) }
+    static let pill = dynamic(0xFAF9F5, 0x30302E) { CustomLook.mix($0.surface, $0.dark ? $0.text : "#ffffff", 0.1) }
+    /// A title row's band: none, as Claude's header sits on the canvas.
+    static let band = dynamic(0xFAF9F5, 0x262624) { $0.surface }
     /// A Needs you item's card.
-    static let needCard = dynamic(0xFEF6E0, 0x2F2B1C) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.12 : 0.16) }
+    static let needCard = dynamic(0xF7ECDC, 0x3A3024) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.12 : 0.16) }
     /// Secondary buttons.
-    static let fill = dynamic(0xEAEAEA, 0x343434) { CustomLook.mix($0.surface, $0.text, 0.09) }
-    /// The primary button, and the text on it.
-    static let primary = dynamic(0x1B1B1B, 0xF1F1F1) { $0.text }
-    static let onPrimary = dynamic(0xFFFFFF, 0x1B1B1B) { $0.surface }
-    /// Text fields and pickers.
-    static let field = dynamic(0xF1F1F1, 0x1F1F1F) { CustomLook.mix($0.surface, $0.text, 0.06) }
+    static let fill = dynamic(0xEAE8DE, 0x3A3936) { CustomLook.mix($0.surface, $0.text, 0.09) }
+    /// The primary button, and the text on it: Claude's clay, a shade deeper in light mode for 4.5:1
+    /// under its cream text.
+    static let primary = dynamic(0xBE5638, 0xD97757) { $0.text }
+    static let onPrimary = dynamic(0xFFFFFF, 0x141413) { $0.surface }
+    /// The message box and text fields: Claude's bg-000.
+    static let field = dynamic(0xFFFFFF, 0x30302E) { CustomLook.mix($0.surface, $0.text, 0.06) }
     /// The picked one of a few choices, like a mode card.
-    static let chosen = dynamic(0xD4D4D4, 0x474747) { CustomLook.mix($0.surface, $0.accent, 0.22) }
-    /// The highlighter. Text on it is always dark ink, in both modes.
-    static let marker = dynamic(0xFFCE2F, 0xEEC448) { $0.highlighter }
-    static let markerInk = rgb(0x1B1B1B)
-    static let markerWash = dynamic(0xFEF6E0, 0x2F2B1C) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.12 : 0.14) }
-    static let run = dynamic(0x0074E2, 0x6D9CFE) { $0.accent }
-    static let done = dynamic(0x198100, 0x64AF4C)
-    static let fail = dynamic(0xC9303A, 0xFF705D)
+    static let chosen = dynamic(0xEBDBBC, 0x45402F) { CustomLook.mix($0.surface, $0.accent, 0.22) }
+    /// The highlighter, Claude's manilla and kraft. Text on it is always dark ink, in both modes.
+    static let marker = dynamic(0xEBDBBC, 0xD4A27F) { $0.highlighter }
+    static let markerInk = rgb(0x141413)
+    static let markerWash = dynamic(0xF7ECDC, 0x3A3024) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.12 : 0.14) }
+    static let run = dynamic(0x35699B, 0x6A9BCC) { $0.accent }
+    static let done = dynamic(0x5B6E42, 0x9BB07C)
+    static let fail = dynamic(0xB42318, 0xF2877B)
     /// A file changed but not committed, in the Files column; amber, apart from added green.
-    static let changed = dynamic(0x836700, 0xEEC448)
+    static let changed = dynamic(0x9A6A12, 0xD4A27F)
     /// Lines an agent just changed in an open preview, for a moment.
-    static let justChanged = dynamic(0xFDEFC4, 0x3A3317) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.18 : 0.3) }
-    static let okWash = dynamic(0xE3F2E2, 0x213321)
-    static let okInk = dynamic(0x00490B, 0x90CA90)
-    static let failWash = dynamic(0xFFE6E3, 0x4A2523)
-    static let failInk = dynamic(0x76000C, 0xFFAEA7)
+    static let justChanged = dynamic(0xF5E6C4, 0x3D3320) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.18 : 0.3) }
+    static let okWash = dynamic(0xE8EEDD, 0x2B3123)
+    static let okInk = dynamic(0x3F5230, 0xBCD0A0)
+    static let failWash = dynamic(0xF8E1DC, 0x4A2420)
+    static let failInk = dynamic(0x8C1D14, 0xF5B3AA)
 
-    /// Astryx's radii: inner 6, element 10 (buttons, fields), container 12 (sheets).
+    /// Claude's radii (Tailwind's): inner 6 (chips), element 8 (rows, buttons, small fields),
+    /// card 12 (bubbles, tool cards, popovers), container 16 (panels and the message box).
     static let radiusInner: CGFloat = 6
-    static let radiusElement: CGFloat = 10
-    static let radiusContainer: CGFloat = 12
+    static let radiusElement: CGFloat = 8
+    static let radiusCard: CGFloat = 12
+    static let radiusContainer: CGFloat = 16
+    /// Claude's border is half a point.
+    static let hairline: CGFloat = 0.5
 
     static let mono = Font.system(size: 12, design: .monospaced)
 
-    /// Astryx's one face, Figtree, used for everything but code: 400 for text, 500 for labels,
-    /// 600 for headings and 700 for the heaviest. Falls back to the system face when the font is
-    /// not in the app (as in tests).
+    /// The interface's sans: the system face at the weight asked for.
     static func font(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        let wght = Self.wght(weight)
-        let key = "\(size)-\(wght)"
-        if let font = fonts[key] { return font }
-        let font: Font = figtree(size, wght).map(Font.init) ?? .system(size: size, weight: systemWeight(wght))
-        fonts[key] = font
-        return font
+        .system(size: size, weight: weight)
     }
 
     /// `font`'s face as an NSFont, for text AppKit draws.
     static func nsFont(_ size: CGFloat, _ weight: Font.Weight = .regular) -> NSFont {
-        let wght = Self.wght(weight)
-        return figtree(size, wght) ?? .systemFont(ofSize: size, weight: wght <= 400 ? .regular : wght == 500 ? .medium : wght == 600 ? .semibold : .bold)
+        .systemFont(ofSize: size, weight: weight == .medium ? .medium : weight == .semibold ? .semibold : weight == .bold ? .bold : .regular)
     }
 
-    /// The variable axis value for a weight: Astryx's normal, medium, semibold and bold.
-    private static func wght(_ weight: Font.Weight) -> Int {
-        switch weight {
-        case .ultraLight, .thin, .light, .regular: return 400
-        case .medium: return 500
-        case .semibold: return 600
-        default: return 700
-        }
-    }
-
-    private static func systemWeight(_ wght: Int) -> Font.Weight {
-        wght <= 400 ? .regular : wght == 500 ? .medium : wght == 600 ? .semibold : .bold
-    }
-
-    /// Figtree at `wght`, if the app has it.
-    private static func figtree(_ size: CGFloat, _ wght: Int) -> NSFont? {
-        let descriptor = NSFontDescriptor(fontAttributes: [.family: family])
-            .addingAttributes([NSFontDescriptor.AttributeName(kCTFontVariationAttribute as String): [0x7767_6874: wght]])
-        return NSFont(descriptor: descriptor, size: size).flatMap { $0.familyName == family ? $0 : nil }
-    }
-
-    private static let family = "Figtree"
-    nonisolated(unsafe) private static var fonts: [String: Font] = [:]
-
-    /// Registers Figtree from the app's Resources/Fonts; call once at launch.
-    static func registerFonts() {
-        guard let dir = Bundle.main.resourceURL?.appendingPathComponent("Fonts"),
-              let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
-        for url in files where url.pathExtension == "ttf" {
-            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
-        }
-    }
+    /// The system faces need no registering; kept so launch code stays as it was.
+    static func registerFonts() {}
 
     private static func rgb(_ hex: Int) -> Color {
         Color(nsColor: nsColor(hex))
@@ -182,9 +154,9 @@ struct StateMark: View {
     let color: Color
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 2, style: .continuous)
+        Circle()
             .fill(color)
-            .frame(width: 8, height: 8)
+            .frame(width: 7, height: 7)
             .accessibilityHidden(true)
     }
 }
@@ -338,7 +310,7 @@ struct Marked: View {
     }
 }
 
-/// The ledger's buttons: Astryx's primary for the action that moves work forward, a quiet fill for
+/// The ledger's buttons: the clay accent's primary for the action that moves work forward, a quiet fill for
 /// the rest; 28 pt tall, or 32 pt when large, on the row radius.
 struct LedgerButtonStyle: ButtonStyle {
     var primary = false
@@ -356,7 +328,7 @@ struct LedgerButtonStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .font(Ledger.font(large ? 14 : 13, .medium))
+                .font(Ledger.font(14, .medium))
                 .lineLimit(1)
                 .padding(.horizontal, large ? 14 : 10)
                 .frame(minHeight: large ? 32 : 28)
@@ -372,6 +344,36 @@ extension ButtonStyle where Self == LedgerButtonStyle {
     static var ledger: LedgerButtonStyle { LedgerButtonStyle() }
     static var ledgerPrimary: LedgerButtonStyle { LedgerButtonStyle(primary: true) }
     static var ledgerLarge: LedgerButtonStyle { LedgerButtonStyle(primary: true, large: true) }
+}
+
+/// Claude's segmented control: a grey track, the picked choice on a white thumb. Stands in for
+/// the system's segmented picker, whose accent-blue thumb belongs to no other control here.
+struct LedgerSegmented<Value: Hashable>: View {
+    @Binding var selection: Value
+    let options: [(value: Value, title: String)]
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+                let on = option.value == selection
+                Button { selection = option.value } label: {
+                    Text(option.title)
+                        .font(Ledger.font(12, on ? .medium : .regular))
+                        .foregroundStyle(on ? Ledger.ink : Ledger.ink2)
+                        .padding(.horizontal, 10)
+                        .frame(height: 24)
+                        .background(on ? Ledger.field : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
+                        .shadow(color: .black.opacity(on ? 0.08 : 0), radius: 1.5, y: 0.5)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(Ledger.bubble, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+        .fixedSize()
+    }
 }
 
 /// A blue text link, for quiet actions like Show all.
@@ -390,10 +392,37 @@ extension ButtonStyle where Self == LinkButtonStyle {
 }
 
 extension View {
-    /// A sheet of paper on the desk, set apart by its fill alone, on Astryx's container radius.
+    /// A sheet of paper on the desk, set apart by its fill alone, on the container radius.
     func ledgerSheet() -> some View {
         background(Ledger.paper, in: RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous))
             .clipShape(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous)
+                .strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
+    }
+
+    /// Lays the view out in exactly the room it is offered and cuts what does not fit. Without it a
+    /// view whose content cannot shrink (a header, a grid, a terminal) sets a minimum width the
+    /// columns around it cannot take back, and the row runs past the window's edge.
+    func clippedToOffer() -> some View {
+        GeometryReader { proxy in
+            self.frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading).clipped()
+        }
+    }
+
+    /// One line that runs out in a fade rather than an ellipsis, as Claude's sidebar titles do.
+    /// Fills the width it is given, so nothing flexible should follow it in a row. `minWidth: 0`
+    /// is what lets it be narrower than its text: without it a long title keeps the whole row,
+    /// and the column around it, as wide as the title.
+    func fadedEnd(_ width: CGFloat = 28) -> some View {
+        lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .clipped()
+            .mask(HStack(spacing: 0) {
+                Rectangle()
+                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: width)
+            })
     }
 
     /// A text field filled rather than outlined; pair with `.textFieldStyle(.plain)`.
@@ -412,7 +441,7 @@ struct SectionHeader<Trailing: View>: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(title).font(Ledger.font(14, .semibold))
+            Text(title).font(Ledger.font(15, .semibold))
             if let count {
                 Text("\(count)").font(Ledger.font(12.5)).foregroundStyle(Ledger.ink3).monospacedDigit()
             }

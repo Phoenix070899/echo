@@ -65,31 +65,41 @@ struct ContentView: View {
 
     /// The ledger, the agent or Worker shown, and its files.
     private var agents: some View {
-        HStack(alignment: .top, spacing: 0) {
-            if model.ledgerCollapsed {
-                LedgerRail()
-                    .frame(width: 48)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-                Color.clear.frame(width: 12)
-            } else {
-                LedgerColumn()
-                    .frame(width: model.ledgerWidth)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-                ColumnResizer(width: $model.ledgerWidth, range: 300...640, grows: .right, fallback: 392)
+        GeometryReader { geo in
+            let showFiles = model.filesShown && model.selectedCheckout != nil
+            // The ledger's resizer (or the rail's gap), the Files resizer, and the side padding.
+            let widths = ColumnLayout.fit(
+                total: geo.size.width, fixed: 24 + 12 + (showFiles ? 12 : 0),
+                ledger: model.ledgerCollapsed ? 48 : model.ledgerWidth, files: showFiles ? model.filesWidth : nil,
+                ledgerMin: model.ledgerCollapsed ? 48 : 300)
+            HStack(alignment: .top, spacing: 0) {
+                if model.ledgerCollapsed {
+                    LedgerRail()
+                        .frame(width: 48)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                    Color.clear.frame(width: 12)
+                } else {
+                    LedgerColumn()
+                        .clippedToOffer()
+                        .frame(width: widths.ledger)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                    ColumnResizer(width: $model.ledgerWidth, range: 300...640, grows: .right, fallback: 392)
+                }
+                MainPanel()
+                    .clippedToOffer()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if showFiles, let root = model.selectedCheckout {
+                    ColumnResizer(width: $model.filesWidth, range: 220...600, grows: .left, fallback: 280)
+                    FilesColumn(root: root)
+                        .frame(width: widths.files ?? model.filesWidth)
+                        .frame(maxHeight: .infinity)
+                        .ledgerSheet()
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
-            MainPanel()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if model.filesShown, let root = model.selectedCheckout {
-                ColumnResizer(width: $model.filesWidth, range: 220...600, grows: .left, fallback: 280)
-                FilesColumn(root: root)
-                    .frame(width: model.filesWidth)
-                    .frame(maxHeight: .infinity)
-                    .ledgerSheet()
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 12)
     }
 
     private var closeTitle: String {
@@ -166,7 +176,7 @@ struct SearchField: View {
                     .foregroundStyle(Ledger.ink2)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Ledger.strip, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .background(Ledger.strip, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
             }
             .font(Ledger.font(13.5))
             .foregroundStyle(Ledger.ink2)
@@ -184,101 +194,154 @@ struct SearchField: View {
     }
 }
 
-/// Folder tabs across the top of the ledger, one per repo with a live agent or Workers at work,
-/// in name order. Repos with nothing running fold into a "stopped" tab; + starts a session.
-struct RepoTabs: View {
+/// The ledger as a tree: each repo, its agents beneath, and each agent's Workers beneath that,
+/// one line apiece (ui-ux/0084). A Worker that finished leaves it; one that needs you stays.
+struct LedgerTree: View {
     @EnvironmentObject private var model: AppModel
+    @StateObject private var stoppedOpen = Flag()
 
     var body: some View {
-        HStack(spacing: 4) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
-                    let tabs = model.tabSessions
-                    if tabs.isEmpty {
-                        Text("No repos yet")
-                            .foregroundStyle(Ledger.ink3)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 5)
-                    }
-                    ForEach(tabs) { session in
-                        RepoTab(session: session)
-                    }
-                    let stopped = model.stoppedSessions
-                    if !stopped.isEmpty {
-                        Menu {
-                            ForEach(stopped) { session in
-                                Button(session.name) { model.selectSession(session.repo) }
-                            }
-                        } label: {
-                            Text("\(stopped.count) stopped").foregroundStyle(Ledger.ink3)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                NewSessionMenu(row: true)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 8)
+                Text("Sessions")
+                    .font(Ledger.font(12))
+                    .foregroundStyle(Ledger.ink3)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 14)
+                    .padding(.bottom, 4)
+                let tabs = model.tabSessions
+                if tabs.isEmpty {
+                    Hint("No repos yet. Start a session with +.")
+                }
+                ForEach(tabs) { session in
+                    RepoGroup(session: session)
+                }
+                let stopped = model.stoppedSessions
+                if !stopped.isEmpty {
+                    Button { stoppedOpen.on.toggle() } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "chevron.right")
+                                .font(Ledger.font(9, .semibold))
+                                .rotationEffect(.degrees(stoppedOpen.on ? 90 : 0))
+                                .frame(width: 16)
+                            Text("Stopped")
+                            Text("\(stopped.count)").monospacedDigit()
+                            Spacer()
                         }
-                        .menuStyle(.button)
-                        .buttonStyle(.plain)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 5)
+                        .font(Ledger.font(12, .medium))
+                        .foregroundStyle(Ledger.ink3)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
+                    if stoppedOpen.on {
+                        ForEach(stopped) { session in
+                            TreeRow(selected: false, indent: 0) {
+                                model.selectSession(session.repo)
+                            } label: {
+                                Image(systemName: "folder").font(Ledger.font(13)).foregroundStyle(Ledger.ink3).frame(width: 16)
+                                Text(session.name).foregroundStyle(Ledger.ink2).fadedEnd()
+                            }
+                        }
                     }
                 }
             }
-            NewSessionMenu()
+            .padding(.bottom, 12)
         }
-        .font(Ledger.font(13))
-        .padding(6)
-        .background(Ledger.strip, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .padding(.horizontal, 8)
-        .padding(.top, 8)
+    }
+}
+
+/// A line of the tree: a rounded fill when picked or hovered, the same height everywhere.
+struct TreeRow<Label: View>: View {
+    let selected: Bool
+    /// 0 for a repo, 1 for an agent, 2 for a Worker.
+    let indent: Int
+    let action: () -> Void
+    @ViewBuilder var label: () -> Label
+    @StateObject private var hovering = Flag()
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) { label() }
+                .font(Ledger.font(14))
+                .padding(.leading, 12 + CGFloat(indent) * 22)
+                .padding(.trailing, 12)
+                .frame(height: 32)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(selected ? Ledger.selected : hovering.on ? Ledger.wash : Color.clear,
+                            in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+                .overlay(alignment: .leading) {
+                    // Beneath a repo or an agent, a small dot marks the row as its child (ui-ux/0086).
+                    if indent > 0 {
+                        Circle().fill(Ledger.ink3.opacity(0.55)).frame(width: 3, height: 3)
+                            .padding(.leading, CGFloat(indent) * 20 - 1.5)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering.on = $0 }
+    }
+}
+
+/// One repo: its header line, and under it an indent guide beside its agents.
+struct RepoGroup: View {
+    @EnvironmentObject private var model: AppModel
+    let session: SessionInfo
+
+    var body: some View {
+        let snapshot = model.snapshot(session.repo)
+        let needs = snapshot.needsYouCount
+        let groups = snapshot.groups
+        VStack(alignment: .leading, spacing: 2) {
+            TreeRow(selected: false, indent: 0) {
+                model.selectSession(session.repo)
+            } label: {
+                Image(systemName: "folder").font(Ledger.font(13)).foregroundStyle(Ledger.ink3).frame(width: 16)
+                Text(session.name)
+                    .font(Ledger.font(14, .semibold))
+                    .foregroundStyle(Ledger.ink)
+                    .fadedEnd()
+                if needs > 0 { NeedsBadge(count: needs) }
+            }
+            .help("\(session.name): \(workers(model.activeCount(session.repo), "at work"))")
+            if !groups.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                        AgentBranch(group: group, snapshot: snapshot, repo: session.repo, number: index + 1)
+                    }
+                }
+            }
+        }
         .padding(.bottom, 10)
     }
 }
 
-/// One repo's tab, a pill on the strip: its name and, when something waits on the human, the
-/// yellow count.
-struct RepoTab: View {
-    @EnvironmentObject private var model: AppModel
-    let session: SessionInfo
-    @StateObject private var hovering = Flag()
+/// The amber count of what waits on the human.
+struct NeedsBadge: View {
+    let count: Int
 
     var body: some View {
-        let selected = model.selectedRepo == session.repo
-        let needs = model.snapshot(session.repo).needsYouCount
-        Button { model.selectSession(session.repo) } label: {
-            HStack(spacing: 6) {
-                if session.isNormalOnly {
-                    AgentGlyph(kind: .claude).foregroundStyle(Ledger.ink3)
-                }
-                Text(session.name).fontWeight(.medium)
-                if needs > 0 {
-                    Text("\(needs)")
-                        .font(Ledger.font(11.5, .semibold))
-                        .foregroundStyle(Ledger.markerInk)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Ledger.marker, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                }
-            }
-            .foregroundStyle(selected ? Ledger.ink : Ledger.ink2)
-            .padding(.horizontal, 11)
-            .padding(.vertical, 5)
-            .background {
-                if selected {
-                    Capsule().fill(Ledger.pill)
-                } else if hovering.on {
-                    Capsule().fill(Ledger.fill)
-                }
-            }
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering.on = $0 }
-        .help("\(session.name): \(workers(model.activeCount(session.repo), "at work"))")
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        Text("\(count)")
+            .font(Ledger.font(11, .semibold))
+            .foregroundStyle(Ledger.markerInk)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Ledger.marker, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
     }
 }
 
 /// The + at the end of the tabs: an Orchestrator, or a Terminal (a plain shell in the repo).
 struct NewSessionMenu: View {
     @EnvironmentObject private var model: AppModel
+    /// The sidebar's "New session" row, as Claude's "New chat"; else the bare +.
+    var row = false
 
     var body: some View {
         Menu {
@@ -298,15 +361,30 @@ struct NewSessionMenu: View {
             }
             .disabled(model.selectedRepo == nil)
         } label: {
-            Image(systemName: "plus")
-                .font(Ledger.font(12, .semibold))
-                .frame(width: 26, height: 26)
+            if row {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Ledger.onPrimary)
+                        .frame(width: 22, height: 22)
+                        .background(Ledger.primary, in: Circle())
+                    Text("New session").font(Ledger.font(14, .medium)).foregroundStyle(Ledger.ink)
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 6)
+                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
                 .contentShape(Rectangle())
+            } else {
+                Image(systemName: "plus")
+                    .font(Ledger.font(12, .semibold))
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .fixedSize()
+        .fixedSize(horizontal: !row, vertical: false)
         .foregroundStyle(Ledger.ink2)
         .help("New session")
         .accessibilityLabel("New session")
@@ -368,14 +446,8 @@ struct LedgerColumn: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            RepoTabs()
-            if let repo = model.selectedRepo {
-                LedgerSheet(repo: repo, snapshot: model.snapshot(repo))
-            } else {
-                EmptyLedger()
-            }
+            LedgerTree()
             Spacer(minLength: 0)
-            Rectangle().fill(Ledger.rule).frame(height: 1)
             HStack {
                 LedgerToggle()
                 Spacer()
@@ -385,7 +457,6 @@ struct LedgerColumn: View {
             .padding(.vertical, 6)
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .ledgerSheet()
     }
 }
 
@@ -443,7 +514,7 @@ struct LedgerRail: View {
                                 .foregroundStyle(Ledger.markerInk)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
-                                .background(Ledger.marker, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                .background(Ledger.marker, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
                                 .help("\(snapshot.needsYouCount) need you")
                                 .padding(.bottom, 6)
                         }
@@ -462,7 +533,6 @@ struct LedgerRail: View {
                 }
             }
             Spacer(minLength: 0)
-            Rectangle().fill(Ledger.rule).frame(height: 1)
             VStack(spacing: 2) {
                 SettingsButton()
                 LedgerToggle()
@@ -470,14 +540,13 @@ struct LedgerRail: View {
             .padding(.vertical, 6)
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .ledgerSheet()
     }
 
-    /// In the full ledger's order: waiting on you, running, done.
+    /// In the tree's order: waiting on you, running, ended badly.
     private func workers(_ group: AgentGroup, in snapshot: Snapshot) -> [WorkerRow] {
-        let waiting = group.needs.compactMap(\.worker).compactMap { id in snapshot.workers.first { $0.id == id } }
-        var seen = Set<String>()
-        return (waiting + group.running + group.settled).filter { seen.insert($0.id).inserted }
+        var selected: String?
+        if case .worker(let r, let id)? = model.selection, r == snapshot.repo { selected = id }
+        return visibleWorkers(group, in: snapshot, selected: selected)
     }
 }
 
@@ -492,7 +561,7 @@ struct RailAgent: View {
             AgentGlyph(kind: agent.kind)
                 .foregroundStyle(agent.live ? Ledger.ink : Ledger.ink3)
                 .frame(width: 32, height: 28)
-                .background(selected ? Ledger.selected : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(selected ? Ledger.selected : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -511,12 +580,7 @@ struct RailWorker: View {
         Button { model.select(.worker(repo: repo, id: worker.id)) } label: {
             WorkerMark(worker: worker)
                 .frame(width: 32, height: 22)
-                .background(selected ? Ledger.selected : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(alignment: .topTrailing) {
-                    if model.isUnread(worker, repo: repo) {
-                        Circle().fill(Ledger.run).frame(width: 5, height: 5).padding(4)
-                    }
-                }
+                .background(selected ? Ledger.selected : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -525,215 +589,105 @@ struct RailWorker: View {
     }
 }
 
-/// One repo's ledger: a group per agent. New agents come from the + beside the tabs.
-struct LedgerSheet: View {
-    @EnvironmentObject private var model: AppModel
-    let repo: String
-    let snapshot: Snapshot
-
-    var body: some View {
-        let groups = snapshot.groups
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                if groups.isEmpty {
-                    Hint("No agents in this repo yet. Start one with + beside the tabs.")
-                        .padding(.top, 14)
-                }
-                ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
-                    // A group showing content is set apart by space; header-only ones stack tight.
-                    if index > 0, model.showsContent(groups[index - 1]) || model.showsContent(group) {
-                        Color.clear.frame(height: 10)
-                    }
-                    AgentGroupView(group: group, repo: repo, number: index + 1)
-                }
-            }
-            .padding(.bottom, 12)
-        }
-    }
+/// The Workers an agent's branch shows: those waiting on the human, then those at work, then
+/// any that ended badly. A Worker that finished is gone, unless it is the one on screen, so
+/// opening its report from a notification still works (ui-ux/0084).
+func visibleWorkers(_ group: AgentGroup, in snapshot: Snapshot, selected: String?) -> [WorkerRow] {
+    let waiting = group.needs.compactMap(\.worker).compactMap { id in snapshot.workers.first { $0.id == id } }
+    let settled = group.settled.filter { $0.isTrouble || $0.id == selected }
+    var seen = Set<String>()
+    return (waiting + group.running + settled).filter { seen.insert($0.id).inserted }
 }
 
-/// One agent in the ledger: its header, then (unless folded) its Needs you, Running and Done.
-struct AgentGroupView: View {
+/// One agent in the tree: its line, then its Workers and what waits on the human.
+struct AgentBranch: View {
     @EnvironmentObject private var model: AppModel
     let group: AgentGroup
+    let snapshot: Snapshot
     let repo: String
-    /// Its place in the ledger, which ⌘ and the number shows.
+    /// Its place in the repo, which ⌘ and the number shows.
     let number: Int
-    @StateObject private var showAllDone = Flag()
-    @StateObject private var showAllRunning = Flag()
-
-    private static let doneShown = 4
-    private static let runningShown = 5
 
     var body: some View {
         let agent = group.agent
+        let selectedWorker: String? = {
+            if case .worker(let r, let id)? = model.selection, r == repo { return id }
+            return nil
+        }()
+        let workers = visibleWorkers(group, in: snapshot, selected: selectedWorker)
         let folded = model.collapsed.contains(agent.id)
-        VStack(alignment: .leading, spacing: 0) {
-            AgentHeader(group: group, repo: repo, folded: folded, number: number)
-            if model.showsContent(group) {
-                // A small inset sets the group's contents off its header band.
-                VStack(alignment: .leading, spacing: 0) {
-                    if let confirmation = model.confirmations[agent.id] {
-                        ConfirmationLine(text: confirmation.text)
-                            .padding(.leading, 18)
-                            .padding(.top, 4)
+        VStack(alignment: .leading, spacing: 2) {
+            AgentLine(group: group, repo: repo, number: number, folded: folded, hasChildren: !workers.isEmpty || !group.needs.isEmpty,
+                      running: workers.filter(\.isActive).count)
+            if !folded {
+                if let confirmation = model.confirmations[agent.id] {
+                    ConfirmationLine(text: confirmation.text)
+                        .padding(.leading, 22)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(workers) { worker in
+                        LedgerRow(worker: worker, repo: repo)
                     }
-                    if !group.needs.isEmpty {
-                        SubHeader(title: "Needs you", count: group.needs.count)
-                        ForEach(group.needs) { need in
-                            NeedItem(need: need, repo: repo)
-                                .padding(.leading, 26)
-                                .padding(.trailing, 12)
-                                .padding(.vertical, 3)
-                        }
+                    // What waits on the human keeps its buttons; the Worker's line above only shows an amber mark.
+                    ForEach(group.needs) { need in
+                        NeedItem(need: need, repo: repo)
+                            .padding(.leading, 56)
+                            .padding(.trailing, 12)
+                            .padding(.vertical, 3)
                     }
-                    // A Claude Code session lists Workers too when they fall to it: a repo with no Orchestrator.
-                    if agent.isOrchestrator || !group.running.isEmpty || !group.settled.isEmpty {
-                        // A Worker waiting on the human sits under Needs you, so it counts too.
-                        if agent.isOrchestrator && group.running.isEmpty && group.settled.isEmpty
-                            && !group.needs.contains(where: { $0.worker != nil }) {
-                            Hint(agent.live
-                                 ? "No Workers yet. Ask it for something and it hands out Tasks."
-                                 : "No Workers. Start it to pick up where it left off.")
-                                .padding(.leading, 18)
-                                .padding(.top, group.needs.isEmpty ? 2 : 8)
-                        }
-                        if !group.running.isEmpty {
-                            SubHeader(title: "Running", count: group.running.count)
-                            ForEach(showAllRunning.on ? group.running : Array(group.running.prefix(Self.runningShown))) { worker in
-                                LedgerRow(worker: worker, repo: repo)
-                                    .transition(.opacity)
-                            }
-                            if group.running.count > Self.runningShown {
-                                Button(showAllRunning.on ? "Show fewer" : "Show \(group.running.count - Self.runningShown) more") {
-                                    showAllRunning.on.toggle()
-                                }
-                                .buttonStyle(.ledgerLink)
-                                .padding(.leading, 34)
-                                .padding(.vertical, 4)
-                            }
-                        }
-                        if !group.settled.isEmpty {
-                            let read = group.settled.filter { !model.isUnread($0, repo: repo) }
-                            let unread = group.settled.count - read.count
-                            SubHeader(title: "Done", count: group.settled.count) {
-                                HStack(spacing: 12) {
-                                    if unread > 0 {
-                                        Text("\(unread) unread").font(Ledger.font(12)).foregroundStyle(Ledger.ink3)
-                                    }
-                                    if group.settled.count > Self.doneShown {
-                                        Button(showAllDone.on ? "Show fewer" : "Show all") { showAllDone.on.toggle() }
-                                            .buttonStyle(.ledgerLink)
-                                    }
-                                    Menu {
-                                        Button("Clear read") { model.dismiss(read) }
-                                            .disabled(read.isEmpty)
-                                            .help("Take the reports you have opened off this list")
-                                        Button("Clear all") { model.dismiss(group.settled) }
-                                            .help("Take every report off this list, read or not")
-                                    } label: {
-                                        Image(systemName: "ellipsis")
-                                            .rotationEffect(.degrees(90))
-                                            .font(Ledger.font(12.5, .medium))
-                                            .foregroundStyle(Ledger.run)
-                                            .frame(width: 16, height: 16)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .menuStyle(.borderlessButton)
-                                    .menuIndicator(.hidden)
-                                    .fixedSize()
-                                    .help("More actions for this list")
-                                }
-                            }
-                            ForEach(showAllDone.on ? group.settled : Array(group.settled.prefix(Self.doneShown))) { worker in
-                                LedgerRow(worker: worker, repo: repo)
-                                    .transition(.opacity)
-                            }
-                        }
-                    }
-    }
-                .padding(.top, 6)
-                .padding(.bottom, 4)
-                // A Worker starting, settling, or leaving slides the rows below it instead of jumping.
-                .animation(.easeInOut(duration: 0.2), value: (group.running + group.settled).map(\.id))
+                }
             }
         }
-        .padding(.bottom, model.showsContent(group) ? 8 : 0)
+        // A Worker starting, finishing, or leaving slides the rows below it instead of jumping.
+        .animation(.easeInOut(duration: 0.2), value: workers.map(\.id))
     }
 }
 
-/// An agent's row in the ledger: click it to show its terminal; the chevron folds its group.
-struct AgentHeader: View {
+/// An agent's line: its mark and name; click to show it. The chevron folds its Workers.
+struct AgentLine: View {
     @EnvironmentObject private var model: AppModel
     let group: AgentGroup
     let repo: String
-    let folded: Bool
     let number: Int
+    let folded: Bool
+    let hasChildren: Bool
+    let running: Int
+    @StateObject private var hovering = Flag()
 
     var body: some View {
         let agent = group.agent
         let selected = model.selection == .agent(repo: repo, id: agent.id)
-        HStack(spacing: 8) {
-            Button { model.toggleCollapsed(agent.id) } label: {
-                Image(systemName: "chevron.right")
-                    .font(Ledger.font(10, .semibold))
-                    .rotationEffect(.degrees(folded ? 0 : 90))
-                    .foregroundStyle(Ledger.ink3)
-                    .frame(width: 22, height: 26)
-                    .contentShape(Rectangle())
+        TreeRow(selected: selected, indent: 1) {
+            model.select(.agent(repo: repo, id: agent.id))
+        } label: {
+            AgentGlyph(kind: agent.kind).foregroundStyle(agent.live ? Ledger.ink2 : Ledger.ink3)
+            Text(agent.displayName)
+                .italic(agent.name == nil && !agent.isTerminal)
+                .foregroundStyle(agent.live ? Ledger.ink : Ledger.ink3)
+                .fadedEnd()
+            if folded && running > 0 {
+                Text("\(running)").font(Ledger.font(12)).monospacedDigit().foregroundStyle(Ledger.ink3)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(folded ? "Show \(agent.displayName)" : "Fold \(agent.displayName)")
-            Button { model.select(.agent(repo: repo, id: agent.id)) } label: {
-                HStack(spacing: 8) {
-                    // Its number, for ⌘1 to ⌘9; past nine there is no shortcut, so no number.
-                    Text(number <= 9 ? "\(number)" : "")
-                        .font(Ledger.font(12, .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(selected ? Ledger.ink : Ledger.ink3)
-                        .frame(width: 12)
-                        .help(number <= 9 ? "⌘\(number)" : "")
-                        .accessibilityHidden(true)
-                    AgentGlyph(kind: agent.kind).foregroundStyle(Ledger.ink3)
-                    Text(agent.displayName)
-                        .fontWeight(.medium)
-                        .italic(agent.name == nil)
-                        .foregroundStyle(agent.name == nil ? Ledger.ink2 : Ledger.ink)
-                        .lineLimit(1)
-                    Text(meta)
-                        .font(Ledger.font(12))
+            if !group.needs.isEmpty && folded { NeedsBadge(count: group.needs.count) }
+            if !agent.live {
+                Circle().strokeBorder(Ledger.ink3, lineWidth: 1).frame(width: 7, height: 7)
+                    .accessibilityLabel("Stopped")
+            }
+            if hasChildren && (folded || hovering.on) {
+                Button { model.toggleCollapsed(agent.id) } label: {
+                    Image(systemName: "chevron.right")
+                        .font(Ledger.font(9, .semibold))
+                        .rotationEffect(.degrees(folded ? 0 : 90))
                         .foregroundStyle(Ledger.ink3)
-                        .lineLimit(1)
-                    Spacer(minLength: 6)
-                    if folded && !group.running.isEmpty {
-                        Text("\(group.running.count) running").font(Ledger.font(12)).foregroundStyle(Ledger.ink2)
-                    }
-                    if !group.needs.isEmpty {
-                        Text("\(group.needs.count)")
-                            .font(Ledger.font(11, .semibold))
-                            .foregroundStyle(Ledger.markerInk)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Ledger.marker, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                    }
-                    Circle().fill(agent.live ? Ledger.done : Ledger.ink3).frame(width: 7, height: 7)
-                    Text(state).font(Ledger.font(12)).foregroundStyle(Ledger.ink2)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityLabel(folded ? "Show \(agent.displayName)'s Workers" : "Fold \(agent.displayName)'s Workers")
             }
-            .buttonStyle(.plain)
         }
-        .padding(.leading, 6)
-        .padding(.trailing, 16)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // The whole row selects the agent, padding included; the chevron keeps its own click.
-        .contentShape(Rectangle())
-        .onTapGesture { model.select(.agent(repo: repo, id: agent.id)) }
+        .onHover { hovering.on = $0 }
         .prewarmsTerminal(.agent(id: agent.id), epoch: "\(agent.live)")
-        // Astryx's rows: a rounded fill inset from the column's edges, no bar.
-        .background(selected ? Ledger.selected : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
-        .padding(.horizontal, 8)
         .contextMenu {
             Button("Rename…") { model.renaming = agent }
             if agent.isTerminal {
@@ -745,55 +699,16 @@ struct AgentHeader: View {
             Divider()
             Button("Close \(agent.kindName)…") { model.closing = agent }
         }
-        .help(agent.name == nil ? "Named after your first request" : agent.displayName)
-    }
-
-    /// "Orchestrator, opus"; the default model goes unsaid, so the row does not truncate it.
-    private var meta: String {
-        // "Orchestrator, feat/login, opus": what it is, the branch it works on, its model.
-        [agent.isOrchestrator ? "Orchestrator" : nil, agent.branch, agent.model.map(Self.short)]
-            .compactMap { $0 }
-            .joined(separator: ", ")
-    }
-
-    private var agent: Agent { group.agent }
-
-    private var state: String {
-        if agent.live { return "live" }
-        return agent.isOrchestrator ? "stopped" : "ended"
+        .help([agent.name == nil ? "Named after your first request" : agent.displayName,
+               number <= 9 ? "⌘\(number)" : nil,
+               agent.isOrchestrator ? "Orchestrator" : nil, agent.branch,
+               agent.model.map(AgentLine.short)].compactMap { $0 }.joined(separator: ", "))
     }
 
     /// "claude-opus-5-5" reads "opus".
     static func short(_ model: String) -> String {
         let parts = model.split(separator: "-")
         return parts.count >= 2 && parts[0] == "claude" ? String(parts[1]) : model
-    }
-}
-
-/// A section inside an agent's group: "Needs you 2".
-struct SubHeader<Trailing: View>: View {
-    let title: String
-    let count: Int
-    @ViewBuilder var trailing: () -> Trailing
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(title).font(Ledger.font(12, .semibold)).foregroundStyle(Ledger.ink2)
-            Text("\(count)").font(Ledger.font(12)).foregroundStyle(Ledger.ink3).monospacedDigit()
-            Spacer(minLength: 8)
-            trailing()
-        }
-        .padding(.leading, 34)
-        .padding(.trailing, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 3)
-        .accessibilityAddTraits(.isHeader)
-    }
-}
-
-extension SubHeader where Trailing == EmptyView {
-    init(title: String, count: Int) {
-        self.init(title: title, count: count) { EmptyView() }
     }
 }
 
@@ -931,7 +846,7 @@ struct ChatTerminalSwitch: View {
             segment(other, on: !chat)
         }
         .padding(2)
-        .background(Ledger.fill, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+        .background(Ledger.bubble, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         .help("Switch between the chat and the \(other.lowercased()) (⇧⌘T)")
     }
 
@@ -941,8 +856,9 @@ struct ChatTerminalSwitch: View {
                 .font(Ledger.font(12, on ? .medium : .regular))
                 .foregroundStyle(on ? Ledger.ink : Ledger.ink2)
                 .padding(.horizontal, 10)
-                .frame(height: 22)
-                .background(on ? Ledger.paper : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .frame(height: 24)
+                .background(on ? Ledger.field : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
+                .shadow(color: .black.opacity(on ? 0.08 : 0), radius: 1.5, y: 0.5)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -963,7 +879,7 @@ struct LiveTerminal: View {
         Group {
             if let command {
                 TerminalPane(target: target, command: command, client: model.client, appearance: model.appearance,
-                             keyboard: !model.modalShown && model.preview == nil && !model.treeFocused,
+                             keyboard: !model.modalShown && model.preview == nil && !model.treeFocused && !model.sideFocus,
                              focusRequest: model.terminalFocusRequest, epoch: epoch)
             } else {
                 Pending("Starting the multiplexer…")
@@ -1064,7 +980,6 @@ struct PanelHeader<Content: View>: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Ledger.band, in: Rectangle())
     }
 }
 
@@ -1179,6 +1094,15 @@ struct WorkerHeader: View {
         }
     }
 
+    private var shownOptions: [(value: Shown, title: String)] {
+        var options: [(value: Shown, title: String)] = []
+        if worker.number != nil { options.append((.chat, "Chat")) }
+        options.append((.main, worker.isActive && worker.live ? "Terminal" : "Final Report"))
+        options.append((.changes, comments > 0 ? "Changes (\(comments))" : "Changes"))
+        if worker.fanout != nil { options.append((.compare, "Compare")) }
+        return options
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
@@ -1192,19 +1116,7 @@ struct WorkerHeader: View {
                 .foregroundStyle(worker.markColor)
                 .padding(.leading, 4)
                 Spacer(minLength: 8)
-                Picker("Show", selection: shown) {
-                    if worker.number != nil {
-                        Text("Chat").tag(Shown.chat)
-                    }
-                    Text(worker.isActive && worker.live ? "Terminal" : "Final Report").tag(Shown.main)
-                    Text(comments > 0 ? "Changes (\(comments))" : "Changes").tag(Shown.changes)
-                    if worker.fanout != nil {
-                        Text("Compare").tag(Shown.compare)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
+                LedgerSegmented(selection: shown, options: shownOptions)
                 .help("⇧⌘T switches between the chat and the \(worker.isActive && worker.live ? "terminal" : "Final Report")")
                 if worker.isActive, worker.live {
                     Button("Stop Worker") { confirmStop = true }.buttonStyle(.ledger)
@@ -1338,108 +1250,31 @@ struct ReportSection: Equatable {
 
 // MARK: - Ledger parts
 
-/// One Worker in Running or Done: id, profile, Task, quiet time. Hovering or selecting it shows
-/// its latest progress line.
+/// A Worker in the tree: its mark and its title, nothing more; the rest is in its tooltip and
+/// panel. Amber mark when it waits on you, red when it ended badly.
 struct LedgerRow: View {
     @EnvironmentObject private var model: AppModel
     let worker: WorkerRow
     let repo: String
-    @StateObject private var hovering = Flag()
 
     var body: some View {
         let selected = model.selection == .worker(repo: repo, id: worker.id)
-        let unread = model.isUnread(worker, repo: repo)
-        Button { model.select(.worker(repo: repo, id: worker.id)) } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 8) {
-                    WorkerMark(worker: worker)
-                    Text(worker.id)
-                        .font(.system(size: 11.5, design: .monospaced))
-                        .foregroundStyle(Ledger.ink3)
-                        .lineLimit(1)
-                        .frame(width: 40, alignment: .leading)
-                    Text(worker.profile)
-                        .font(Ledger.font(12.5))
-                        .foregroundStyle(Ledger.ink2)
-                        .lineLimit(1)
-                        .frame(width: 56, alignment: .leading)
-                    Text(worker.title)
-                        .fontWeight(unread ? .medium : .regular)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .foregroundStyle(worker.isTrouble ? Ledger.fail : Ledger.ink)
-                    Spacer(minLength: 6)
-                    if unread {
-                        Circle().fill(Ledger.run).frame(width: 7, height: 7)
-                            .accessibilityLabel("Unread")
-                    }
-                    TimelineView(.periodic(from: .now, by: 5)) { context in
-                        Text(formatAge(worker.quietFor(at: context.date)))
-                            .font(Ledger.font(12))
-                            .monospacedDigit()
-                            .foregroundStyle(Ledger.ink3)
-                    }
-                }
-                // Always drawn when there is something to say, never only on hover or selection,
-                // so a row keeps its height and the list below it never jumps.
-                if worker.branch != nil || detailLine != nil {
-                    HStack(spacing: 8) {
-                        if let branch = worker.branch {
-                            Text(branch)
-                                .font(.system(size: 11.5, design: .monospaced))
-                                .foregroundStyle(Ledger.ink3)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .layoutPriority(1)
-                        }
-                        if let line = detailLine {
-                            Text(line)
-                                .font(Ledger.font(12))
-                                .foregroundStyle(Ledger.ink2)
-                                .lineLimit(1)
-                                .contentTransition(.opacity)
-                        }
-                    }
-                    .padding(.leading, 8 + 8)
-                }
-            }
-            .padding(.leading, 34)
-            .padding(.trailing, 16)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // Astryx's rows: a rounded fill inset from the column's edges, no bar.
-            .background(selected ? Ledger.selected : hovering.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
-            .padding(.horizontal, 8)
-            .contentShape(Rectangle())
-            .animation(.easeOut(duration: 0.15), value: selected)
-            .animation(.easeOut(duration: 0.12), value: hovering.on)
-            .animation(.easeInOut(duration: 0.2), value: detailLine)
+        TreeRow(selected: selected, indent: 2) {
+            model.select(.worker(repo: repo, id: worker.id))
+        } label: {
+            WorkerMark(worker: worker).frame(width: 12)
+            Text(worker.title)
+                .foregroundStyle(selected ? Ledger.ink : Ledger.ink2)
+                .fadedEnd()
         }
-        .buttonStyle(.plain)
-        .onHover { hovering.on = $0 }
         .prewarmsTerminal(model.terminalTarget(repo, worker))
-        .help("\(worker.id) \(worker.profile): \(worker.title)\n\(worker.phaseLabel), quiet for \(formatAge(worker.quietFor()))")
+        .help([worker.id, worker.profile, worker.title, worker.branch, worker.phaseLabel,
+               "quiet for \(formatAge(worker.quietFor()))"].compactMap { $0 }.joined(separator: " · "))
         .contextMenu {
             if worker.settledAt != nil {
-                Button(unread ? "Mark as Read" : "Mark as Unread") { model.setRead(worker, repo: repo, unread) }
                 Button("Dismiss") { model.dismiss([worker]) }
             }
         }
-    }
-
-    /// A running Worker always has one, so its row keeps its height as the status changes
-    /// (ui-ux/0052); a settled one has one only when it ended badly or without a report.
-    private var detailLine: String? {
-        if let progress = worker.progress { return progress }
-        if worker.state == .waiting { return "Waiting on background work" }
-        if worker.state == .ended { return "Ended, no Final Report" }
-        if worker.isActive {
-            if worker.state == .needsYou { return "Needs you" }
-            return worker.phase == "starting" ? "Starting" : "Working"
-        }
-        // Under Done, "Done" says nothing; Failed or Blocked does.
-        if !worker.isActive && worker.isTrouble { return worker.phaseLabel }
-        return nil
     }
 }
 
@@ -1456,7 +1291,7 @@ struct ConfirmationLine: View {
         .foregroundStyle(Ledger.okInk)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(Ledger.okWash, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .background(Ledger.okWash, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
         .padding(.horizontal, 16)
         .padding(.bottom, 4)
         .transition(.opacity)
@@ -1477,28 +1312,6 @@ struct Hint: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
-    }
-}
-
-/// The ledger before any session exists: what each agent's group will hold.
-struct EmptyLedger: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Text("Orchestrator").fontWeight(.medium)
-                Text("not started").font(Ledger.font(12.5))
-            }
-            .foregroundStyle(Ledger.ink3)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            SectionHeader(title: "Needs you", count: 0)
-            Hint("Permission prompts and questions from Workers land here.")
-            SectionHeader(title: "Running", count: 0)
-            Hint("Workers appear here once the Orchestrator hands out Tasks.")
-            SectionHeader(title: "Done", count: 0)
-            Hint("Each finished Worker leaves its Final Report here until you dismiss it.")
-        }
     }
 }
 
@@ -1523,7 +1336,7 @@ struct StatsInline: View {
                     .font(Ledger.font(12, .semibold))
                     .foregroundStyle(Ledger.ink2)
                     .frame(width: 24, height: 22)
-                    .background(shown.on ? Ledger.fill : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .background(shown.on ? Ledger.fill : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

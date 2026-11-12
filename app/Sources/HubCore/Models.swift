@@ -386,28 +386,34 @@ public enum TerminalTarget: Hashable, Sendable {
     /// An Orchestrator or a Normal session.
     case agent(id: Int)
     case worker(id: Int)
+    /// A checkout's own shell, shown under the Files column; it belongs to the folder, not to an agent.
+    case side(root: String)
 
     /// The daemon's way of naming it in `attach` and `terminal.resize`.
     public var params: [String: Any] {
         switch self {
         case .agent(let id): return ["agent": id]
         case .worker(let id): return ["id": id]
+        case .side(let root): return ["side": root]
         }
     }
 
-    /// How the daemon's `chat.*` methods name it.
+    /// How the daemon's `chat.*` methods name it; a side shell has no chat.
     public var chatParams: [String: Any] {
         switch self {
         case .agent(let id): return ["agent": id]
         case .worker(let id): return ["worker": id]
+        case .side: return [:]
         }
     }
 
-    /// `a3`, `w21`: how `echoctl attach` and multiplexer session names call it.
+    /// `a3`, `w21`, `t2f7573…`: how `echoctl attach` and multiplexer session names call it. A side
+    /// shell is `t` and the hex of its path, so the label needs no quoting.
     public var label: String {
         switch self {
         case .agent(let id): return "a\(id)"
         case .worker(let id): return "w\(id)"
+        case .side(let root): return "t" + root.utf8.map { String(format: "%02x", $0) }.joined()
         }
     }
 }

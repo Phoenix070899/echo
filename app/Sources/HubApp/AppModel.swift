@@ -248,6 +248,23 @@ final class AppModel: ObservableObject {
     @Published var filesShown = UserDefaults.standard.bool(forKey: "filesShown") {
         didSet { UserDefaults.standard.set(filesShown, forKey: "filesShown") }
     }
+    /// The checkout's own shell under the Files column (⌃`); remembered. Closing it only hides it:
+    /// the shell, and whatever it runs, goes on in the daemon.
+    @Published var sideShown = UserDefaults.standard.bool(forKey: "sideShown") {
+        didSet { UserDefaults.standard.set(sideShown, forKey: "sideShown") }
+    }
+    @Published var sideHeight = AppModel.width("sideHeight", or: 240) {
+        didSet { UserDefaults.standard.set(Double(sideHeight), forKey: "sideHeight") }
+    }
+    /// The shell has the keyboard. Only a click on it, or its shortcut, gives it; selecting an
+    /// agent or the Files tree takes it back.
+    @Published var sideFocus = false
+    /// Bumped to hand the keyboard to the shell.
+    @Published var sideFocusRequest = 0
+    /// Bumped when a shell ended or was stopped, so the next pane to show it starts a new one.
+    @Published private(set) var sideEpoch = 0
+    /// Each checkout's shell as the daemon last said: running, and printing now.
+    @Published private(set) var sideShells: [String: SideStatus] = [:]
     /// What the Files column shows: the tree, git status, or the branch's commits; remembered.
     @Published var filesTab = FilesTab(rawValue: UserDefaults.standard.string(forKey: "filesTab") ?? "") ?? .files {
         didSet { UserDefaults.standard.set(filesTab.rawValue, forKey: "filesTab") }
@@ -406,6 +423,8 @@ final class AppModel: ObservableObject {
     func filesFocused(_ tab: FilesTab, _ focused: Bool) {
         if focused {
             filesFocus = tab
+            // The tree and the side shell never both hold the keyboard.
+            sideFocus = false
         } else if filesFocus == tab {
             filesFocus = nil
             filesFocusAsked = false
@@ -582,6 +601,9 @@ final class AppModel: ObservableObject {
         }
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
             Task { @MainActor in AppModel.shared.refreshSessions() }
+        }
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            Task { @MainActor in AppModel.shared.pollSide() }
         }
         refreshStats()
         Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { _ in
@@ -844,6 +866,7 @@ final class AppModel: ObservableObject {
 
     func select(_ selection: Selection) {
         self.selection = selection
+        sideFocus = false
         terminalFocusRequest += 1
         lastSelection[selection.repo] = selection
         if case .worker(let repo, let id) = selection,
@@ -929,13 +952,6 @@ final class AppModel: ObservableObject {
         guard !tabs.isEmpty else { return }
         let index = selectedRepo.flatMap { tabs.firstIndex(of: $0) } ?? 0
         selectSession(tabs[(index + (forward ? 1 : tabs.count - 1)) % tabs.count])
-    }
-
-    /// Whether an agent's group shows anything under its header: not folded, and an Orchestrator
-    /// (Workers, or the hint that there are none), or a session with a Need or a confirmation.
-    func showsContent(_ group: AgentGroup) -> Bool {
-        guard !collapsed.contains(group.agent.id) else { return false }
-        return group.agent.isOrchestrator || !group.needs.isEmpty || confirmations[group.agent.id] != nil
     }
 
     func toggleCollapsed(_ agent: Int) {
@@ -1601,6 +1617,51 @@ extension AppModel {
             filesFocusAsked = true
             filesFocusRequest += 1
             withAnimation(.easeOut(duration: 0.15)) { filesShown = true }
+        }
+    }
+
+    /// ⌃`: shows the shell under the Files column and gives it the keyboard; shown but elsewhere,
+    /// gives it the keyboard; already in it, hides it (the shell keeps running).
+    func toggleSide() {
+        if sideShown && sideFocus { return hideSide() }
+        if sideShown {
+            sideFocus = true
+            sideFocusRequest += 1
+            return
+        }
+        // A shell needs room for a line of a command.
+        if filesWidth < 340 { filesWidth = 340 }
+        withAnimation(.easeOut(duration: 0.15)) {
+            filesShown = true
+            sideShown = true
+        }
+        sideFocus = true
+        sideFocusRequest += 1
+    }
+
+    func hideSide() {
+        sideFocus = false
+        withAnimation(.easeOut(duration: 0.15)) { sideShown = false }
+    }
+
+    /// Ends the checkout's shell and hides it; opening it again starts a new one.
+    func stopSide(_ root: String) {
+        hideSide()
+        background { client in try client.sideStop(root) } then: { _ in
+            self.sideShells[root] = SideStatus(live: false, busy: false)
+            self.sideEpoch += 1
+        }
+    }
+
+    /// Asks whether the shown checkout's shell runs and prints, for the bar's mark. Cheap, and
+    /// never starts a shell.
+    func pollSide() {
+        guard filesShown, let root = selectedCheckout else { return }
+        background(quiet: true) { client in try client.sideStatus(root) } then: { status in
+            let before = self.sideShells[root]
+            if before != status { self.sideShells[root] = status }
+            // It ended under the pane (the human typed exit): the pane starts a new one.
+            if before?.live == true, !status.live { self.sideEpoch += 1 }
         }
     }
 

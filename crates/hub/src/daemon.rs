@@ -63,6 +63,9 @@ pub struct Hub {
     /// A login shell in each agent's checkout, by agent id: its terminal while the agent itself
     /// is not running, and a Terminal agent's only one. Started when first attached.
     shells: Mutex<HashMap<i64, Arc<Live>>>,
+    /// A login shell per checkout, by its real path: what Echo shows under the Files column. It
+    /// belongs to the folder, not to an agent, so it stays while agents come and go.
+    side_shells: Mutex<HashMap<String, Arc<Live>>>,
     /// When each Normal session's waiting permission prompt was first seen, by agent id.
     agent_prompts: Mutex<HashMap<i64, i64>>,
     tick: Mutex<u64>,
@@ -183,6 +186,7 @@ pub fn run() -> Result<()> {
         live: Mutex::new(HashMap::new()),
         agents: Mutex::new(HashMap::new()),
         shells: Mutex::new(HashMap::new()),
+        side_shells: Mutex::new(HashMap::new()),
         agent_prompts: Mutex::new(HashMap::new()),
         tick: Mutex::new(0),
         changed: Condvar::new(),
@@ -207,6 +211,36 @@ pub fn run() -> Result<()> {
         });
     }
     Ok(())
+}
+
+/// `path` as lowercase hex, which names a side shell in the holder (keys are plain words).
+pub fn hex(path: &str) -> String {
+    path.bytes().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The path `hex` made, or None when `text` is not hex or not UTF-8.
+pub fn unhex(text: &str) -> Option<String> {
+    if text.is_empty() || text.len() % 2 != 0 || !text.is_ascii() {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).ok())
+        .collect();
+    String::from_utf8(bytes?).ok()
+}
+
+/// The folder a side shell works in: absolute, existing, and spelt as the system does.
+fn side_dir(path: &str) -> Result<PathBuf> {
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        bail!("{} is not an absolute path", path.display());
+    }
+    let dir = path.canonicalize().with_context(|| format!("{} does not exist", path.display()))?;
+    if !dir.is_dir() {
+        bail!("{} is not a folder", dir.display());
+    }
+    Ok(dir)
 }
 
 /// Whether the client on the other end of `stream` has gone away.
@@ -445,6 +479,9 @@ impl Hub {
     /// The terminal a request names: `{"id": n}` for a Worker, `{"agent": n}` for an Orchestrator
     /// or Normal session, `{"orchestrator": repo}` for the repo's first Orchestrator.
     fn terminal(self: &Arc<Self>, p: &Value) -> Result<Arc<Live>> {
+        if let Some(path) = p.get("side").and_then(Value::as_str) {
+            return self.side_shell(path);
+        }
         if let Some(id) = p.get("agent").and_then(Value::as_i64) {
             return self.agent_live(id).or_else(|_| self.shell(id));
         }
@@ -517,6 +554,75 @@ impl Hub {
         if let Some(live) = self.shells.lock().unwrap().remove(&id) {
             live.kill();
         }
+    }
+
+    /// The checkout's side shell, started there when it has none. `path` must be an existing
+    /// folder; it is named by its real path, so two spellings of one folder share a shell.
+    fn side_shell(self: &Arc<Self>, path: &str) -> Result<Arc<Live>> {
+        let dir = side_dir(path)?;
+        let key = dir.display().to_string();
+        let mut shells = self.side_shells.lock().unwrap();
+        if let Some(live) = shells.get(&key).filter(|live| live.is_alive()) {
+            return Ok(Arc::clone(live));
+        }
+        let mut env = self.agent_env(None, None)?;
+        env.push(("SHELL".into(), login_shell()));
+        let spawn = Spawn {
+            // A plain shell: nothing reads its screen as an agent's.
+            cli: cli::Cli::Claude,
+            program: login_shell(),
+            args: vec!["-l".into()],
+            cwd: dir,
+            env,
+            env_remove: inherited_agent_vars()
+                .into_iter()
+                .chain(["TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID"].map(String::from))
+                .collect(),
+        };
+        let live = Live::spawn(&format!("t{}", hex(&key)), 0, spawn, self.side_exit(key.clone()))?;
+        shells.insert(key, Arc::clone(&live));
+        Ok(live)
+    }
+
+    fn side_exit(self: &Arc<Self>, key: String) -> impl FnOnce(i64) + Send + 'static {
+        let hub: Weak<Hub> = Arc::downgrade(self);
+        move |_| {
+            if let Some(hub) = hub.upgrade() {
+                // Only this shell: a newer one may have taken its place.
+                let mut shells = hub.side_shells.lock().unwrap();
+                if shells.get(&key).is_some_and(|live| !live.is_alive()) {
+                    shells.remove(&key);
+                }
+            }
+        }
+    }
+
+    /// Whether the checkout's side shell runs, and how long since it last printed: Echo shows a
+    /// busy mark while a command streams. Never starts one.
+    fn side_status(&self, p: &Value) -> Result<Value> {
+        let key = side_dir(str_param(p, "path")?)?.display().to_string();
+        let live = self.side_shells.lock().unwrap().get(&key).filter(|l| l.is_alive()).cloned();
+        let lines = p.get("lines").and_then(Value::as_u64).unwrap_or(0) as usize;
+        Ok(match live {
+            Some(live) => {
+                let screen = live.screen();
+                json!({
+                    "live": true,
+                    "quiet_ms": live.quiet_for().as_millis() as u64,
+                    "screen": if lines > 0 { screen::tail(&screen, lines) } else { String::new() },
+                })
+            }
+            None => json!({ "live": false }),
+        })
+    }
+
+    /// Ends the checkout's side shell.
+    fn side_stop(&self, p: &Value) -> Result<Value> {
+        let key = side_dir(str_param(p, "path")?)?.display().to_string();
+        if let Some(live) = self.side_shells.lock().unwrap().remove(&key) {
+            live.kill();
+        }
+        Ok(json!({}))
     }
 
     /// `session.open`, as `echoctl` and older clients call it: starts the Orchestrator working in
@@ -863,6 +969,29 @@ impl Hub {
     fn recover(self: &Arc<Self>) -> Result<()> {
         let state = paths::state_dir();
         for key in holder::list() {
+            // A checkout's side shell: `t` and the hex of its path. One whose path is gone is let go.
+            if let Some(hex) = key.strip_prefix('t') {
+                let path = unhex(hex).filter(|path| side_dir(path).is_ok());
+                match path {
+                    Some(path) => {
+                        let path = side_dir(&path)?.display().to_string();
+                        match Live::adopt(&key, 0, cli::Cli::Claude, self.side_exit(path.clone())) {
+                            Ok(Some(live)) => {
+                                self.side_shells.lock().unwrap().insert(path, live);
+                                eprintln!("hubd: took over {key}");
+                            }
+                            Ok(None) => {}
+                            Err(error) => eprintln!("hubd: could not take over {key}: {error:#}"),
+                        }
+                    }
+                    None => {
+                        if let Ok(Some(live)) = Live::adopt(&key, 0, cli::Cli::Claude, |_| {}) {
+                            live.kill();
+                        }
+                    }
+                }
+                continue;
+            }
             let (Some(kind), Ok(id)) = (key.chars().next(), key[1..].parse::<i64>()) else {
                 continue;
             };
@@ -999,6 +1128,8 @@ impl Hub {
                 live.resize(id_param(p, "rows")? as u16, id_param(p, "cols")? as u16)?;
                 Ok(json!({}))
             }
+            "side.status" => self.side_status(p),
+            "side.stop" => self.side_stop(p),
             // Echo Remote's message box and keys: an agent's or Worker's running terminal only.
             "terminal.send" => {
                 let agent = p.get("agent").and_then(Value::as_i64);
@@ -1531,6 +1662,9 @@ impl Hub {
                     live.kill();
                 }
                 for live in self.shells.lock().unwrap().values() {
+                    live.kill();
+                }
+                for live in self.side_shells.lock().unwrap().values() {
                     live.kill();
                 }
                 holder::quit();
@@ -3330,6 +3464,18 @@ mod tests {
     fn place_names_worktrees() {
         assert_eq!(place(Path::new("/r"), Path::new("/r")), "in place");
         assert_eq!(place(Path::new("/r"), Path::new("/w/r/feat-x")), "feat-x");
+    }
+
+    #[test]
+    fn side_shells_are_named_by_the_hex_of_their_path() {
+        assert_eq!(unhex(&hex("/tmp/a b")), Some("/tmp/a b".to_string()));
+        assert_eq!(hex("/a"), "2f61");
+        assert_eq!(unhex("zz"), None);
+        assert_eq!(unhex(""), None);
+        assert_eq!(unhex("abc"), None);
+        assert!(side_dir("relative").is_err());
+        assert!(side_dir("/definitely/not/here").is_err());
+        assert!(side_dir("/tmp").is_ok());
     }
 }
 

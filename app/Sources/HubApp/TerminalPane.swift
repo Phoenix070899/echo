@@ -27,6 +27,10 @@ struct TerminalPane: NSViewRepresentable {
     /// Part of what a kept terminal is kept under, so one made for an earlier state of the target
     /// (an agent since stopped or started) is never shown again.
     var epoch = ""
+    /// The shell under the Files column, a second terminal beside the one in the main panel: it
+    /// takes no file mentions or notes, does not set the size terminals start at, and tells the
+    /// model when it has the keyboard.
+    var side = false
 
     func makeCoordinator() -> Coordinator { Coordinator(client: client) }
 
@@ -51,8 +55,10 @@ struct TerminalPane: NSViewRepresentable {
         let coordinator = context.coordinator
         // At the size terminals settle at, so a kept terminal put in it keeps its size: a resize
         // makes the multiplexer and the agent redraw everything (bugs/0063).
-        let host = NSView(frame: NSRect(origin: .zero, size: GhosttyView.settledSize ?? NSSize(width: 800, height: 500)))
+        let host = NSView(frame: NSRect(origin: .zero, size: side ? NSSize(width: 320, height: 240)
+                                        : GhosttyView.settledSize ?? NSSize(width: 800, height: 500)))
         coordinator.host = host
+        coordinator.side = side
         GhosttyRuntime.shared.apply(appearance)
         coordinator.keyboard = keyboard
         coordinator.focusRequest = focusRequest
@@ -110,6 +116,8 @@ struct TerminalPane: NSViewRepresentable {
         /// The last selection's focus request this pane has acted on.
         var focusRequest = 0
         private var generation = 0
+        /// Whether this is the Files column's shell (`TerminalPane.side`).
+        var side = false
 
         init(client: DaemonClient) {
             self.client = client
@@ -122,7 +130,7 @@ struct TerminalPane: NSViewRepresentable {
         /// multiplexer, which hands it to its focused pane.
         @objc private func typeText(_ note: Notification) {
             // Echo has one terminal on screen at a time; one not in a window is being torn down.
-            guard let text = note.object as? Data, view?.window != nil else { return }
+            guard !side, let text = note.object as? Data, view?.window != nil else { return }
             type(String(decoding: text, as: UTF8.self))
         }
 
@@ -169,6 +177,10 @@ struct TerminalPane: NSViewRepresentable {
             view.onDrop = { [weak self] text in self?.type(text) }
             view.onSettled = { [weak self] in self?.settled() }
             view.onExit = { [weak self] seconds in MainActor.assumeIsolated { self?.exited(after: seconds) } }
+            view.recordsSettledSize = !side
+            view.onFocusChange = side ? { focused in
+                MainActor.assumeIsolated { AppModel.shared.sideFocus = focused }
+            } : nil
             view.frame = host?.bounds ?? view.frame
             view.autoresizingMask = [.width, .height]
             host?.addSubview(view)
@@ -266,6 +278,7 @@ final class TerminalCache {
         take(key)?.stop()
         view.onDrop = nil
         view.onSettled = nil
+        view.onFocusChange = nil
         view.onExit = { [weak self, weak view] _ in
             guard let self, let view else { return }
             self.kept.removeAll { $0.view === view }
@@ -431,6 +444,11 @@ final class GhosttyView: NSView, NSTextInputClient {
     var onSettled: (() -> Void)?
     /// Called when the surface's process exits, with how long it ran in seconds.
     var onExit: ((Double) -> Void)?
+    /// Called when this view gains or loses the keyboard, for a pane the model must know about.
+    var onFocusChange: ((Bool) -> Void)?
+    /// False for a pane that is not the main terminal's size: its size must not become the size
+    /// other terminals start at.
+    var recordsSettledSize = true
     /// The layout has settled at least once, so the frame is the pane's real size and not a
     /// first guess; a terminal starts only then, or the daemon would redraw it at the wrong size.
     private(set) var isSettled = false
@@ -541,7 +559,9 @@ final class GhosttyView: NSView, NSTextInputClient {
             guard let self, !self.isSettled else { return }
             self.isSettled = true
             let size = self.frame.size
-            Self.settledSizes = Array(([size] + Self.settledSizes.filter { $0 != size }).prefix(4))
+            if self.recordsSettledSize {
+                Self.settledSizes = Array(([size] + Self.settledSizes.filter { $0 != size }).prefix(4))
+            }
             self.onSettled?()
         }
         settle = work
@@ -640,12 +660,14 @@ final class GhosttyView: NSView, NSTextInputClient {
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
         if result, let surface { ghostty_surface_set_focus(surface, true) }
+        if result { onFocusChange?(true) }
         return result
     }
 
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
         if result, let surface { ghostty_surface_set_focus(surface, false) }
+        if result { onFocusChange?(false) }
         return result
     }
 

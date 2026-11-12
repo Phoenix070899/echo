@@ -914,11 +914,11 @@ struct MarkdownBlockView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Ledger.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .background(Ledger.wash, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         case .heading(let level, let text):
             VStack(alignment: .leading, spacing: 8) {
                 Text(inline(text, code: codeSize))
-                    .font(Ledger.font([26, 20, 16.5, 15, 14, 13.5][min(level, 6) - 1], .medium))
+                    .font(Ledger.font([26, 20, 16.5, 15, 14, 13.5][min(level, 6) - 1], .semibold))
                     .foregroundStyle(level == 6 ? Ledger.ink2 : Ledger.ink)
                 if level <= 2 { Rectangle().fill(Ledger.rule).frame(height: 1) }
             }
@@ -953,7 +953,7 @@ struct MarkdownBlockView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Ledger.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .background(Ledger.wash, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         case .table(let header, let rows, let alignments):
             MarkdownTable(header: header, rows: rows, alignments: alignments)
         case .rule:
@@ -988,7 +988,7 @@ private struct NoteableBlock<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 if marked {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Ledger.selected).padding(-6)
+                    RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous).fill(Ledger.selected).padding(-6)
                 }
             }
             .overlay(alignment: .topLeading) {
@@ -1032,8 +1032,8 @@ private struct MarkdownTable: View {
                 }
             }
         }
-        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Ledger.rule))
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous).strokeBorder(Ledger.rule))
+        .clipShape(RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
     }
 
     private func cell(_ text: String, row: Int, column: Int) -> some View {
@@ -1330,7 +1330,7 @@ private struct ModeSwitch: View {
                         .foregroundStyle(mode == picked ? Ledger.ink : Ledger.ink2)
                         .padding(.horizontal, 10)
                         .frame(height: 22)
-                        .background(mode == picked ? Ledger.pill : .clear, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .background(mode == picked ? Ledger.pill : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1339,7 +1339,7 @@ private struct ModeSwitch: View {
             }
         }
         .padding(2)
-        .background(Ledger.field, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .background(Ledger.field, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         .fixedSize()
     }
 }
@@ -1356,7 +1356,7 @@ private struct HeaderIcon: View {
             Image(systemName: symbol)
                 .font(Ledger.font(13))
                 .frame(width: 26, height: 26)
-                .background(hover.on ? Ledger.fill : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(hover.on ? Ledger.fill : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

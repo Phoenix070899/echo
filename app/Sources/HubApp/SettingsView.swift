@@ -41,11 +41,7 @@ struct SettingsView: View {
                                 Text("Custom").tag("Custom")
                             }
                         }
-                        Picker("Mode", selection: lookBinding(\.dark)) {
-                            Text("Light").tag(false)
-                            Text("Dark").tag(true)
-                        }
-                        .pickerStyle(.segmented)
+                        LedgerSegmented(selection: lookBinding(\.dark), options: [(value: false, title: "Light"), (value: true, title: "Dark")])
                         ColorPicker("Background", selection: lookColour(\.background), supportsOpacity: false)
                         ColorPicker("Surface", selection: lookColour(\.surface), supportsOpacity: false)
                         ColorPicker("Text", selection: lookColour(\.text), supportsOpacity: false)
@@ -328,7 +324,7 @@ struct Swatches: View {
             }
         }
         .padding(4)
-        .background(TerminalTheme.color(theme.background), in: RoundedRectangle(cornerRadius: 5))
+        .background(TerminalTheme.color(theme.background), in: RoundedRectangle(cornerRadius: Ledger.radiusInner))
     }
 }
 

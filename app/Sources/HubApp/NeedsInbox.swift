@@ -27,7 +27,7 @@ struct NeedItem: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
-        .background(Ledger.needCard, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .background(Ledger.needCard, in: RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous))
         .disabled(draft.sent || !model.connected)
         .opacity(draft.sent ? 0.55 : 1)
         .contextMenu {
@@ -70,7 +70,7 @@ struct NeedItem: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Ledger.wash, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .background(Ledger.wash, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
                     .help(need.promptLines.joined(separator: "\n"))
                 Button("Approve") {
                     draft.sent = true

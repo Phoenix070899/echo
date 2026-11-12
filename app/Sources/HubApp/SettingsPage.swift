@@ -64,7 +64,6 @@ struct SettingsPage: View {
             // As wide as the ledger, so the panel beside it stays put when Settings open.
             .frame(width: model.ledgerWidth)
             .frame(maxHeight: .infinity)
-            .ledgerSheet()
             // The section's column sits in the middle of the space beside the list.
             VStack(alignment: .leading, spacing: 0) {
                 Text(section.title)
@@ -120,7 +119,7 @@ private struct SectionRow: View {
             .padding(.horizontal, 16)
             .frame(height: 36)
             .frame(maxWidth: .infinity)
-            // Astryx's rows: a rounded fill inset from the column's edges, no bar.
+            // Claude's rows: a rounded fill inset from the column's edges, no bar.
             .background(picked ? Ledger.selected : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
             .padding(.horizontal, 8)
             .contentShape(Rectangle())

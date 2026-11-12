@@ -415,7 +415,7 @@ struct CommentCard: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .frame(maxWidth: 640, alignment: .leading)
-        .background(Ledger.needCard, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .background(Ledger.needCard, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         .padding(.leading, inset)
         .padding(.trailing, inset == 0 ? 0 : 18)
         .padding(.vertical, 6)

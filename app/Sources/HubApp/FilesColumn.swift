@@ -10,8 +10,14 @@ struct FilesColumn: View {
     let root: String
 
     var body: some View {
-        FilesTree(files: model.checkoutFiles(root), root: root)
-            .id(root)
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                FilesTree(files: model.checkoutFiles(root), root: root)
+                    .id(root)
+                    .frame(maxHeight: .infinity)
+                SideTerminalSection(root: root, available: geo.size.height)
+            }
+        }
     }
 }
 
@@ -123,6 +129,16 @@ private struct FilesTree: View {
                 .help(model.showIgnoredFiles ? "Hide ignored files" : "Show ignored files")
                 .accessibilityLabel(model.showIgnoredFiles ? "Hide ignored files" : "Show ignored files")
             }
+            Button { model.toggleSide() } label: {
+                Image(systemName: "terminal")
+                    .font(Ledger.font(12))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(model.sideShown ? Ledger.ink : Ledger.ink2)
+            .help("Terminal in this folder (⌃`)")
+            .accessibilityLabel("Terminal")
             Button { model.hideFiles() } label: {
                 Image(systemName: "xmark")
                     .font(Ledger.font(11, .semibold))
@@ -290,7 +306,7 @@ private struct FilesSearchField: View {
         .font(Ledger.font(12.5))
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(Ledger.field, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .background(Ledger.field, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
     }
@@ -837,7 +853,7 @@ private struct CommitRow: View {
         .padding(.trailing, 12)
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Astryx's rows: a rounded fill inset from the column's edges, no bar.
+        // Claude's rows: a rounded fill inset from the column's edges, no bar.
         .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
@@ -890,7 +906,7 @@ private struct ChangedFileRow: View {
         .padding(.trailing, 12)
         .frame(height: 24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Astryx's rows: a rounded fill inset from the column's edges, no bar.
+        // Claude's rows: a rounded fill inset from the column's edges, no bar.
         .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         .padding(.horizontal, 8)
         .contentShape(Rectangle())

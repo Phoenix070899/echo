@@ -80,3 +80,14 @@ import Testing
     #expect(SlashCommand.matches("/model opus", in: commands).isEmpty)
     #expect(SlashCommand.matches("hello", in: commands).isEmpty)
 }
+
+@Test func columnsGiveWayBeforeThePanelBetweenThemIsPushedOut() {
+    // A wide window keeps every width the human dragged to.
+    #expect(ColumnLayout.fit(total: 2056, fixed: 48, ledger: 392, files: 280) == .init(ledger: 392, files: 280))
+    // At the 900 pt minimum Files gives way first, then the ledger, to their floors.
+    #expect(ColumnLayout.fit(total: 900, fixed: 48, ledger: 392, files: 280) == .init(ledger: 300, files: 220))
+    // A little short: only Files shrinks.
+    #expect(ColumnLayout.fit(total: 1100, fixed: 48, ledger: 392, files: 400) == .init(ledger: 392, files: 300))
+    // No Files column: the ledger alone gives way.
+    #expect(ColumnLayout.fit(total: 900, fixed: 36, ledger: 640, files: nil) == .init(ledger: 504, files: nil))
+}

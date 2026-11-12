@@ -462,6 +462,14 @@ func row(_ id: String, phase: String, quiet: Int, model: String? = nil, effort: 
     #expect(TerminalTarget.worker(id: 21).params["id"] as? Int == 21)
 }
 
+@Test func aSideShellIsNamedByTheHexOfItsFolder() {
+    let side = TerminalTarget.side(root: "/tmp/a b")
+    #expect(side.label == "t2f746d702f612062")
+    #expect(side.params["side"] as? String == "/tmp/a b")
+    #expect(side.chatParams.isEmpty)
+    #expect(side != .side(root: "/tmp/a"))
+}
+
 @Test(.timeLimit(.minutes(1))) func readsALineThatArrivesInTwoReads() throws {
     var fds: [Int32] = [0, 0]
     #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)

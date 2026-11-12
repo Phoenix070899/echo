@@ -61,12 +61,7 @@ struct FanOutModal: View {
                     }
                     GridRow {
                         label("Tries")
-                        Picker("Tries", selection: $form.count) {
-                            ForEach(2...5, id: \.self) { Text("\($0)").tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .fixedSize()
+                        LedgerSegmented(selection: $form.count, options: (2...5).map { (value: $0, title: "\($0)") })
                     }
                     GridRow(alignment: .firstTextBaseline) {
                         label("Branch")
@@ -118,9 +113,9 @@ struct FanOutModal: View {
                 .padding(.bottom, 22)
             }
             .frame(width: 560)
-            .background(Ledger.paper, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Ledger.paper, in: RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous))
             // A hairline, not a shadow, sets it apart from the dimmed window.
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Ledger.rule))
+            .overlay(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous).strokeBorder(Ledger.rule))
             .accessibilityElement(children: .contain)
             .accessibilityAddTraits(.isModal)
         }

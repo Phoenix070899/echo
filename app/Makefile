@@ -14,8 +14,6 @@ app: ghostty
 	cp .build/release/HubApp $(APP)/Contents/MacOS/HubApp
 	cp bundle/Info.plist $(APP)/Contents/Info.plist
 	cp bundle/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
-	# Figtree, Astryx's face, registered at launch (Theme.swift).
-	cp -R bundle/Fonts $(APP)/Contents/Resources/
 	# Highlightr's themes and highlight.js, found through Bundle.main.resourceURL.
 	cp -R .build/release/Highlightr_Highlightr.bundle $(APP)/Contents/Resources/
 	codesign --force --sign - $(APP)

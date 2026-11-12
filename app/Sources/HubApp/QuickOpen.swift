@@ -56,9 +56,9 @@ struct QuickOpen: View {
             }
             .frame(width: 600)
             .background(Ledger.paper)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous))
             // A hairline, not a shadow, sets it apart from the dimmed window.
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Ledger.rule))
+            .overlay(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous).strokeBorder(Ledger.rule))
             .padding(.top, 110)
             .accessibilityElement(children: .contain)
             .accessibilityAddTraits(.isModal)

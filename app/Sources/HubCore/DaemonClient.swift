@@ -78,6 +78,19 @@ public struct DaemonClient: Sendable {
         try call("terminal.write", params)
     }
 
+    /// Whether a checkout's side shell runs, and whether it printed lately (a command is streaming).
+    /// Never starts one.
+    public func sideStatus(_ root: String) throws -> SideStatus {
+        let result = try call("side.status", ["path": root]) as? [String: Any]
+        let quiet = result?["quiet_ms"] as? Int
+        return SideStatus(live: result?["live"] as? Bool ?? false, busy: quiet.map { $0 < SideStatus.busyBelow } ?? false)
+    }
+
+    /// Ends a checkout's side shell.
+    public func sideStop(_ root: String) throws {
+        try call("side.stop", ["path": root])
+    }
+
     /// The `echoctl` the daemon runs as, which Echo's terminal panes run to attach.
     public func hubExecutable() throws -> String {
         guard let exe = (try call("ping") as? [String: Any])?["exe"] as? String else { throw HubError.badResponse }
@@ -300,5 +313,18 @@ public struct DaemonClient: Sendable {
 
     public func reply(message: Int, text: String) throws {
         try call("reply", ["id": message, "body": text, "by_human": true])
+    }
+}
+
+/// A checkout's side shell as the daemon last reported it.
+public struct SideStatus: Equatable, Sendable {
+    /// Printed within this many milliseconds counts as busy.
+    public static let busyBelow = 1500
+    public let live: Bool
+    public let busy: Bool
+
+    public init(live: Bool, busy: Bool) {
+        self.live = live
+        self.busy = busy
     }
 }

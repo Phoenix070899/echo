@@ -126,7 +126,7 @@ final class FileListView: NSView, NSViewToolTipOwner {
 
     // MARK: Drawing
 
-    /// The cursor's row and the hovered one get Astryx's rounded fill, inset from the column's edges;
+    /// The cursor's row and the hovered one get Claude's rounded fill, inset from the column's edges;
     /// the cursor's wins where they meet.
     private func placeFills() {
         for (fill, index) in [(picked, cursorIndex), (hover, hovered)] {
@@ -335,7 +335,7 @@ final class FileListView: NSView, NSViewToolTipOwner {
     }
 }
 
-/// Astryx's rounded fill behind a row, in a colour that follows the light or dark look.
+/// Claude's rounded fill behind a row, in a colour that follows the light or dark look.
 private final class RowFill: NSView {
     private let color: Color
 

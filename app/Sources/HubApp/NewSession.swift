@@ -131,9 +131,9 @@ struct NewSessionModal: View {
                 .padding(.bottom, 22)
             }
             .frame(width: 560)
-            .background(Ledger.paper, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Ledger.paper, in: RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous))
             // A hairline, not a shadow, sets it apart from the dimmed window.
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Ledger.rule))
+            .overlay(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous).strokeBorder(Ledger.rule))
             .accessibilityElement(children: .contain)
             .accessibilityAddTraits(.isModal)
         }
@@ -415,9 +415,9 @@ struct RenameModal: View {
                 .padding(.bottom, 20)
             }
             .frame(width: 420)
-            .background(Ledger.paper, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Ledger.paper, in: RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous))
             // A hairline, not a shadow, sets it apart from the dimmed window.
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Ledger.rule))
+            .overlay(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous).strokeBorder(Ledger.rule))
             .accessibilityElement(children: .contain)
             .accessibilityAddTraits(.isModal)
         }

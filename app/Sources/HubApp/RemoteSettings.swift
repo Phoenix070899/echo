@@ -127,7 +127,7 @@ struct QRCode: View {
                 .interpolation(.none)
                 .resizable()
                 .padding(8)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(Color.white, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         }
     }
 

@@ -28,15 +28,20 @@ static TARGET: Mutex<Option<Value>> = Mutex::new(None);
 static ECHO: AtomicBool = AtomicBool::new(false);
 
 /// What `echoctl attach` names: `w12` (or `12`, `#12`) is a Worker, `a3` an agent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
     Worker(i64),
     Agent(i64),
+    /// A checkout's side shell (`t` and the hex of its path), which Echo shows under the files.
+    Side(String),
 }
 
 impl Target {
     pub fn parse(text: &str) -> Result<Target> {
         let bad = || format!("{text:?} is not a terminal like w12 or a3");
+        if let Some(hex) = text.strip_prefix('t') {
+            return Ok(Target::Side(crate::daemon::unhex(hex).with_context(bad)?));
+        }
         if let Some(id) = text.strip_prefix('a') {
             return Ok(Target::Agent(id.parse().with_context(bad)?));
         }
@@ -44,23 +49,27 @@ impl Target {
         Ok(Target::Worker(id))
     }
 
-    pub fn params(self) -> Value {
+    pub fn params(&self) -> Value {
         match self {
             Target::Worker(id) => json!({ "id": id }),
             Target::Agent(id) => json!({ "agent": id }),
+            Target::Side(path) => json!({ "side": path }),
         }
     }
 
-    fn label(self) -> String {
+    fn label(&self) -> String {
         match self {
             Target::Worker(id) => format!("w{id}"),
             Target::Agent(id) => format!("a{id}"),
+            Target::Side(path) => format!("t{}", crate::daemon::hex(path)),
         }
     }
 
     /// Whether it has a live terminal now; `None` once it is gone for good.
-    fn live(self) -> Option<bool> {
+    fn live(&self) -> Option<bool> {
         match self {
+            // Attaching starts a side shell, so it is always ready.
+            Target::Side(_) => Some(true),
             Target::Worker(id) => Some(proto::call("worker.read", json!({ "id": id, "lines": 1 })).is_ok()),
             Target::Agent(id) => {
                 let sessions = proto::call("sessions.list", json!({})).ok()?;
@@ -68,7 +77,7 @@ impl Target {
                     .as_array()?
                     .iter()
                     .flat_map(|s| s["agents"].as_array().cloned().unwrap_or_default())
-                    .find(|a| a["id"].as_i64() == Some(id))
+                    .find(|a| a["id"].as_i64() == Some(*id))
                     .map(|a| a["live"].as_bool() == Some(true))
             }
         }
@@ -316,5 +325,10 @@ mod tests {
         assert!(Target::parse("ax").is_err());
         assert_eq!(Target::Agent(3).label(), "a3");
         assert_eq!(Target::Agent(3).params(), json!({ "agent": 3 }));
+        // A side shell is named by its path, in hex so a label needs no quoting.
+        let side = Target::Side("/tmp/a b".into());
+        assert_eq!(Target::parse(&side.label()).unwrap(), side);
+        assert_eq!(side.params(), json!({ "side": "/tmp/a b" }));
+        assert!(Target::parse("tzz").is_err());
     }
 }
