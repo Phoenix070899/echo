@@ -130,11 +130,11 @@ public struct Snapshot: Decodable, Equatable, Sendable {
     public var needsYouCount: Int { needs.count }
 
     /// The ledger, one group per agent. A Worker or Need whose Orchestrator is gone, or that
-    /// predates agents, belongs to the first Orchestrator.
+    /// predates agents, belongs to the first Orchestrator, else the first agent.
     public var groups: [AgentGroup] {
         let list = agents ?? []
         let ids = Set(list.map(\.id))
-        let first = list.first(where: \.isOrchestrator)?.id
+        let first = list.first(where: \.isOrchestrator)?.id ?? list.first?.id
         func owner(_ agent: Int?) -> Int? {
             if let agent, ids.contains(agent) { return agent }
             return first
@@ -149,6 +149,13 @@ public struct Snapshot: Decodable, Equatable, Sendable {
                 settled: settled.filter { owner($0.agent) == agent.id }
             )
         }
+    }
+
+    /// Every Need in the ledger's order: each agent group's in turn, then any that belong to none.
+    public var orderedNeeds: [Need] {
+        let grouped = groups.flatMap(\.needs)
+        let ids = Set(grouped.map(\.id))
+        return grouped + needs.filter { !ids.contains($0.id) }
     }
 
     public func agent(_ id: Int) -> Agent? { agents?.first { $0.id == id } }
@@ -385,6 +392,14 @@ public enum TerminalTarget: Hashable, Sendable {
         switch self {
         case .agent(let id): return ["agent": id]
         case .worker(let id): return ["id": id]
+        }
+    }
+
+    /// How the daemon's `chat.*` methods name it.
+    public var chatParams: [String: Any] {
+        switch self {
+        case .agent(let id): return ["agent": id]
+        case .worker(let id): return ["worker": id]
         }
     }
 
@@ -647,4 +662,47 @@ public func branchCreateFrom(_ typed: String, picked: String?, branches: [String
     if text.isEmpty { return nil }
     if branches.contains(text) { return .branch(text) }
     return .newBranch(text.split(whereSeparator: \.isWhitespace).joined(separator: "-"))
+}
+
+/// `echoctl stats`: what Workers spent tokens on and how much they read, from their transcripts.
+public struct WorkerStats: Decodable, Equatable, Sendable {
+    public struct Share: Decodable, Equatable, Sendable {
+        public let cacheReads: Double
+        public let cacheWrites: Double
+        public let output: Double
+        public let coldStarts: Double
+    }
+
+    public struct PerWorker: Decodable, Equatable, Sendable {
+        public let reads: Double
+        public let shellReads: Double
+        public let searches: Double
+    }
+
+    public struct Profile: Decodable, Equatable, Identifiable, Sendable {
+        public let profile: String
+        public let workers: Int
+        public let turnsPerWorker: Int
+        public let startContext: Int
+        public let contextPerTurn: Int
+        public let share: Double
+        public var id: String { profile }
+    }
+
+    public let workers: Int
+    public let withTranscript: Int
+    public let turns: Int
+    /// The median context of a Worker's first request: what every later turn re-reads.
+    public let startContext: Int
+    public let contextPerTurn: Int
+    public let share: Share
+    public let perWorker: PerWorker
+    /// Percent of Read calls that repeat a file already read.
+    public let repeatReads: Double
+    public let profiles: [Profile]
+}
+
+/// Tokens as Echo shows them: "109k", "850".
+public func tokenCount(_ tokens: Int) -> String {
+    tokens >= 1000 ? "\(tokens / 1000)k" : "\(tokens)"
 }

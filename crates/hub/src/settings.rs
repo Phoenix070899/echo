@@ -33,6 +33,53 @@ pub fn update(dir: &Path, patch: &Map<String, Value>) -> Result<Map<String, Valu
     Ok(all)
 }
 
+/// What an Orchestrator runs with when no setting names a model or effort for it.
+pub const ORCHESTRATOR_MODEL: &str = "anthropic/claude-opus-5-5";
+pub const ORCHESTRATOR_EFFORT: &str = "high";
+/// The efforts Claude Code takes.
+pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+/// The model the human set for Orchestrators (`orchestratorModel`); none when they did not.
+pub fn orchestrator_model(settings: &Map<String, Value>) -> Option<String> {
+    settings
+        .get("orchestratorModel")
+        .and_then(Value::as_str)
+        .filter(|model| !model.is_empty())
+        .map(String::from)
+}
+
+/// The effort Orchestrators start with: the human's `orchestratorEffort`, else high.
+pub fn orchestrator_effort(settings: &Map<String, Value>) -> String {
+    settings
+        .get("orchestratorEffort")
+        .and_then(Value::as_str)
+        .filter(|effort| EFFORTS.contains(effort))
+        .unwrap_or(ORCHESTRATOR_EFFORT)
+        .to_string()
+}
+
+/// The least context at which an idle Orchestrator may be renewed.
+pub const MIN_ROTATE_AT: u64 = 100_000;
+
+/// The context size (tokens) above which the daemon renews an idle Orchestrator's session: the
+/// human's `orchestratorRotateAt`, never below `MIN_ROTATE_AT`; none (off) when it is absent or 0.
+pub fn orchestrator_rotate_at(settings: &Map<String, Value>) -> Option<u64> {
+    settings
+        .get("orchestratorRotateAt")
+        .and_then(Value::as_u64)
+        .filter(|at| *at > 0)
+        .map(|at| at.max(MIN_ROTATE_AT))
+}
+
+/// Whether an Orchestrator starts with the repo's Lessons in its prompt: the human's
+/// `orchestratorLessons`, else yes. Workers get the Lessons either way.
+pub fn orchestrator_lessons(settings: &Map<String, Value>) -> bool {
+    settings
+        .get("orchestratorLessons")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
 /// How the Orchestrator works, as the human set it; the defaults are what `orchestrator.md` says.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rules {
@@ -126,6 +173,58 @@ mod tests {
         assert!(!text.contains("Merge a verified branch"));
         set.insert("maxWorkers".into(), json!(99));
         assert_eq!(Rules::from(&set).max_workers, 4, "out of range falls back");
+    }
+
+    #[test]
+    fn orchestrators_default_to_opus_at_high_effort_until_settings_say_otherwise() {
+        let mut set = Map::new();
+        assert_eq!(
+            orchestrator_model(&set),
+            None,
+            "no setting leaves the built-in default to the daemon"
+        );
+        assert_eq!(ORCHESTRATOR_MODEL, "anthropic/claude-opus-5-5");
+        assert_eq!(orchestrator_effort(&set), "high");
+        set.insert("orchestratorModel".into(), json!("anthropic/claude-sonnet-5-5"));
+        set.insert("orchestratorEffort".into(), json!("medium"));
+        assert_eq!(orchestrator_model(&set).as_deref(), Some("anthropic/claude-sonnet-5-5"));
+        assert_eq!(orchestrator_effort(&set), "medium");
+        set.insert("orchestratorEffort".into(), json!("extreme"));
+        assert_eq!(
+            orchestrator_effort(&set),
+            "high",
+            "an effort Claude Code does not take falls back"
+        );
+        set.insert("orchestratorModel".into(), json!(""));
+        assert_eq!(orchestrator_model(&set), None);
+    }
+
+    #[test]
+    fn an_idle_orchestrator_is_renewed_only_when_the_human_sets_a_size() {
+        let mut set = Map::new();
+        assert_eq!(orchestrator_rotate_at(&set), None);
+        set.insert("orchestratorRotateAt".into(), json!(0));
+        assert_eq!(orchestrator_rotate_at(&set), None, "0 is off");
+        set.insert("orchestratorRotateAt".into(), json!(150_000));
+        assert_eq!(orchestrator_rotate_at(&set), Some(150_000));
+        set.insert("orchestratorRotateAt".into(), json!(20_000));
+        assert_eq!(
+            orchestrator_rotate_at(&set),
+            Some(MIN_ROTATE_AT),
+            "a size below the floor is raised to it"
+        );
+        set.insert("orchestratorRotateAt".into(), json!("big"));
+        assert_eq!(orchestrator_rotate_at(&set), None);
+    }
+
+    #[test]
+    fn orchestrators_get_the_lessons_unless_the_human_turns_them_off() {
+        let mut set = Map::new();
+        assert!(orchestrator_lessons(&set));
+        set.insert("orchestratorLessons".into(), json!(false));
+        assert!(!orchestrator_lessons(&set));
+        set.insert("orchestratorLessons".into(), json!("no"));
+        assert!(orchestrator_lessons(&set), "not a boolean: the default stays");
     }
 
     #[test]

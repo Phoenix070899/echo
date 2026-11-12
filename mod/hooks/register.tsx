@@ -7,11 +7,11 @@ const showTools = atom({ plugin: 'echo', key: 'showTools' } as const, false)
 const turnTools = atom({ plugin: 'echo', key: 'turnTools' } as const, 0)
 
 /**
- * Reply cards: navy, or amber when the human must act. A terminal cell holds one solid color,
- * so "50% opacity" is the card color mixed half-and-half with black, and there is no blur.
+ * Reply cards: navy, or amber when the human must act, with no border. A terminal cell holds one
+ * solid color, so "50% opacity" is the card color mixed half-and-half with black, and there is no blur.
  */
-const REPLY = { background: '#0f161e', border: '#4a6d91' }
-const REPLY_NEEDS_YOU = { background: '#1e1900', border: '#9a7d00' }
+const REPLY = '#0f161e'
+const REPLY_NEEDS_YOU = '#1e1900'
 
 const formatDuration = (ms: number) => {
   const seconds = Math.round(ms / 1000)
@@ -104,12 +104,7 @@ export const register: Register = on => {
     if (e.props.isSummary) return <Markdown text={e.props.text} dimColor />
     const card = needsHuman(e.props.text) ? REPLY_NEEDS_YOU : REPLY
     return (
-      <Box
-        borderStyle="round"
-        borderColor={card.border}
-        backgroundColor={card.background}
-        paddingX={2}
-      >
+      <Box backgroundColor={card} paddingX={2}>
         <Markdown text={e.props.text} />
       </Box>
     )

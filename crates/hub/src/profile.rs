@@ -299,13 +299,15 @@ pub fn system_prompt(hub: &Path, state: &Path, repo: &str, profile: &Profile) ->
 }
 
 /// The first message of a resumed Worker session.
-const RESUMED: &str = "Your terminal was restarted. Continue your Task from where you left off: \
+pub const RESUMED: &str = "Your terminal was restarted. Continue your Task from where you left off: \
                        check what is already done before repeating anything, then finish with echoctl done.";
 
-/// How a Worker's Claude session begins: a new session on its Task, or a resumed one.
+/// How a Worker's Claude session begins: a new session on its Task, a resumed one, or a resumed
+/// one on its next Task.
 pub enum Launch<'a> {
     New { spec: &'a str },
     Resume,
+    Next { spec: &'a str },
 }
 
 impl Profile {
@@ -331,6 +333,7 @@ pub fn start(
     let (resume, first) = match launch {
         Launch::New { spec } => (false, spec.to_string()),
         Launch::Resume => (true, RESUMED.to_string()),
+        Launch::Next { spec } => (true, spec.to_string()),
     };
     Ok(Start {
         title: format!("{}: {title}", profile.name),

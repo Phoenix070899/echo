@@ -837,8 +837,8 @@ private struct CommitRow: View {
         .padding(.trailing, 12)
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Lanh's rows: a rounded fill inset from the column's edges, no bar.
-        .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        // Astryx's rows: a rounded fill inset from the column's edges, no bar.
+        .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: click)
@@ -890,8 +890,8 @@ private struct ChangedFileRow: View {
         .padding(.trailing, 12)
         .frame(height: 24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Lanh's rows: a rounded fill inset from the column's edges, no bar.
-        .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        // Astryx's rows: a rounded fill inset from the column's edges, no bar.
+        .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: click)

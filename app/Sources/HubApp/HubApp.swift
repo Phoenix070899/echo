@@ -53,8 +53,14 @@ struct HubApp: App {
                 Button("Show First Agent") { model.showFirstAgent() }
                     .keyboardShortcut("0")
                     .disabled(model.selectedRepo == nil)
+                Button("Next Needs You") { model.showNextNeed() }
+                    .keyboardShortcut("j")
+                    .disabled(model.needsYouCount == 0)
                 Button(model.ledgerCollapsed ? "Expand Ledger" : "Collapse Ledger") { model.toggleLedger() }
                     .keyboardShortcut("l")
+                Button(model.chatShown || model.chatTarget == nil ? "Show Terminal" : "Show Chat") { model.toggleChat() }
+                    .keyboardShortcut("t", modifiers: [.command, .shift])
+                    .disabled(model.chatTarget == nil)
                 Button(model.filesShown ? "Hide Files" : "Show Files") { model.toggleFiles() }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                 Button(model.changesSelected ? "Hide Changes" : "Show Changes") { model.toggleChanges() }

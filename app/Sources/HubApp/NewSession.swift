@@ -328,7 +328,7 @@ struct ModeCard: View {
             .padding(12)
             .frame(maxWidth: .infinity, minHeight: 84, alignment: .topLeading)
             .background(picked ? Ledger.chosen : Ledger.wash,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -366,7 +366,7 @@ struct RepoChoice: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(picked ? Ledger.chosen : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(picked ? Ledger.chosen : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

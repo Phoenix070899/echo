@@ -141,6 +141,41 @@ public struct DaemonClient: Sendable {
         return (line, result?["session"] as? String)
     }
 
+    /// The next part of an agent's or Worker's conversation, for `ChatLog.apply`.
+    public func chat(_ target: TerminalTarget, after log: ChatLog) throws -> [String: Any] {
+        var params = log.request
+        params.merge(target.chatParams) { _, new in new }
+        guard let result = try call("chat.read", params) as? [String: Any] else { throw HubError.badResponse }
+        return result
+    }
+
+    /// The page before the oldest loaded, for `ChatLog.applyOlder`; nil when there is none.
+    public func chatOlder(_ target: TerminalTarget, before log: ChatLog) throws -> [String: Any]? {
+        guard var params = log.olderRequest else { return nil }
+        params.merge(target.chatParams) { _, new in new }
+        return try call("chat.read", params) as? [String: Any]
+    }
+
+    /// What `/` completes in the chat's message box.
+    public func chatCommands(_ target: TerminalTarget) throws -> [SlashCommand] {
+        let result = try call("chat.commands", target.chatParams) as? [String: Any]
+        return (result?["commands"] as? [[String: Any]] ?? []).compactMap { raw in
+            guard let name = raw["name"] as? String else { return nil }
+            return SlashCommand(name: name, description: raw["description"] as? String ?? "", menu: raw["menu"] as? Bool ?? false)
+        }
+    }
+
+    /// Types the chat's message at the input box; the daemon refuses over a prompt. Into a
+    /// Worker it is an Intervention.
+    public func chatSend(_ target: TerminalTarget, text: String) throws {
+        try call("chat.send", target.chatParams.merging(["text": text]) { _, new in new })
+    }
+
+    /// Esc in the chat: interrupts the turn.
+    public func chatInterrupt(_ target: TerminalTarget) throws {
+        try call("chat.interrupt", target.chatParams)
+    }
+
     /// Stops a Worker and closes its terminal.
     public func closeWorker(_ id: Int) throws {
         try call("worker.close", ["id": id])

@@ -159,7 +159,13 @@ fn claude(hub: &Path, start: &Start) -> Result<Vec<String>> {
         args.extend(["--effort".into(), effort.clone()]);
     }
     if !start.tools.is_empty() {
-        args.extend(["--tools".into(), start.tools.join(",")]);
+        // Without ToolSearch every MCP tool loads in full instead of on demand: about 85k tokens
+        // of connectors no Worker uses, re-read on every turn.
+        let mut tools = start.tools.clone();
+        if !tools.iter().any(|tool| tool == "ToolSearch") {
+            tools.push("ToolSearch".into());
+        }
+        args.extend(["--tools".into(), tools.join(",")]);
     }
     if !start.prompt.is_empty() {
         args.extend(["--append-system-prompt".into(), start.prompt.clone()]);
@@ -387,6 +393,29 @@ mod tests {
     }
 
     #[test]
+    fn an_orchestrator_starts_with_its_own_model_and_effort_and_keeps_them_on_resume() {
+        let hub = Path::new("/echo");
+        let start = Start {
+            title: "echo: repo".into(),
+            model: Some("anthropic/claude-opus-5-5".into()),
+            effort: Some("high".into()),
+            session_id: "s1".into(),
+            ..Start::default()
+        };
+        let args = Cli::Claude.args(hub, &start).unwrap().join(" ");
+        assert!(args.contains("--model claude-opus-5-5"), "{args}");
+        assert!(args.contains("--effort high"), "{args}");
+        let resumed = Cli::Claude
+            .args(hub, &Start { resume: true, ..start })
+            .unwrap()
+            .join(" ");
+        assert!(
+            resumed.contains("--effort high") && resumed.contains("--model claude-opus-5-5"),
+            "{resumed}"
+        );
+    }
+
+    #[test]
     fn a_worker_runs_unprompted_with_its_hooks_and_resumes_by_id() {
         let hub = Path::new("/echo");
         let start = Start {
@@ -405,7 +434,7 @@ mod tests {
         assert_eq!(
             args,
             "-n lee: run tests --model claude-haiku-5-5 --permission-mode auto --settings /echo/settings/worker.json \
-             --disallowedTools AskUserQuestion --add-dir /echo --add-dir /state/memory --effort low --tools Bash,Read \
+             --disallowedTools AskUserQuestion --add-dir /echo --add-dir /state/memory --effort low --tools Bash,Read,ToolSearch \
              --append-system-prompt contract --session-id s1 -- -run the tests"
         );
         let resumed = Start {

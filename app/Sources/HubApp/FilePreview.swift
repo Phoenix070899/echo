@@ -453,7 +453,7 @@ struct PreviewTabs: View {
             }
             Spacer(minLength: 8)
             if model.preview != nil {
-                Text("Esc returns to the terminal")
+                Text("Esc returns to the \(chatShown ? "chat" : "terminal")")
                     .font(Ledger.font(12))
                     .foregroundStyle(Ledger.ink3)
                     .fixedSize()
@@ -467,13 +467,16 @@ struct PreviewTabs: View {
         .background(Ledger.band, in: Rectangle())
     }
 
+    /// The selection shows its chat, not its terminal (ADR 0010).
+    private var chatShown: Bool { model.chatShown }
+
     private var tabs: some View {
         HStack(spacing: 2) {
             tab(active: model.preview == nil) {
                 Button { model.preview = nil } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "terminal").font(Ledger.font(11))
-                        Text("Terminal").fixedSize()
+                        Image(systemName: chatShown ? "bubble.left.and.bubble.right" : "terminal").font(Ledger.font(11))
+                        Text(chatShown ? "Chat" : "Terminal").fixedSize()
                     }
                     .contentShape(Rectangle())
                 }

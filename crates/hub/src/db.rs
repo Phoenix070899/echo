@@ -65,6 +65,14 @@ pub struct Worker {
     /// The CLI and model picked when it started, over its Profile's; none leaves them to it.
     pub cli: Option<String>,
     pub model: Option<String>,
+    /// Stays open after its Final Report even without a branch of its own.
+    pub keep: bool,
+    /// The daemon has a `sasuke` verify its Final Report before the Orchestrator hears of it.
+    pub verify: bool,
+    /// For a verifier: the writer it checks.
+    pub verifies: Option<i64>,
+    /// How many times a failed verification sent it back to fix its change.
+    pub retries: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -146,6 +154,24 @@ pub fn open(path: &Path) -> Result<Connection> {
            closed_at integer
          );",
     )?;
+    // What was typed into each Worker and by whom, so its chat can say who said it (ADR 0010).
+    conn.execute_batch(
+        "create table if not exists worker_inputs (
+           id integer primary key,
+           worker_id integer not null references workers(id),
+           origin text not null,
+           text text not null,
+           created_at integer not null
+         );
+         create index if not exists worker_inputs_by_worker on worker_inputs(worker_id);
+         -- An agent's earlier Claude sessions, so its chat scrolls back past a renewal.
+         create table if not exists agent_sessions (
+           id integer primary key,
+           agent_id integer not null references agents(id),
+           session_id text not null,
+           ended_at integer not null
+         );",
+    )?;
     if !has_column(&conn, "workers", "agent_id")? {
         conn.execute_batch("alter table workers add column agent_id integer")?;
     }
@@ -164,6 +190,16 @@ pub fn open(path: &Path) -> Result<Connection> {
              alter table agents add column cli text",
         )?;
     }
+    // Kept after its Final Report, verified by the daemon (`verify`), the writer a verifier checks
+    // (`verifies`), and the retries the writer has used.
+    if !has_column(&conn, "workers", "keep")? {
+        conn.execute_batch(
+            "alter table workers add column keep integer not null default 0;
+             alter table workers add column verify integer not null default 0;
+             alter table workers add column verifies integer;
+             alter table workers add column retries integer not null default 0",
+        )?;
+    }
     // A repo's one Orchestrator from before agents becomes its first agent, Workers and all.
     conn.execute_batch(
         "insert into agents (repo, kind, model, session_id, created_at)
@@ -172,6 +208,13 @@ pub fn open(path: &Path) -> Result<Connection> {
          update workers set agent_id = (
            select min(a.id) from agents a where a.repo = workers.repo and a.kind = 'orchestrator')
            where agent_id is null;",
+    )?;
+    // Questions left open by Workers that settled before settling withdrew them.
+    conn.execute(
+        "update messages set answer = ?2, answered_at = ?3
+           where kind = ?1 and answered_at is null
+           and worker_id in (select id from workers where settled_at is not null)",
+        params![kind::QUESTION, WITHDRAWN, now()],
     )?;
     Ok(conn)
 }
@@ -183,7 +226,8 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
 }
 
 const WORKER_COLUMNS: &str = "id, repo, profile, title, cwd, branch, session_id, state, final_report, \
-                              created_at, settled_at, closed_at, last_message_at, agent_id, dismissed_at, fanout, cli, model";
+                              created_at, settled_at, closed_at, last_message_at, agent_id, dismissed_at, fanout, cli, model, \
+                              keep, verify, verifies, retries";
 
 fn worker_row(row: &Row) -> rusqlite::Result<Worker> {
     Ok(Worker {
@@ -205,6 +249,10 @@ fn worker_row(row: &Row) -> rusqlite::Result<Worker> {
         fanout: row.get(15)?,
         cli: row.get(16)?,
         model: row.get(17)?,
+        keep: row.get::<_, i64>(18)? != 0,
+        verify: row.get::<_, i64>(19)? != 0,
+        verifies: row.get(20)?,
+        retries: row.get(21)?,
     })
 }
 
@@ -262,6 +310,25 @@ pub fn insert_worker(conn: &Connection, w: &NewWorker) -> Result<i64> {
     Ok(conn.last_insert_rowid())
 }
 
+/// The Task a Worker was started with.
+pub fn worker_spec(conn: &Connection, id: i64) -> Result<String> {
+    Ok(conn.query_row("select spec from workers where id = ?1", [id], |row| row.get(0))?)
+}
+
+/// What a Worker is for, set once it is started: kept, verified by the daemon, or verifying a writer.
+pub fn set_worker_role(conn: &Connection, id: i64, keep: bool, verify: bool, verifies: Option<i64>) -> Result<()> {
+    conn.execute(
+        "update workers set keep = ?2, verify = ?3, verifies = ?4 where id = ?1",
+        params![id, keep, verify, verifies],
+    )?;
+    Ok(())
+}
+
+pub fn add_retry(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("update workers set retries = retries + 1 where id = ?1", [id])?;
+    Ok(())
+}
+
 pub fn worker(conn: &Connection, id: i64) -> Result<Worker> {
     let found = conn
         .query_row(
@@ -274,6 +341,30 @@ pub fn worker(conn: &Connection, id: i64) -> Result<Worker> {
         Some(worker) => Ok(worker),
         None => bail!("no Worker w{id}"),
     }
+}
+
+/// Every Worker started at or after `since` (Unix seconds), as (profile, Claude session id).
+pub fn worker_sessions_since(conn: &Connection, since: i64) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("select profile, session_id from workers where created_at >= ?1 order by id")?;
+    let rows = stmt.query_map([since], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Every Orchestrator that was open at or after `since` (Unix seconds), as (agent id, repo, name,
+/// Claude session id). An Orchestrator lives as long as its session, so it counts by when it
+/// closed, not when it started; Normal sessions are not Orchestrators and are left out.
+pub fn orchestrator_sessions_since(
+    conn: &Connection,
+    since: i64,
+) -> Result<Vec<(i64, String, Option<String>, String)>> {
+    let mut stmt = conn.prepare(
+        "select id, repo, name, session_id from agents
+         where kind = ?1 and (closed_at is null or closed_at >= ?2) order by id",
+    )?;
+    let rows = stmt.query_map(params![agent_kind::ORCHESTRATOR, since], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 pub fn workers(conn: &Connection, repo: &str) -> Result<Vec<Worker>> {
@@ -297,6 +388,8 @@ pub fn set_state(conn: &Connection, id: i64, new_state: &str) -> Result<()> {
             "update workers set settled_at = null, closed_at = null, dismissed_at = null where id = ?1",
             [id],
         )?;
+    } else {
+        withdraw_questions(conn, id)?;
     }
     Ok(())
 }
@@ -305,6 +398,18 @@ pub fn settle(conn: &Connection, id: i64, final_state: &str, report: &str) -> Re
     conn.execute(
         "update workers set state = ?2, final_report = ?3, settled_at = ?4 where id = ?1",
         params![id, final_state, report, now()],
+    )?;
+    withdraw_questions(conn, id)
+}
+
+/// The answer a settled Worker's open question gets: no one waits for it any more.
+pub const WITHDRAWN: &str = "(withdrawn: the Worker settled before an answer)";
+
+/// A Worker that settles takes back its open questions, so they leave Needs you and the inbox.
+fn withdraw_questions(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute(
+        "update messages set answer = ?3, answered_at = ?4 where worker_id = ?1 and kind = ?2 and answered_at is null",
+        params![id, kind::QUESTION, WITHDRAWN, now()],
     )?;
     Ok(())
 }
@@ -319,18 +424,61 @@ pub fn mark_closed(conn: &Connection, id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Live Workers from before a daemon restart have no terminal any more.
-pub fn mark_lost(conn: &Connection) -> Result<Vec<Worker>> {
+/// Live Workers from before a daemon restart whose terminal the holder no longer has (`held`
+/// are the ones it had).
+pub fn mark_lost(conn: &Connection, held: &[i64]) -> Result<Vec<Worker>> {
     let mut stmt = conn.prepare(&format!(
         "select {WORKER_COLUMNS} from workers where state in (?1, ?2) and closed_at is null"
     ))?;
     let lost = stmt
         .query_map([state::STARTING, state::RUNNING], worker_row)?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|worker| !held.contains(&worker.id))
+        .collect::<Vec<_>>();
     for worker in &lost {
         set_state(conn, worker.id, state::LOST)?;
     }
     Ok(lost)
+}
+
+/// Keeps `session` as one of the agent's earlier sessions.
+pub fn end_agent_session(conn: &Connection, agent: i64, session: &str) -> Result<()> {
+    conn.execute(
+        "insert into agent_sessions (agent_id, session_id, ended_at) values (?1, ?2, ?3)",
+        params![agent, session, now()],
+    )?;
+    Ok(())
+}
+
+/// The agent's earlier sessions, oldest first.
+pub fn agent_sessions(conn: &Connection, agent: i64) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("select session_id from agent_sessions where agent_id = ?1 order by id")?;
+    let rows = stmt.query_map(params![agent], |row| row.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Who typed an input into a Worker.
+pub mod origin {
+    pub const ORCHESTRATOR: &str = "orchestrator";
+    pub const HUMAN: &str = "human";
+    /// Echo's own nudges, such as the note a resumed session starts with.
+    pub const ECHO: &str = "echo";
+}
+
+pub fn insert_input(conn: &Connection, worker: i64, origin: &str, text: &str) -> Result<()> {
+    conn.execute(
+        "insert into worker_inputs (worker_id, origin, text, created_at) values (?1, ?2, ?3, ?4)",
+        params![worker, origin, text, now()],
+    )?;
+    Ok(())
+}
+
+/// A Worker's inputs, oldest first, as (origin, text).
+pub fn inputs(conn: &Connection, worker: i64) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("select origin, text from worker_inputs where worker_id = ?1 order by id")?;
+    let rows = stmt.query_map(params![worker], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 pub fn insert_message(conn: &Connection, worker: &Worker, kind: &str, body: &str) -> Result<i64> {
@@ -380,6 +528,30 @@ pub fn take_undelivered(conn: &Connection, repo: &str, agent: Option<i64>) -> Re
     Ok(messages)
 }
 
+/// Whether a message that wakes the Orchestrator waits: any undelivered one but a `status`, which
+/// is delivered along with the next that does.
+pub fn has_waking(conn: &Connection, repo: &str, agent: Option<i64>) -> Result<bool> {
+    let mine = "(?2 is null or worker_id in (select id from workers where agent_id = ?2))";
+    Ok(conn
+        .prepare(&format!(
+            "select 1 from messages where repo = ?1 and delivered_at is null and kind != ?3 and {mine}"
+        ))?
+        .exists(params![repo, agent, kind::STATUS])?)
+}
+
+/// Whether an agent's Orchestrator has something to do: a Worker of its own running, a message
+/// it has not heard, or a question nobody answered.
+pub fn agent_has_work(conn: &Connection, repo: &str, agent: i64) -> Result<bool> {
+    let mine = "worker_id in (select id from workers where agent_id = ?2)";
+    Ok(conn
+        .prepare(&format!(
+            "select 1 from workers where repo = ?1 and agent_id = ?2 and closed_at is null and state in (?3, ?4)
+             union all select 1 from messages where repo = ?1 and delivered_at is null and {mine}
+             union all select 1 from messages where repo = ?1 and kind = ?5 and answered_at is null and {mine}"
+        ))?
+        .exists(params![repo, agent, state::STARTING, state::RUNNING, kind::QUESTION])?)
+}
+
 pub fn open_questions(conn: &Connection, worker_id: i64) -> Result<Vec<Message>> {
     let mut stmt = conn.prepare(&format!(
         "select {MESSAGE_COLUMNS} from messages where worker_id = ?1 and kind = ?2 and answered_at is null order by id"
@@ -396,6 +568,12 @@ pub fn answer(conn: &Connection, question_id: i64, text: &str) -> Result<()> {
         bail!(
             "message #{question_id} is a {}, not a question; answer an on-screen prompt with `echoctl worker key`",
             question.kind
+        );
+    }
+    if question.answer.as_deref() == Some(WITHDRAWN) {
+        bail!(
+            "question #{question_id} was withdrawn: w{} settled before an answer",
+            question.worker_id
         );
     }
     if question.answered_at.is_some() {
@@ -565,8 +743,14 @@ mod tests {
 
     fn fixture() -> (Connection, Worker) {
         let conn = open(Path::new(":memory:")).unwrap();
-        let id = insert_worker(
-            &conn,
+        let id = insert_test_worker(&conn);
+        let w = worker(&conn, id).unwrap();
+        (conn, w)
+    }
+
+    fn insert_test_worker(conn: &Connection) -> i64 {
+        insert_worker(
+            conn,
             &NewWorker {
                 repo: "/r",
                 profile: "naruto",
@@ -581,9 +765,49 @@ mod tests {
                 model: None,
             },
         )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_orchestrator_has_work_while_a_worker_runs_or_a_message_or_question_waits() {
+        let conn = open(Path::new(":memory:")).unwrap();
+        let agent = insert_agent(&conn, "/r", agent_kind::ORCHESTRATOR, None, None).unwrap();
+        let other = insert_agent(&conn, "/r", agent_kind::ORCHESTRATOR, None, None).unwrap();
+        let id = insert_worker(
+            &conn,
+            &NewWorker {
+                repo: "/r",
+                profile: "naruto",
+                title: "t",
+                spec: "s",
+                cwd: "/r",
+                branch: None,
+                session_id: "sid",
+                agent: Some(agent),
+                fanout: None,
+                cli: None,
+                model: None,
+            },
+        )
         .unwrap();
+        assert!(agent_has_work(&conn, "/r", agent).unwrap(), "a Worker is starting");
+        assert!(
+            !agent_has_work(&conn, "/r", other).unwrap(),
+            "it is another Orchestrator's"
+        );
+        settle(&conn, id, state::DONE, "report").unwrap();
+        assert!(!agent_has_work(&conn, "/r", agent).unwrap(), "settled, nothing sent");
         let w = worker(&conn, id).unwrap();
-        (conn, w)
+        let question = insert_message(&conn, &w, kind::QUESTION, "which?").unwrap();
+        take_undelivered(&conn, "/r", Some(agent)).unwrap();
+        assert!(agent_has_work(&conn, "/r", agent).unwrap(), "an open question");
+        answer(&conn, question, "this").unwrap();
+        assert!(!agent_has_work(&conn, "/r", agent).unwrap());
+        insert_message(&conn, &w, kind::STATUS, "40 of 44").unwrap();
+        assert!(
+            agent_has_work(&conn, "/r", agent).unwrap(),
+            "a message it has not heard"
+        );
     }
 
     #[test]
@@ -633,6 +857,30 @@ mod tests {
         close_agent(&conn, a).unwrap();
         assert_eq!(first_orchestrator(&conn, "/r").unwrap().unwrap().id, b);
         assert_eq!(agents(&conn, Some("/r")).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn stats_list_the_orchestrators_open_during_the_window() {
+        let conn = open(Path::new(":memory:")).unwrap();
+        let open_one = insert_agent(&conn, "/r", agent_kind::ORCHESTRATOR, Some("Rerank"), None).unwrap();
+        let closed_long_ago = insert_agent(&conn, "/r", agent_kind::ORCHESTRATOR, None, None).unwrap();
+        let closed_in_window = insert_agent(&conn, "/r", agent_kind::ORCHESTRATOR, None, None).unwrap();
+        insert_agent(&conn, "/r", agent_kind::CLAUDE, None, None).unwrap();
+        close_agent(&conn, closed_long_ago).unwrap();
+        close_agent(&conn, closed_in_window).unwrap();
+        conn.execute("update agents set closed_at = 100 where id = ?1", [closed_long_ago])
+            .unwrap();
+        let ids = |since| {
+            orchestrator_sessions_since(&conn, since)
+                .unwrap()
+                .iter()
+                .map(|a| a.0)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(1_000), [open_one, closed_in_window]);
+        assert_eq!(ids(0), [open_one, closed_long_ago, closed_in_window]);
+        let first = &orchestrator_sessions_since(&conn, 0).unwrap()[0];
+        assert_eq!((first.1.as_str(), first.2.as_deref()), ("/r", Some("Rerank")));
     }
 
     #[test]
@@ -731,10 +979,51 @@ mod tests {
     }
 
     #[test]
+    fn a_worker_that_settles_withdraws_its_open_questions() {
+        for settled in [state::DONE, state::BLOCKED] {
+            let (conn, w) = fixture();
+            let q = insert_message(&conn, &w, kind::QUESTION, "merge?").unwrap();
+            settle(&conn, w.id, settled, "report").unwrap();
+            assert!(open_questions(&conn, w.id).unwrap().is_empty(), "{settled}");
+            assert!(answer(&conn, q, "go").unwrap_err().to_string().contains("withdrawn"));
+        }
+        let (conn, w) = fixture();
+        insert_message(&conn, &w, kind::QUESTION, "merge?").unwrap();
+        set_state(&conn, w.id, state::LOST).unwrap();
+        assert!(open_questions(&conn, w.id).unwrap().is_empty(), "lost");
+    }
+
+    #[test]
+    fn opening_withdraws_questions_settled_workers_left_open() {
+        let dir = std::env::temp_dir().join(format!("hub-db-q-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hub.db");
+        let _ = std::fs::remove_file(&path);
+        let conn = open(&path).unwrap();
+        let (live, settled) = (
+            worker(&conn, insert_test_worker(&conn)).unwrap(),
+            worker(&conn, insert_test_worker(&conn)).unwrap(),
+        );
+        let kept = insert_message(&conn, &live, kind::QUESTION, "which?").unwrap();
+        let left = insert_message(&conn, &settled, kind::QUESTION, "merge?").unwrap();
+        // How a daemon from before this fix settled a Worker: its question stayed open.
+        conn.execute(
+            "update workers set state = 'done', settled_at = 1 where id = ?1",
+            [settled.id],
+        )
+        .unwrap();
+        drop(conn);
+        let conn = open(&path).unwrap();
+        assert_eq!(message(&conn, kept).unwrap().answered_at, None);
+        assert_eq!(message(&conn, left).unwrap().answer.as_deref(), Some(WITHDRAWN));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn restart_marks_live_workers_lost() {
         let (conn, w) = fixture();
         set_state(&conn, w.id, state::RUNNING).unwrap();
-        assert_eq!(mark_lost(&conn).unwrap().len(), 1);
+        assert_eq!(mark_lost(&conn, &[]).unwrap().len(), 1);
         let after = worker(&conn, w.id).unwrap();
         assert_eq!(after.state, state::LOST);
         assert!(after.settled_at.is_some());

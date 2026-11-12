@@ -10,8 +10,12 @@ use crate::db::Agent;
 use crate::{attach, lessons, paths, proto, repo, settings};
 
 /// The first message of a resumed Orchestrator session.
-const RESUMED: &str = "Your terminal was restarted. Run `echoctl worker list`, give the human a Summary, \
+pub const RESUMED: &str = "Your terminal was restarted. Run `echoctl worker list`, give the human a Summary, \
                        and start the listener if Workers are open.";
+
+/// The first message of an Orchestrator session the daemon renewed to clear its context.
+pub const RENEWED: &str = "Your session was renewed to clear its context; nothing else changed. Run `echoctl brief`, \
+                           give the human a Summary of what is open, and start the listener if Workers are open.";
 
 /// What a repo's Orchestrator starts with: a new session, or its saved one resumed. A new session
 /// given a `request` starts on it, as if the human had typed it first.
@@ -30,11 +34,12 @@ pub fn orchestrator_start(hub: &Path, repo: &Path, worktree: Option<(&str, &str)
         );
     let preferences = lessons::preferences(hub);
     let mut prompt = format!("{orchestrator}\n\n# Preferences\n\n{preferences}");
+    let human = settings::read(&state).unwrap_or_default();
     let known = lessons::lessons(&state, &key);
-    if !known.is_empty() {
+    if !known.is_empty() && settings::orchestrator_lessons(&human) {
         prompt += &format!("\n\n{}\n\n{}", lessons::WORKER_INTRO, known.trim_end());
     }
-    let rules = settings::Rules::from(&settings::read(&state).unwrap_or_default()).overrides();
+    let rules = settings::Rules::from(&human).overrides();
     if !rules.is_empty() {
         prompt += &format!("\n\n{rules}");
     }
@@ -60,6 +65,7 @@ pub fn orchestrator_start(hub: &Path, repo: &Path, worktree: Option<(&str, &str)
         dirs: vec![hub.to_path_buf(), lessons::memory_dir(&state)],
         plugins: vec![hub.join("mod"), hub.join("skills")],
         model: session.model,
+        effort: session.effort,
         session_id: session.id,
         resume: session.resume,
         first,
@@ -74,6 +80,8 @@ pub struct Session {
     pub resume: bool,
     pub request: Option<String>,
     pub model: Option<String>,
+    /// How hard an Orchestrator thinks; a Normal session keeps its CLI's own.
+    pub effort: Option<String>,
     pub extra: Vec<String>,
 }
 

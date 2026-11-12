@@ -1,18 +1,20 @@
-//! One Worker's terminal: the agent process on a PTY the daemon owns, its parsed screen,
-//! and the clients attached to it.
+//! One terminal (an agent's, a Worker's, or a shell): its process on a PTY the terminal holder
+//! keeps (holder.rs), so it outlives the daemon; its parsed screen; and the clients attached to it.
 
-use std::io::{Read, Write};
+use std::io::{BufReader, Read};
+use std::os::unix::net::UnixStream;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use serde_json::json;
 
 use crate::cli::Cli;
-use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use crate::holder;
 
 pub const ROWS: u16 = 45;
 pub const COLS: u16 = 160;
@@ -40,11 +42,10 @@ pub struct Spawn {
 pub struct Live {
     pub id: i64,
     pub cli: Cli,
-    master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    /// The holder's connection for this terminal: input, resize, and kill frames go out on it.
+    conn: Mutex<UnixStream>,
     parser: Mutex<vt100::Parser>,
     subscribers: Mutex<Vec<SyncSender<Arc<Vec<u8>>>>>,
-    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// The blocker kind already reported for the current stretch, cleared when work resumes.
     pub blocker: Mutex<Option<String>>,
     /// Set by `echoctl worker close`, so the exit is not reported as a failure.
@@ -52,64 +53,114 @@ pub struct Live {
     /// At its input box while background work it started runs (`Look::Waiting`), as the screen
     /// watcher last saw it.
     pub waiting: AtomicBool,
+    /// When work was last typed in for it, so the quiet before that is not read as idling on it.
+    pub handed: Mutex<Option<Instant>>,
     alive: AtomicBool,
     started: Instant,
 }
 
 impl Live {
-    /// Starts the process; `on_exit` runs on the reader thread once its output ends.
-    pub fn spawn(id: i64, spawn: Spawn, on_exit: impl FnOnce(i64) + Send + 'static) -> Result<Arc<Live>> {
-        let size = PtySize {
+    /// Starts the process in the holder under `key` (`w12`, `a3`, `s3`); `on_exit` runs on the
+    /// reader thread once its output ends.
+    pub fn spawn(key: &str, id: i64, spawn: Spawn, on_exit: impl FnOnce(i64) + Send + 'static) -> Result<Arc<Live>> {
+        let request = holder::SpawnRequest {
+            key: key.to_string(),
+            program: spawn.program,
+            args: spawn.args,
+            cwd: spawn.cwd,
+            env: spawn.env,
+            env_remove: spawn.env_remove,
             rows: ROWS,
             cols: COLS,
-            pixel_width: 0,
-            pixel_height: 0,
         };
-        let pair = native_pty_system().openpty(size).context("opening a PTY")?;
-        let mut command = CommandBuilder::new(&spawn.program);
-        command.args(&spawn.args);
-        command.cwd(&spawn.cwd);
-        for key in &spawn.env_remove {
-            command.env_remove(key);
+        let stream = holder::connect()?;
+        let mut request = serde_json::to_value(request)?;
+        request["op"] = json!("spawn");
+        let (_, reader) = holder::request(&stream, request)?;
+        let parser = parser(ROWS, COLS);
+        Ok(Live::start(
+            id,
+            spawn.cli,
+            stream,
+            reader,
+            parser,
+            Instant::now(),
+            on_exit,
+        ))
+    }
+
+    /// Takes over a terminal the holder kept while no daemon ran, its screen rebuilt from the
+    /// holder's tail; None when the holder has no `key`.
+    pub fn adopt(
+        key: &str,
+        id: i64,
+        cli: Cli,
+        on_exit: impl FnOnce(i64) + Send + 'static,
+    ) -> Result<Option<Arc<Live>>> {
+        if !holder::list().iter().any(|k| k == key) {
+            return Ok(None);
         }
-        for (key, value) in &spawn.env {
-            command.env(key, value);
+        let stream = holder::connect()?;
+        let (answer, mut reader) = holder::request(&stream, json!({ "op": "adopt", "key": key }))?;
+        let adopted: holder::Adopted = serde_json::from_value(answer)?;
+        let mut tail = vec![0u8; adopted.tail];
+        reader.read_exact(&mut tail)?;
+        let mut parser = parser(adopted.rows, adopted.cols);
+        feed(&mut parser, &tail);
+        let started = Instant::now()
+            .checked_sub(Duration::from_millis(adopted.age_ms))
+            .unwrap_or_else(Instant::now);
+        let live = Live::start(id, cli, stream, reader, parser, started, on_exit);
+        // The tail may begin mid-screen: one row less and back makes a full-screen program redraw.
+        let (rows, cols) = (adopted.rows, adopted.cols);
+        if rows > 1 {
+            live.resize(rows - 1, cols)?;
+            let redraw = Arc::clone(&live);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(50));
+                let _ = redraw.resize(rows, cols);
+            });
         }
-        let mut child = pair
-            .slave
-            .spawn_command(command)
-            .with_context(|| format!("starting {}", spawn.program))?;
-        drop(pair.slave);
-        let mut reader = pair.master.try_clone_reader()?;
+        Ok(Some(live))
+    }
+
+    fn start(
+        id: i64,
+        cli: Cli,
+        stream: UnixStream,
+        mut reader: BufReader<UnixStream>,
+        parser: vt100::Parser,
+        started: Instant,
+        on_exit: impl FnOnce(i64) + Send + 'static,
+    ) -> Arc<Live> {
         let live = Arc::new(Live {
             id,
-            cli: spawn.cli,
-            writer: Mutex::new(pair.master.take_writer()?),
-            master: Mutex::new(pair.master),
-            parser: Mutex::new(parser(ROWS, COLS)),
+            cli,
+            conn: Mutex::new(stream),
+            parser: Mutex::new(parser),
             subscribers: Mutex::new(Vec::new()),
-            killer: Mutex::new(child.clone_killer()),
             blocker: Mutex::new(None),
             closing: AtomicBool::new(false),
             waiting: AtomicBool::new(false),
+            handed: Mutex::new(None),
             alive: AtomicBool::new(true),
-            started: Instant::now(),
+            started,
         });
         let reading = Arc::clone(&live);
         std::thread::spawn(move || {
-            let mut buf = [0u8; 16 * 1024];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => reading.output(&buf[..n]),
+            // Output until the exit frame; a holder that went away ends the terminal too.
+            while let Ok(Some((kind, bytes))) = holder::read_frame(&mut reader) {
+                match kind {
+                    holder::OUTPUT => reading.output(&bytes),
+                    holder::EXIT => break,
+                    _ => {}
                 }
             }
-            let _ = child.wait();
             reading.alive.store(false, Ordering::SeqCst);
             reading.subscribers.lock().unwrap().clear();
             on_exit(reading.id);
         });
-        Ok(live)
+        live
     }
 
     /// Hands the bytes to every attached client before parsing them, so they never wait on the
@@ -144,10 +195,11 @@ impl Live {
     }
 
     pub fn write(&self, bytes: &[u8]) -> Result<()> {
-        let mut writer = self.writer.lock().unwrap();
-        writer.write_all(bytes)?;
-        writer.flush()?;
-        Ok(())
+        Ok(holder::write_frame(
+            &mut *self.conn.lock().unwrap(),
+            holder::INPUT,
+            bytes,
+        )?)
     }
 
     pub fn resize(&self, rows: u16, cols: u16) -> Result<()> {
@@ -155,12 +207,9 @@ impl Live {
             return Ok(());
         }
         let mut parser = self.parser.lock().unwrap();
-        self.master.lock().unwrap().resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
+        let mut size = rows.to_be_bytes().to_vec();
+        size.extend_from_slice(&cols.to_be_bytes());
+        holder::write_frame(&mut *self.conn.lock().unwrap(), holder::RESIZE, &size)?;
         parser.screen_mut().set_size(rows.max(MIN_ROWS), cols);
         Ok(())
     }
@@ -174,7 +223,7 @@ impl Live {
     }
 
     pub fn kill(&self) {
-        let _ = self.killer.lock().unwrap().kill();
+        let _ = holder::write_frame(&mut *self.conn.lock().unwrap(), holder::KILL, &[]);
     }
 }
 

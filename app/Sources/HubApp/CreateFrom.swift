@@ -43,6 +43,7 @@ struct CreateFromSection: View {
     @ObservedObject var form: NewSessionForm
     let submit: () -> Void
     @FocusState private var fieldFocused: Bool
+    @StateObject private var baseSearch = BaseSearch()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -96,13 +97,9 @@ struct CreateFromSection: View {
         .onAppear { DispatchQueue.main.async { fieldFocused = true } }
     }
 
-    /// New branches start from this branch.
+    /// New branches start from this branch; a repo has many, so it is a search, not a menu.
     private var basePicker: some View {
-        Menu {
-            ForEach(form.branches) { branch in
-                Button(branch.name) { form.base = branch.name }
-            }
-        } label: {
+        Button { baseSearch.shown = true } label: {
             HStack(spacing: 5) {
                 Image(systemName: "arrow.triangle.branch")
                 Text(form.base.isEmpty ? "HEAD" : form.base)
@@ -117,12 +114,17 @@ struct CreateFromSection: View {
             .background(Ledger.fill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             .contentShape(Rectangle())
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .fixedSize()
         .help("New branches start from \(form.base.isEmpty ? "the repo's checkout" : form.base)")
         .accessibilityLabel("Start new branches from \(form.base)")
+        .popover(isPresented: $baseSearch.shown, arrowEdge: .bottom) {
+            BaseBranchSearch(branches: form.branches.map(\.name), base: form.base, search: baseSearch) { name in
+                form.base = name
+                baseSearch.shown = false
+                fieldFocused = true
+            }
+        }
     }
 
     private var branchList: some View {
@@ -248,5 +250,106 @@ private struct TabButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(picked ? .isSelected : [])
+    }
+}
+
+final class BaseSearch: ObservableObject {
+    @Published var shown = false
+    @Published var query = ""
+    @Published var picked = 0
+}
+
+/// The base-branch picker's popover: a search field over the repo's branches; ↑ and ↓ move,
+/// Return picks, Escape closes.
+private struct BaseBranchSearch: View {
+    let branches: [String]
+    let base: String
+    @ObservedObject var search: BaseSearch
+    let pick: (String) -> Void
+    @FocusState private var fieldFocused: Bool
+
+    var body: some View {
+        let shown = matches
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(Ledger.ink3)
+                TextField("Find a branch", text: $search.query)
+                    .textFieldStyle(.plain)
+                    .autocorrectionDisabled()
+                    .focused($fieldFocused)
+                    .onSubmit { if shown.indices.contains(search.picked) { pick(shown[search.picked]) } }
+                    .onKeyPress(.downArrow) { move(1, in: shown); return .handled }
+                    .onKeyPress(.upArrow) { move(-1, in: shown); return .handled }
+            }
+            .ledgerField()
+            .padding(8)
+
+            Rectangle().fill(Ledger.rule).frame(height: 1)
+
+            if shown.isEmpty {
+                Text(branches.isEmpty ? "Reading branches…" : "No branch matches.")
+                    .font(Ledger.font(12.5))
+                    .foregroundStyle(Ledger.ink3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            } else {
+                ScrollViewReader { scroller in
+                    ScrollView {
+                        VStack(spacing: 2) {
+                            ForEach(Array(shown.enumerated()), id: \.element) { index, name in
+                                row(name, picked: index == search.picked).id(name)
+                            }
+                        }
+                        .padding(6)
+                    }
+                    .frame(maxHeight: 280)
+                    .onChange(of: search.picked) {
+                        if shown.indices.contains(search.picked) { scroller.scrollTo(shown[search.picked]) }
+                    }
+                }
+            }
+        }
+        .frame(width: 320)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(Ledger.paper)
+        .onAppear {
+            search.query = ""
+            search.picked = max(0, branches.firstIndex(of: base) ?? 0)
+            DispatchQueue.main.async { fieldFocused = true }
+        }
+        .onChange(of: search.query) { search.picked = 0 }
+    }
+
+    /// Branches whose name holds the typed text, in the repo's order.
+    private var matches: [String] {
+        let text = search.query.trimmingCharacters(in: .whitespaces).lowercased()
+        return text.isEmpty ? branches : branches.filter { $0.lowercased().contains(text) }
+    }
+
+    private func move(_ step: Int, in shown: [String]) {
+        guard !shown.isEmpty else { return }
+        search.picked = min(max(search.picked + step, 0), shown.count - 1)
+    }
+
+    private func row(_ name: String, picked: Bool) -> some View {
+        Button { pick(name) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark")
+                    .font(Ledger.font(11, .semibold))
+                    .opacity(name == base ? 1 : 0)
+                Text(name)
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(Ledger.ink)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(picked ? Ledger.chosen : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(name == base ? .isSelected : [])
     }
 }

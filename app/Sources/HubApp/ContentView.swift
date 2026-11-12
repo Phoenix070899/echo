@@ -109,14 +109,18 @@ struct TitleBar: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        ZStack {
+        // The search field sits between the two sides, so a long right side never covers it;
+        // the spacers share the room, which keeps it centred while the sides are about even.
+        HStack(spacing: 18) {
+            HStack(spacing: 8) {
+                EchoMark().frame(width: 22, height: 22)
+                Text("Echo").font(Ledger.font(14, .semibold)).foregroundStyle(Ledger.ink)
+            }
+            .fixedSize()
+            Spacer(minLength: 0)
             SearchField()
+            Spacer(minLength: 0)
             HStack(spacing: 18) {
-                HStack(spacing: 8) {
-                    EchoMark().frame(width: 22, height: 22)
-                    Text("Echo").font(Ledger.font(14, .semibold)).foregroundStyle(Ledger.ink)
-                }
-                Spacer(minLength: 16)
                 if model.sessions.isEmpty && !model.daemonDown {
                     // Before the first session there is nothing to count: say the daemon is up.
                     HStack(spacing: 8) {
@@ -128,12 +132,17 @@ struct TitleBar: View {
                         Text(workers(model.runningCount, "running")).foregroundStyle(Ledger.ink2)
                     }
                     UsageInline(usage: model.usage)
+                    if let stats = model.workerStats, stats.withTranscript > 0 {
+                        StatsInline(stats: stats)
+                    }
                 }
             }
-            // Past the traffic lights, which full screen hides.
-            .padding(.leading, model.fullScreen ? 16 : 86)
-            .padding(.trailing, 16)
+            // The search field gives up room first.
+            .fixedSize()
         }
+        // Past the traffic lights, which full screen hides.
+        .padding(.leading, model.fullScreen ? 16 : 86)
+        .padding(.trailing, 16)
         .font(Ledger.font(12.5))
         .frame(height: Self.height)
     }
@@ -161,10 +170,11 @@ struct SearchField: View {
             }
             .font(Ledger.font(13.5))
             .foregroundStyle(Ledger.ink2)
+            .lineLimit(1)
             .padding(.horizontal, 12)
-            .frame(width: 520, height: 30)
+            .frame(minWidth: 220, maxWidth: 520, minHeight: 30, maxHeight: 30)
             // Fill alone sets it apart, a shade darker on hover; no shadow.
-            .background(hovering.on ? Ledger.band : Ledger.pill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(hovering.on ? Ledger.band : Ledger.pill, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -577,9 +587,11 @@ struct AgentGroupView: View {
                                 .padding(.vertical, 3)
                         }
                     }
-                    if agent.isOrchestrator {
+                    // A Claude Code session lists Workers too when they fall to it: a repo with no Orchestrator.
+                    if agent.isOrchestrator || !group.running.isEmpty || !group.settled.isEmpty {
                         // A Worker waiting on the human sits under Needs you, so it counts too.
-                        if group.running.isEmpty && group.settled.isEmpty && !group.needs.contains(where: { $0.worker != nil }) {
+                        if agent.isOrchestrator && group.running.isEmpty && group.settled.isEmpty
+                            && !group.needs.contains(where: { $0.worker != nil }) {
                             Hint(agent.live
                                  ? "No Workers yet. Ask it for something and it hands out Tasks."
                                  : "No Workers. Start it to pick up where it left off.")
@@ -719,8 +731,8 @@ struct AgentHeader: View {
         .contentShape(Rectangle())
         .onTapGesture { model.select(.agent(repo: repo, id: agent.id)) }
         .prewarmsTerminal(.agent(id: agent.id), epoch: "\(agent.live)")
-        // Lanh's rows: a rounded fill inset from the column's edges, no bar.
-        .background(selected ? Ledger.selected : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        // Astryx's rows: a rounded fill inset from the column's edges, no bar.
+        .background(selected ? Ledger.selected : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         .padding(.horizontal, 8)
         .contextMenu {
             Button("Rename…") { model.renaming = agent }
@@ -830,8 +842,8 @@ struct MainPanel: View {
     }
 }
 
-/// An agent's terminal. While an Orchestrator or a Claude Code session is not running, its shell
-/// fills the panel and the header offers to start it again.
+/// An agent's chat or terminal (ADR 0010). While an Orchestrator or a Claude Code session is not
+/// running, its shell fills the terminal and the header offers to start it again.
 struct AgentPanel: View {
     @EnvironmentObject private var model: AppModel
     let repo: String
@@ -847,6 +859,9 @@ struct AgentPanel: View {
                     .foregroundStyle(Ledger.ink3)
                     .lineLimit(1)
                 Spacer(minLength: 8)
+                if model.hasChat(agent) {
+                    ChatTerminalSwitch(chat: model.showsChat(agent)) { model.toggleChat() }
+                }
                 if agent.isTerminal {
                 } else if agent.live {
                     Button { model.stopAgent(agent.id) } label: {
@@ -876,10 +891,14 @@ struct AgentPanel: View {
                     .disabled(model.daemonDown)
                 }
             }
-            // A new terminal whenever the agent starts or stops, so one without the multiplexer
-            // attaches to whichever runs now: the agent, or its shell.
-            LiveTerminal(target: .agent(id: agent.id), epoch: "\(agent.live)")
-                .id("\(agent.id) \(agent.live)")
+            if model.showsChat(agent) {
+                ChatDeck(repo: repo, shown: .agent(id: agent.id))
+            } else {
+                // A new terminal whenever the agent starts or stops, so one without the multiplexer
+                // attaches to whichever runs now: the agent, or its shell.
+                LiveTerminal(target: .agent(id: agent.id), epoch: "\(agent.live)")
+                    .id("\(agent.id) \(agent.live)")
+            }
         }
     }
 
@@ -896,6 +915,38 @@ struct AgentPanel: View {
         let running = model.snapshot(repo).groups.first { $0.agent.id == agent.id }?.running.count ?? 0
         let workers = running > 0 ? "Its \(running) running Workers carry on meanwhile. " : ""
         return workers + "Starting it resumes the same conversation, with every report it missed."
+    }
+}
+
+/// Chat | Terminal in an agent's header; ⇧⌘T does the same.
+struct ChatTerminalSwitch: View {
+    let chat: Bool
+    /// What shows instead of the chat: the terminal, or a settled Worker's Final Report.
+    var other = "Terminal"
+    let toggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            segment("Chat", on: chat)
+            segment(other, on: !chat)
+        }
+        .padding(2)
+        .background(Ledger.fill, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+        .help("Switch between the chat and the \(other.lowercased()) (⇧⌘T)")
+    }
+
+    private func segment(_ title: String, on: Bool) -> some View {
+        Button { if !on { toggle() } } label: {
+            Text(title)
+                .font(Ledger.font(12, on ? .medium : .regular))
+                .foregroundStyle(on ? Ledger.ink : Ledger.ink2)
+                .padding(.horizontal, 10)
+                .frame(height: 22)
+                .background(on ? Ledger.paper : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 
@@ -1051,11 +1102,14 @@ struct WorkerPanel: View {
         if let worker = model.snapshot(repo).workers.first(where: { $0.id == id }) {
             VStack(spacing: 0) {
                 WorkerHeader(worker: worker, confirmStop: $confirmStop.on, view: viewBinding(worker),
-                             comments: model.reviews[AppModel.workerKey(repo, worker)]?.count ?? 0)
+                             comments: model.reviews[AppModel.workerKey(repo, worker)]?.count ?? 0,
+                             chat: model.showsChat(worker))
                 if model.workerView(repo, worker) == .changes {
                     ChangesView(repo: repo, worker: worker)
                 } else if model.workerView(repo, worker) == .compare, let fanout = worker.fanout {
                     CompareView(repo: repo, fanout: fanout)
+                } else if let number = worker.number, model.showsChat(worker) {
+                    ChatDeck(repo: repo, shown: .worker(id: number))
                 } else if let target = model.terminalTarget(repo, worker) {
                     LiveTerminal(target: target)
                     HStack(spacing: 10) {
@@ -1100,6 +1154,30 @@ struct WorkerHeader: View {
     @Binding var view: WorkerView
     /// Review comments not sent yet.
     let comments: Int
+    /// Its main view is its chat (ADR 0010).
+    let chat: Bool
+    @EnvironmentObject private var model: AppModel
+
+    /// The header's choices: the chat and the terminal (or Final Report) are both its main view.
+    private enum Shown: Hashable { case chat, main, changes, compare }
+
+    private var shown: Binding<Shown> {
+        Binding {
+            switch view {
+            case .main: chat ? .chat : .main
+            case .changes: .changes
+            case .compare: .compare
+            }
+        } set: { picked in
+            switch picked {
+            case .chat, .main:
+                view = .main
+                if let number = worker.number { model.setChat(.worker(id: number), on: picked == .chat) }
+            case .changes: view = .changes
+            case .compare: view = .compare
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1114,16 +1192,20 @@ struct WorkerHeader: View {
                 .foregroundStyle(worker.markColor)
                 .padding(.leading, 4)
                 Spacer(minLength: 8)
-                Picker("Show", selection: $view) {
-                    Text(worker.isActive && worker.live ? "Terminal" : "Final Report").tag(WorkerView.main)
-                    Text(comments > 0 ? "Changes (\(comments))" : "Changes").tag(WorkerView.changes)
+                Picker("Show", selection: shown) {
+                    if worker.number != nil {
+                        Text("Chat").tag(Shown.chat)
+                    }
+                    Text(worker.isActive && worker.live ? "Terminal" : "Final Report").tag(Shown.main)
+                    Text(comments > 0 ? "Changes (\(comments))" : "Changes").tag(Shown.changes)
                     if worker.fanout != nil {
-                        Text("Compare").tag(WorkerView.compare)
+                        Text("Compare").tag(Shown.compare)
                     }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
+                .help("⇧⌘T switches between the chat and the \(worker.isActive && worker.live ? "terminal" : "Final Report")")
                 if worker.isActive, worker.live {
                     Button("Stop Worker") { confirmStop = true }.buttonStyle(.ledger)
                 }
@@ -1274,7 +1356,8 @@ struct LedgerRow: View {
                     Text(worker.id)
                         .font(.system(size: 11.5, design: .monospaced))
                         .foregroundStyle(Ledger.ink3)
-                        .frame(width: 32, alignment: .leading)
+                        .lineLimit(1)
+                        .frame(width: 40, alignment: .leading)
                     Text(worker.profile)
                         .font(Ledger.font(12.5))
                         .foregroundStyle(Ledger.ink2)
@@ -1324,8 +1407,8 @@ struct LedgerRow: View {
             .padding(.trailing, 16)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Lanh's rows: a rounded fill inset from the column's edges, no bar.
-            .background(selected ? Ledger.selected : hovering.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            // Astryx's rows: a rounded fill inset from the column's edges, no bar.
+            .background(selected ? Ledger.selected : hovering.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
             .padding(.horizontal, 8)
             .contentShape(Rectangle())
             .animation(.easeOut(duration: 0.15), value: selected)
@@ -1422,6 +1505,105 @@ struct EmptyLedger: View {
 // MARK: - Usage
 
 /// The Claude account's plan limits, in the session bar. Click to re-read them.
+/// The top bar's Worker statistics: the context a Worker starts with, and a button that opens
+/// the week's report.
+struct StatsInline: View {
+    let stats: WorkerStats
+    @StateObject private var shown = Flag()
+
+    var body: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 4) {
+                Text("Worker start").foregroundStyle(Ledger.ink2)
+                Text(tokenCount(stats.startContext)).fontWeight(.medium).monospacedDigit().foregroundStyle(Ledger.ink)
+            }
+            .help("The median context a Worker starts with over the last 7 days; every turn re-reads it")
+            Button { shown.on.toggle() } label: {
+                Image(systemName: "ellipsis")
+                    .font(Ledger.font(12, .semibold))
+                    .foregroundStyle(Ledger.ink2)
+                    .frame(width: 24, height: 22)
+                    .background(shown.on ? Ledger.fill : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Worker statistics")
+            .accessibilityLabel("Worker statistics")
+            .popover(isPresented: $shown.on, arrowEdge: .bottom) { StatsReport(stats: stats) }
+        }
+    }
+}
+
+/// `echoctl stats` for the last 7 days: where Workers' tokens went and how much they read.
+struct StatsReport: View {
+    let stats: WorkerStats
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Workers, last 7 days").font(Ledger.font(14, .semibold)).foregroundStyle(Ledger.ink)
+                Text("\(stats.withTranscript) Workers, \(stats.turns) turns")
+                    .foregroundStyle(Ledger.ink3)
+            }
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                row("Start context", "\(tokenCount(stats.startContext)), re-read on every turn")
+                row("Context per turn", tokenCount(stats.contextPerTurn))
+                row("Token cost", "cache reads \(percent(stats.share.cacheReads)), cache writes \(percent(stats.share.cacheWrites)), output \(percent(stats.share.output))")
+                row("Cold starts", "\(percent(stats.share.coldStarts)) of token cost")
+                row("Per Worker", "\(number(stats.perWorker.reads)) Reads, \(number(stats.perWorker.shellReads)) cat, head, or sed, \(number(stats.perWorker.searches)) searches")
+                row("Repeated reads", "\(percent(stats.repeatReads)) of Reads")
+            }
+            Rectangle().fill(Ledger.rule).frame(height: 1)
+            Grid(alignment: .trailing, horizontalSpacing: 16, verticalSpacing: 6) {
+                GridRow {
+                    Text("Profile").gridColumnAlignment(.leading)
+                    Text("Workers")
+                    Text("Turns each")
+                    Text("Start")
+                    Text("Per turn")
+                    Text("Cost")
+                }
+                .font(Ledger.font(12, .semibold))
+                .foregroundStyle(Ledger.ink3)
+                ForEach(stats.profiles) { p in
+                    GridRow {
+                        Text(p.profile).foregroundStyle(Ledger.ink)
+                        Text("\(p.workers)")
+                        Text("\(p.turnsPerWorker)")
+                        Text(tokenCount(p.startContext))
+                        Text(tokenCount(p.contextPerTurn))
+                        Text(percent(p.share))
+                    }
+                    .monospacedDigit()
+                    .foregroundStyle(Ledger.ink2)
+                }
+            }
+            Text("From Claude Code transcripts; Codex Workers are not counted. Token cost weighs a cache read 0.1, a write 1.25 to 2, and output 5 against fresh input.")
+                .font(Ledger.font(11.5))
+                .foregroundStyle(Ledger.ink3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(Ledger.font(12.5))
+        .padding(16)
+        .frame(width: 460)
+        .background(Ledger.paper)
+        .textSelection(.enabled)
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        GridRow {
+            Text(label).foregroundStyle(Ledger.ink3)
+            Text(value).foregroundStyle(Ledger.ink).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func percent(_ value: Double) -> String { "\(Int(value.rounded()))%" }
+
+    private func number(_ value: Double) -> String {
+        value == value.rounded() ? "\(Int(value))" : String(format: "%.1f", value)
+    }
+}
+
 struct UsageInline: View {
     @EnvironmentObject private var model: AppModel
     let usage: Usage?
@@ -1488,7 +1670,7 @@ struct DisconnectedBanner: View {
         .foregroundStyle(Ledger.failInk)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(Ledger.failWash, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Ledger.failWash, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 }
@@ -1510,7 +1692,7 @@ struct ErrorBanner: View {
         .foregroundStyle(Ledger.failInk)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(Ledger.failWash, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Ledger.failWash, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
     }
 }
 
@@ -1528,7 +1710,7 @@ struct NoticeBanner: View {
         .foregroundStyle(Ledger.ink2)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(Ledger.wash, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Ledger.wash, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
     }
 }
 

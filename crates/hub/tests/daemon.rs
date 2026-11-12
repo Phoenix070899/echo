@@ -50,6 +50,7 @@ impl Hub {
             .current_dir(&self.repo)
             .env("HUB_STATE", &self.state)
             .env("HUB_TEST_AGENT", fake)
+            .env("HUB_COALESCE_MS", "200")
             .env(
                 "PATH",
                 format!("{}:{}", bin.parent().unwrap().display(), std::env::var("PATH").unwrap()),
@@ -136,7 +137,7 @@ fn question_reply_and_final_report() {
     let done = hub.wait();
     assert!(done.contains("done (done) from w1"), "{done}");
     assert!(done.contains("answer was blue"));
-    assert!(done.contains("echoctl worker close w1"));
+    assert!(!done.contains("->"), "only a question ends with a next step: {done}");
     assert_eq!(hub.status()[0]["state"], "done");
     assert!(hub.fails(&["reply", "1", "again"]).contains("already answered"));
 
@@ -212,6 +213,33 @@ fn new_worktrees_get_a_typed_branch() {
 }
 
 #[test]
+fn a_worker_starts_where_another_worker_works() {
+    let hub = Hub::new("workertree");
+    hub.ok(&["status"]); // starts the daemon
+    let start = |worktree: &str| {
+        hub.call(
+            "worker.start",
+            serde_json::json!({ "repo": hub.repo_key(), "profile": "lee", "spec": "sleep", "worktree": worktree }),
+        )
+    };
+    let first = start("new:feat/thing");
+    let tree = first["result"]["cwd"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{first}"))
+        .to_string();
+    let second = start("worker:w1");
+    assert_eq!(second["result"]["cwd"], tree.as_str(), "{second}");
+    assert_eq!(hub.status()[1]["place"], "feat-thing");
+    let missing = hub.fails(&["worker", "start", "lee", "--spec", "sleep", "--worktree", "worker:w9"]);
+    assert!(
+        missing.contains("worker:w9") && missing.contains("no Worker w9"),
+        "{missing}"
+    );
+    let malformed = hub.fails(&["worker", "start", "lee", "--spec", "sleep", "--worktree", "worker:feat"]);
+    assert!(malformed.contains("needs a Worker id like w12"), "{malformed}");
+}
+
+#[test]
 fn attach_streams_the_screen_and_types_input() {
     let hub = Hub::new("attach");
     hub.ok(&["worker", "start", "lee", "--spec", "echo back"]);
@@ -240,19 +268,79 @@ fn attach_streams_the_screen_and_types_input() {
     assert!(hub.ok(&["worker", "read", "w1", "--lines", "3"]).contains("got: hello"));
 }
 
-#[test]
-fn a_daemon_crash_marks_workers_lost_and_they_resume() {
-    let hub = Hub::new("lost");
-    hub.ok(&["worker", "start", "lee", "--spec", "sleep"]);
-    let pid = Command::new("lsof")
-        .arg("-t")
-        .arg(hub.state.join("hubd.sock"))
-        .output()
-        .unwrap();
+/// Kills whatever process listens on `socket` in the test's state folder.
+fn kill_listener(socket: &Path) {
+    let pid = Command::new("lsof").arg("-t").arg(socket).output().unwrap();
     for pid in String::from_utf8_lossy(&pid.stdout).split_whitespace() {
         Command::new("kill").args(["-9", pid]).status().unwrap();
     }
     std::thread::sleep(Duration::from_millis(500));
+}
+
+#[test]
+fn a_daemon_crash_leaves_workers_running_and_the_next_daemon_takes_them_over() {
+    let hub = Hub::new("crash");
+    hub.ok(&["worker", "start", "lee", "--spec", "echo"]);
+    hub.ok(&["worker", "send", "w1", "before"]);
+    hub.eventually("w1 to echo", || {
+        hub.ok(&["worker", "read", "w1"]).contains("got: before")
+    });
+    kill_listener(&hub.state.join("hubd.sock"));
+
+    // The next command starts a new daemon, which adopts w1 with its screen.
+    assert_eq!(hub.status()[0]["state"], "running");
+    assert!(hub.ok(&["worker", "read", "w1"]).contains("got: before"));
+    hub.ok(&["worker", "send", "w1", "after"]);
+    hub.eventually("w1 to echo again", || {
+        hub.ok(&["worker", "read", "w1"]).contains("got: after")
+    });
+}
+
+#[test]
+fn an_agent_survives_a_daemon_crash_with_its_prompt_still_under_needs_you() {
+    let hub = Hub::new("agentcrash");
+    hub.ok(&["status"]);
+    let opened = hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "claude", "name": "prompt me" }),
+    );
+    let agent = opened["result"]["agent"].as_i64().unwrap();
+    let has_need = || {
+        snapshot(&hub)["needs"]
+            .as_array()
+            .is_some_and(|needs| !needs.is_empty())
+    };
+    hub.eventually("the prompt to reach Needs you", has_need);
+    kill_listener(&hub.state.join("hubd.sock"));
+
+    hub.ok(&["status"]);
+    hub.eventually("the adopted agent's prompt under Needs you", has_need);
+    let decided = hub.call("decide", serde_json::json!({ "agent": agent, "approve": true }));
+    assert_eq!(decided["ok"], true, "{decided}");
+    hub.eventually("the prompt to clear", || {
+        snapshot(&hub)["needs"].as_array().is_some_and(|needs| needs.is_empty())
+    });
+}
+
+#[test]
+fn a_shutdown_without_force_leaves_terminals_running() {
+    let hub = Hub::new("planned");
+    hub.ok(&["worker", "start", "lee", "--spec", "echo"]);
+    hub.ok(&["shutdown"]);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(hub.status()[0]["state"], "running");
+    hub.ok(&["worker", "send", "w1", "still here"]);
+    hub.eventually("w1 to echo", || {
+        hub.ok(&["worker", "read", "w1"]).contains("got: still here")
+    });
+}
+
+#[test]
+fn a_worker_whose_terminal_is_gone_is_lost_and_resumes() {
+    let hub = Hub::new("lost");
+    hub.ok(&["worker", "start", "lee", "--spec", "sleep"]);
+    kill_listener(&hub.state.join("hubd.sock"));
+    kill_listener(&hub.state.join("holder.sock"));
 
     let lost = hub.wait();
     assert!(lost.contains("lost from w1"), "{lost}");
@@ -261,6 +349,301 @@ fn a_daemon_crash_marks_workers_lost_and_they_resume() {
 
     assert!(hub.ok(&["worker", "resume", "w1"]).contains("Resumed w1"));
     hub.eventually("w1 to run again", || hub.status()[0]["state"] == "running");
+}
+
+#[test]
+fn a_settled_worker_takes_its_next_task_in_the_same_session() {
+    let hub = Hub::new("nexttask");
+    hub.ok(&["worker", "start", "lee", "--spec", "next please", "--keep"]);
+    assert!(hub.wait().contains("first Task done"));
+    assert!(hub
+        .ok(&["worker", "task", "w1", "--spec", "fix the review comments"])
+        .contains("Gave w1 its next Task"));
+    let done = hub.wait();
+    assert!(done.contains("next: fix the review comments"), "{done}");
+    assert_eq!(hub.status()[0]["state"], "done");
+
+    hub.ok(&["worker", "close", "w1"]);
+    hub.eventually("w1 to close", || {
+        hub.ok(&["worker", "list"]).contains("No open Workers.")
+    });
+    // Its terminal is gone, so its session resumes on the Task.
+    hub.ok(&["worker", "task", "w1", "--spec", "done with the CI fix"]);
+    assert!(hub.wait().contains("done (done) from w1"));
+    assert!(hub.ok(&["worker", "list"]).contains("w1"));
+}
+
+#[test]
+fn a_send_says_whether_the_worker_started() {
+    let hub = Hub::new("started");
+    hub.ok(&["worker", "start", "lee", "--spec", "turns"]);
+    hub.eventually("w1 at its input box", || {
+        hub.ok(&["worker", "read", "w1"]).contains("Ready.")
+    });
+    assert!(hub.ok(&["worker", "send", "w1", "go"]).contains("w1 started working."));
+
+    hub.ok(&["worker", "start", "lee", "--spec", "idle"]);
+    hub.eventually("w2 at its input box", || {
+        hub.ok(&["worker", "read", "w2"]).contains("Ready.")
+    });
+    assert!(hub
+        .ok(&["worker", "send", "w2", "go"])
+        .contains("w2 has not started working after 5 s"));
+}
+
+#[test]
+fn a_send_does_not_type_over_a_permission_prompt() {
+    let hub = Hub::new("overprompt");
+    hub.ok(&["worker", "start", "lee", "--spec", "prompt"]);
+    hub.eventually("the prompt", || {
+        hub.ok(&["worker", "read", "w1"]).contains("Do you want to proceed?")
+    });
+    assert!(hub.fails(&["worker", "send", "w1", "hi"]).contains("permission prompt"));
+    hub.ok(&["worker", "send", "w1", "denied it", "--force"]);
+    hub.eventually("the forced text to answer it", || {
+        hub.ok(&["worker", "read", "w1"]).contains("denied: denied it")
+    });
+}
+
+#[test]
+fn stats_count_workers_and_say_when_none_has_a_transcript() {
+    let hub = Hub::new("stats");
+    hub.ok(&["worker", "start", "lee", "--spec", "done"]);
+    assert!(hub
+        .ok(&["stats", "--days", "1"])
+        .starts_with("Last 1 days: 1 Workers, 0 with transcripts, 0 turns"));
+}
+
+#[test]
+fn stats_json_reports_orchestrators_beside_workers() {
+    let hub = Hub::new("statsorch");
+    hub.ok(&["status"]);
+    hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "orchestrator", "name": "Rerank" }),
+    );
+    hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "claude", "name": "plain" }),
+    );
+    let stats: serde_json::Value = serde_json::from_str(&hub.ok(&["stats", "--days", "1", "--json"])).unwrap();
+    // The Worker numbers keep their place; Orchestrators are an object beside them.
+    assert_eq!(stats["workers"], 0);
+    assert!(stats["profiles"].is_array());
+    let orchestrators = &stats["orchestrators"];
+    assert_eq!(
+        orchestrators["agents"], 1,
+        "a Normal session is not an Orchestrator: {stats}"
+    );
+    assert_eq!(
+        orchestrators["withTranscript"], 0,
+        "the fake agent writes no transcript"
+    );
+    assert_eq!(orchestrators["cold"]["requests"], 0);
+    assert!(orchestrators["toolResults"].is_array() && orchestrators["sessions"].is_array());
+    assert!(hub.ok(&["stats", "--days", "1"]).starts_with("Last 1 days: 0 Workers"));
+}
+
+#[test]
+fn only_a_question_ends_with_a_next_step() {
+    let hub = Hub::new("nextstep");
+    hub.ok(&["worker", "start", "lee", "--spec", "done"]);
+    let done = hub.wait();
+    assert!(done.contains("done (done) from w1") && !done.contains("->"), "{done}");
+    assert!(
+        done.contains("(w1 is closed)"),
+        "a branchless Worker closes when its report is delivered: {done}"
+    );
+    hub.ok(&["worker", "close", "w1"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "ask"]);
+    let question = hub.wait();
+    assert!(question.contains("question from w2"), "{question}");
+    assert!(question.contains("-> echoctl reply "), "{question}");
+}
+
+#[test]
+fn a_failed_verification_sends_the_writer_back_once_and_the_orchestrator_hears_only_the_pass() {
+    let hub = Hub::new("verify");
+    let started = hub.ok(&["worker", "start", "lee", "--spec", "next FAILME", "--verify"]);
+    assert!(started.starts_with("Started w1"), "{started}");
+    // One message, after w2 failed it, w1 took the retry, and w3 passed it.
+    let told = hub.wait();
+    assert!(told.contains("done (done) from w1"), "{told}");
+    assert!(told.contains("Verified by w3: pass."), "{told}");
+    assert!(!told.contains("from w2") && !told.contains("from w3"), "{told}");
+    assert!(
+        told.contains("next: w2 (sasuke) verified your change and it failed"),
+        "{told}"
+    );
+    hub.eventually("the verifiers to close", || {
+        let open = hub.ok(&["worker", "list"]);
+        !open.contains("w2") && !open.contains("w3")
+    });
+}
+
+#[test]
+fn a_writer_that_fails_verification_again_goes_to_the_orchestrator_with_the_findings() {
+    let hub = Hub::new("verifyfail");
+    hub.ok(&[
+        "worker",
+        "start",
+        "lee",
+        "--spec",
+        "next ALWAYSFAIL",
+        "--verify",
+        "--keep",
+    ]);
+    let told = hub.wait();
+    assert!(told.contains("done (done) from w1"), "{told}");
+    assert!(told.contains("failed again after 1 retry"), "{told}");
+    assert!(
+        told.contains("Verifier's report:\nVerdict: fail\nP1 foo.rs:1 broken"),
+        "{told}"
+    );
+}
+
+#[test]
+fn a_verifier_without_a_verdict_leaves_the_judging_to_the_orchestrator() {
+    let hub = Hub::new("noverdict");
+    hub.ok(&["worker", "start", "lee", "--spec", "done NOVERDICT", "--verify"]);
+    let told = hub.wait();
+    assert!(told.contains("without a `Verdict:` line"), "{told}");
+    assert!(told.contains("looks fine to me"), "{told}");
+}
+
+#[test]
+fn verifying_is_left_out_when_the_humans_settings_skip_the_review() {
+    let hub = Hub::new("noreview");
+    hub.ok(&["status"]);
+    hub.call("settings.set", serde_json::json!({ "settings": { "review": false } }));
+    hub.ok(&["worker", "start", "lee", "--spec", "done", "--verify"]);
+    let told = hub.wait();
+    assert!(
+        told.contains("done (done) from w1") && !told.contains("Verified"),
+        "{told}"
+    );
+    assert!(
+        hub.fails(&["worker", "read", "w2"]).contains("w2"),
+        "no verifier was started"
+    );
+}
+
+#[test]
+fn a_worker_without_a_branch_closes_when_its_report_arrives_unless_kept() {
+    let hub = Hub::new("closeondone");
+    hub.ok(&["worker", "start", "lee", "--spec", "done"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "done", "--keep"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "done", "--worktree", "new:feat/own"]);
+    let told = hub.wait();
+    assert_eq!(told.matches("done (done) from").count(), 3, "{told}");
+    hub.eventually("w1 to close", || !hub.ok(&["worker", "list"]).contains("w1"));
+    let open = hub.ok(&["worker", "list"]);
+    assert!(
+        open.contains("w2") && open.contains("w3"),
+        "kept, and on its own branch: {open}"
+    );
+}
+
+#[test]
+fn a_status_never_wakes_the_orchestrator_but_comes_with_the_next_message() {
+    let hub = Hub::new("quietstatus");
+    hub.ok(&["worker", "start", "lee", "--spec", "status"]);
+    let quiet = hub.ok(&["wait", "--timeout", "2"]);
+    assert!(quiet.contains("No messages in 2s"), "{quiet}");
+    hub.ok(&["worker", "start", "lee", "--spec", "done"]);
+    let told = hub.wait();
+    assert!(told.contains("done (done) from w2"), "{told}");
+    assert!(
+        told.contains("status from w1") && told.contains("41 of 44 tests passing"),
+        "{told}"
+    );
+}
+
+#[test]
+fn a_task_can_carry_another_workers_final_report() {
+    let hub = Hub::new("fromreport");
+    hub.ok(&["worker", "start", "lee", "--spec", "done", "--keep"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "next please", "--keep"]);
+    hub.wait();
+    let given = hub.ok(&["worker", "task", "w2", "--from-report", "w1"]);
+    assert!(given.contains("Gave w2 its next Task"), "{given}");
+    assert!(hub
+        .fails(&["worker", "task", "w2", "--from-report", "w9"])
+        .contains("no Worker w9"));
+    hub.ok(&["worker", "start", "lee", "--spec", "wait forever"]);
+    assert!(hub
+        .fails(&["worker", "task", "w2", "--from-report", "w3"])
+        .contains("w3 has no Final Report yet"));
+    assert!(hub.fails(&["worker", "task", "w2"]).contains("give --spec"));
+}
+
+#[test]
+fn a_renewed_orchestrator_starts_a_new_session_on_a_message_to_read_its_brief() {
+    let hub = Hub::new("renew");
+    hub.ok(&["status"]);
+    let opened = hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "orchestrator" }),
+    );
+    let agent = opened["result"]["agent"].as_i64().unwrap();
+    let session = || hub.call("sessions.list", serde_json::json!({}))["result"]["sessions"][0]["session_id"].clone();
+    let before = session();
+    let renewed = hub.call("agent.renew", serde_json::json!({ "agent": agent }));
+    assert_eq!(renewed["result"]["started"], true, "{renewed}");
+    assert_ne!(session(), before, "a new Claude session");
+    let mut stream = UnixStream::connect(hub.state.join("hubd.sock")).unwrap();
+    let attach = serde_json::json!({ "method": "attach", "params": { "agent": agent, "rows": 30, "cols": 100 } });
+    stream.write_all(format!("{attach}\n").as_bytes()).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+    read_until(&mut stream, &mut Vec::new(), "renewed with: Your session was renewed");
+    let worker = hub.call("agent.renew", serde_json::json!({ "agent": 999 }));
+    assert!(worker["error"].is_string(), "{worker}");
+    let setting = hub.call(
+        "settings.set",
+        serde_json::json!({ "settings": { "orchestratorRotateAt": 150000 } }),
+    );
+    assert_eq!(setting["result"]["orchestratorRotateAt"], 150000, "{setting}");
+}
+
+#[test]
+fn a_brief_tells_a_fresh_session_what_is_open() {
+    let hub = Hub::new("brief");
+    hub.ok(&["worker", "start", "lee", "--spec", "wait forever"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "done", "--keep"]);
+    hub.wait();
+    let brief = hub.ok(&["brief"]);
+    assert!(
+        brief.contains("Running (or waiting):\n  w1 lee running in place"),
+        "{brief}"
+    );
+    assert!(
+        brief.contains("w2 lee done in place") && brief.contains("report: finished"),
+        "{brief}"
+    );
+    assert!(brief.contains("Open questions:\n  none"), "{brief}");
+}
+
+#[test]
+fn a_running_worker_takes_no_next_task() {
+    let hub = Hub::new("busytask");
+    hub.ok(&["worker", "start", "lee", "--spec", "wait forever"]);
+    assert!(hub
+        .fails(&["worker", "task", "w1", "--spec", "more"])
+        .contains("still on its Task"));
+}
+
+#[test]
+fn a_review_sent_to_a_settled_worker_lets_it_report_again() {
+    let hub = Hub::new("reviewdone");
+    hub.ok(&["worker", "start", "lee", "--spec", "next please", "--keep"]);
+    assert!(hub.wait().contains("first Task done"));
+    hub.call(
+        "worker.review",
+        serde_json::json!({ "id": 1, "to": "worker", "body": "README.md:2 say why" }),
+    );
+    let messages = hub.wait();
+    assert!(messages.contains("done (done) from w1"), "{messages}");
+    assert!(messages.contains("next: "), "{messages}");
 }
 
 #[test]
@@ -481,6 +864,37 @@ fn a_cli_or_model_that_cannot_run_stops_a_worker_before_it_starts() {
         "anthropic/claude-opus-5-5",
     ]);
     assert!(hub.wait().contains("done (done) from w1"));
+}
+
+#[test]
+fn the_orchestrators_own_model_and_effort_are_settings() {
+    let hub = Hub::new("orchsettings");
+    hub.ok(&["sessions"]);
+    let set = hub.call(
+        "settings.set",
+        serde_json::json!({ "settings": { "orchestratorModel": "anthropic/claude-sonnet-5-5", "orchestratorEffort": "medium" } }),
+    );
+    assert_eq!(set["result"]["orchestratorEffort"], "medium", "{set}");
+    let got = hub.call("settings.get", serde_json::json!({}));
+    assert_eq!(
+        got["result"]["orchestratorModel"], "anthropic/claude-sonnet-5-5",
+        "{got}"
+    );
+    let refused = hub.call(
+        "settings.set",
+        serde_json::json!({ "settings": { "orchestratorEffort": "extreme" } }),
+    );
+    assert!(
+        refused["error"].as_str().unwrap().contains("one of low, medium, high"),
+        "{refused}"
+    );
+    // An empty string puts the built-in default back.
+    let cleared = hub.call(
+        "settings.set",
+        serde_json::json!({ "settings": { "orchestratorModel": "", "orchestratorEffort": "" } }),
+    );
+    assert!(cleared["result"]["orchestratorModel"].is_null(), "{cleared}");
+    assert!(cleared["result"]["orchestratorEffort"].is_null(), "{cleared}");
 }
 
 #[test]
@@ -879,6 +1293,14 @@ fn approving_a_prompt_presses_it_and_tells_the_orchestrator() {
     hub.ok(&["worker", "start", "lee", "--spec", "prompt me"]);
     let blocker = hub.wait();
     assert!(blocker.contains("blocker from w1"), "{blocker}");
+    assert!(
+        blocker.contains("The prompt:\nBash command\nrm -rf junk\nDo you want to proceed?"),
+        "{blocker}"
+    );
+    assert!(
+        !blocker.contains("Worker screen") && !blocker.contains("->"),
+        "{blocker}"
+    );
     let mut events = UnixStream::connect(hub.state.join("hubd.sock")).unwrap();
     let request = serde_json::json!({ "method": "events", "params": { "repo": hub.repo_key() } });
     events.write_all(format!("{request}\n").as_bytes()).unwrap();
@@ -1785,4 +2207,187 @@ fn ui_requests_need_echo_open_and_reach_its_snapshot() {
     assert_eq!(seen[0]["root"], hub.repo_key());
     assert_eq!(seen[1]["action"], "notify");
     assert_eq!(seen[1]["text"], "tests pass");
+}
+
+#[test]
+fn an_orchestrators_chat_reads_its_transcript_then_only_new_lines() {
+    let hub = Hub::new("chat");
+    let claude = hub.state.join("claude");
+    let config = claude.display().to_string();
+    // The first call starts the daemon, which reads transcripts under this folder.
+    hub.run_with(&["status"], &[("CLAUDE_CONFIG_DIR", &config)]);
+    let opened = hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "orchestrator", "name": "chat" }),
+    );
+    let agent = opened["result"]["agent"].as_i64().unwrap();
+    let read = |params: serde_json::Value| hub.call("chat.read", params)["result"].clone();
+    let empty = read(serde_json::json!({ "agent": agent }));
+    assert_eq!(
+        (empty["supported"].as_bool(), empty["items"].as_array().map(Vec::len)),
+        (Some(true), Some(0))
+    );
+    let session = empty["session"].as_str().unwrap().to_string();
+    let file = claude.join("projects").join("repo").join(format!("{session}.jsonl"));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let line = |v: serde_json::Value| format!("{v}\n");
+    std::fs::write(
+        &file,
+        line(serde_json::json!({ "type": "user", "uuid": "u1", "message": { "content": "build it" } }))
+            + &line(
+                serde_json::json!({ "type": "assistant", "uuid": "a1", "message": { "content": [
+                { "type": "text", "text": "Built." } ] } }),
+            ),
+    )
+    .unwrap();
+    let first = read(serde_json::json!({ "agent": agent }));
+    let texts = |r: &serde_json::Value| -> Vec<String> {
+        r["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["text"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(texts(&first), ["build it", "Built."]);
+    let mut more = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+    std::io::Write::write_all(
+        &mut more,
+        line(serde_json::json!({ "type": "user", "uuid": "u2", "message": { "content": "thanks" } })).as_bytes(),
+    )
+    .unwrap();
+    let next = read(serde_json::json!({ "agent": agent, "session": session, "after": first["end"] }));
+    assert_eq!(texts(&next), ["thanks"]);
+}
+
+#[test]
+fn a_chat_message_is_typed_at_the_orchestrator_and_its_turn_shows_as_working() {
+    let hub = Hub::new("chatsend");
+    let claude = hub.state.join("claude");
+    let chat = hub.state.join("chat.jsonl");
+    let (config, file) = (claude.display().to_string(), chat.display().to_string());
+    hub.run_with(&["status"], &[("CLAUDE_CONFIG_DIR", &config), ("HUB_FAKE_CHAT", &file)]);
+    let opened = hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "orchestrator", "name": "chat" }),
+    );
+    let agent = opened["result"]["agent"].as_i64().unwrap();
+    let read = || hub.call("chat.read", serde_json::json!({ "agent": agent }))["result"].clone();
+    // Its transcript is the file the fake agent writes.
+    let session = read()["session"].as_str().unwrap().to_string();
+    std::fs::create_dir_all(claude.join("projects/repo")).unwrap();
+    std::fs::write(&chat, "").unwrap();
+    std::os::unix::fs::symlink(&chat, claude.join(format!("projects/repo/{session}.jsonl"))).unwrap();
+    hub.eventually("its input box", || read()["state"]["look"] == "idle");
+    let sent = hub.call("chat.send", serde_json::json!({ "agent": agent, "text": "hello" }));
+    assert_eq!(sent["ok"], true, "{sent}");
+    hub.eventually("the Working row", || {
+        let state = read()["state"].clone();
+        state["look"] == "working" && state["step"] == "Bash(sleep 2)"
+    });
+    hub.eventually("the reply", || {
+        let items = read()["items"].clone();
+        items
+            .as_array()
+            .is_some_and(|i| i.len() == 2 && i[1]["text"] == "got: hello")
+    });
+}
+
+#[test]
+fn a_chat_message_is_refused_while_the_orchestrator_shows_a_prompt() {
+    let hub = Hub::new("chatprompt");
+    hub.ok(&["status"]);
+    let opened = hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "orchestrator", "name": "p", "request": "prompt me" }),
+    );
+    let agent = opened["result"]["agent"].as_i64().unwrap();
+    hub.eventually("the prompt", || {
+        hub.call("chat.read", serde_json::json!({ "agent": agent }))["result"]["state"]["look"] == "prompt"
+    });
+    let sent = hub.call("chat.send", serde_json::json!({ "agent": agent, "text": "yes" }));
+    assert_eq!(sent["ok"], false);
+    assert!(sent["error"].as_str().unwrap().contains("permission prompt"), "{sent}");
+}
+
+#[test]
+fn a_workers_chat_says_who_typed_each_message() {
+    let hub = Hub::new("chatworker");
+    let claude = hub.state.join("claude");
+    let config = claude.display().to_string();
+    hub.run_with(&["status"], &[("CLAUDE_CONFIG_DIR", &config)]);
+    let started: serde_json::Value =
+        serde_json::from_str(&hub.ok(&["worker", "start", "lee", "--spec", "idle for now", "--json"])).unwrap();
+    let id: i64 = started["id"].as_str().unwrap()[1..].parse().unwrap();
+    let read = || hub.call("chat.read", serde_json::json!({ "worker": id }))["result"].clone();
+    hub.eventually("its input box", || read()["state"]["look"] == "idle");
+    let sent = hub.call("chat.send", serde_json::json!({ "worker": id, "text": "please hurry" }));
+    assert_eq!(sent["ok"], true, "{sent}");
+    let session = read()["session"].as_str().unwrap().to_string();
+    let file = claude.join("projects/repo").join(format!("{session}.jsonl"));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let user = |text: &str| serde_json::json!({ "type": "user", "message": { "content": text } }).to_string() + "\n";
+    std::fs::write(
+        &file,
+        user("idle for now") + &user("please hurry") + &user("typed in the terminal"),
+    )
+    .unwrap();
+    let items = read()["items"].clone();
+    let from: Vec<&str> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["from"].as_str().unwrap_or("-"))
+        .collect();
+    assert_eq!(from, ["orchestrator", "human", "-"], "{items}");
+}
+
+#[test]
+fn a_renewed_orchestrators_chat_scrolls_back_into_its_earlier_session() {
+    let hub = Hub::new("chatrenew");
+    let claude = hub.state.join("claude");
+    let config = claude.display().to_string();
+    hub.run_with(&["status"], &[("CLAUDE_CONFIG_DIR", &config)]);
+    let opened = hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "orchestrator", "name": "renew" }),
+    );
+    let agent = opened["result"]["agent"].as_i64().unwrap();
+    let read = |params: serde_json::Value| hub.call("chat.read", params)["result"].clone();
+    let dir = claude.join("projects/repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    let say = |text: &str| serde_json::json!({ "type": "user", "message": { "content": text } }).to_string() + "\n";
+    let first = read(serde_json::json!({ "agent": agent }))["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    std::fs::write(dir.join(format!("{first}.jsonl")), say("old one") + &say("old two")).unwrap();
+    let renewed = hub.call("agent.renew", serde_json::json!({ "agent": agent }));
+    assert_eq!(renewed["ok"], true, "{renewed}");
+    let now = read(serde_json::json!({ "agent": agent }));
+    let second = now["session"].as_str().unwrap().to_string();
+    assert_ne!(first, second);
+    std::fs::write(dir.join(format!("{second}.jsonl")), say("new one")).unwrap();
+    let now = read(serde_json::json!({ "agent": agent }));
+    let texts = |r: &serde_json::Value| -> Vec<String> {
+        r["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["text"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        (texts(&now), now["more"].as_bool()),
+        (vec!["new one".to_string()], Some(true))
+    );
+    let older = read(serde_json::json!({ "agent": agent, "before": now["start"], "page_session": second }));
+    assert_eq!(
+        texts(&older),
+        ["old one", "old two", "Session renewed, context cleared"]
+    );
+    assert_eq!(
+        (older["page_session"].as_str(), older["more"].as_bool()),
+        (Some(first.as_str()), Some(false))
+    );
 }

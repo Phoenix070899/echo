@@ -1,9 +1,12 @@
 //! `echoctl`: the Echo CLI. With no command it starts the Orchestrator for the repo here.
 
 mod attach;
+mod brief;
+mod chat;
 mod cli;
 mod daemon;
 mod db;
+mod holder;
 mod launch;
 mod lessons;
 mod paths;
@@ -15,6 +18,7 @@ mod remote;
 mod repo;
 mod screen;
 mod settings;
+mod stats;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -41,9 +45,9 @@ struct Cli {
 enum Command {
     /// Run the Hub Daemon in the foreground (any other command starts it when needed).
     Daemon,
-    /// Stop the Hub Daemon.
+    /// Stop the Hub Daemon; agents, Workers, and shells keep running for the next one.
     Shutdown {
-        /// Also kill live Workers.
+        /// Also kill every agent, Worker, and shell.
         #[arg(long)]
         force: bool,
     },
@@ -55,6 +59,14 @@ enum Command {
         json: bool,
         #[arg(long)]
         repo: Option<PathBuf>,
+    },
+    /// What Workers and Orchestrators spent their tokens on, from their transcripts.
+    Stats {
+        /// Workers started, and Orchestrator requests sent, in the last N days.
+        #[arg(long, default_value_t = 7)]
+        days: i64,
+        #[arg(long)]
+        json: bool,
     },
     /// Manage Workers (Orchestrator).
     #[command(subcommand)]
@@ -75,6 +87,11 @@ enum Command {
         message: String,
         /// The answer; "-" reads it from stdin.
         text: String,
+    },
+    /// What a fresh Orchestrator session needs: open Workers, kept branches, open questions (Orchestrator).
+    Brief {
+        #[arg(long)]
+        repo: Option<PathBuf>,
     },
     /// Unanswered questions in this repo (Orchestrator).
     Inbox {
@@ -146,6 +163,9 @@ enum Command {
     /// a login shell, in place of this process.
     #[command(hide = true)]
     Mux,
+    /// The terminal holder: owns every terminal so it outlives the daemon (started by the daemon).
+    #[command(hide = true)]
+    Holder,
 }
 
 #[derive(Subcommand)]
@@ -215,7 +235,7 @@ enum WorkerCommand {
         spec: Option<String>,
         #[arg(long)]
         spec_file: Option<PathBuf>,
-        /// current, new:<type>/<task>, or path:<abs worktree path>.
+        /// current, new:<type>/<task>, path:<abs worktree path>, or worker:<w id> (where that Worker works).
         #[arg(long, default_value = "current")]
         worktree: String,
         #[arg(long)]
@@ -230,6 +250,13 @@ enum WorkerCommand {
         /// The model, as provider/model (anthropic/claude-opus-5-5), over the Profile's and the settings'.
         #[arg(long)]
         model: Option<String>,
+        /// Leave it open after its Final Report, though it has no branch of its own (else it closes).
+        #[arg(long)]
+        keep: bool,
+        /// Have the daemon verify its Final Report with a sasuke, send it back once on a fail, and
+        /// tell you only the outcome.
+        #[arg(long)]
+        verify: bool,
     },
     /// Workers not yet closed.
     List {
@@ -251,6 +278,9 @@ enum WorkerCommand {
         text: String,
         #[arg(long)]
         no_enter: bool,
+        /// Type even over a permission prompt, which the text then answers.
+        #[arg(long)]
+        force: bool,
     },
     /// Press keys in a Worker's terminal: enter, esc, up, down, left, right, tab, space, ctrl-c, or one character.
     Key {
@@ -262,6 +292,17 @@ enum WorkerCommand {
     Close { worker: String },
     /// Restart a lost, exited, or ended Worker on its Claude session.
     Resume { worker: String },
+    /// Give a settled Worker its next Task, in the same session, worktree, and branch.
+    Task {
+        worker: String,
+        #[arg(long, conflicts_with = "spec_file")]
+        spec: Option<String>,
+        #[arg(long)]
+        spec_file: Option<PathBuf>,
+        /// Append another Worker's Final Report to the Task, verbatim; the spec may then be left out.
+        #[arg(long)]
+        from_report: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -488,6 +529,7 @@ fn print_remote(status: &Value) {
 fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Command::Daemon => daemon::run()?,
+        Command::Holder => holder::run()?,
         Command::Sessions => {
             let result = proto::call("sessions.list", json!({}))?;
             for session in result["sessions"].as_array().into_iter().flatten() {
@@ -516,8 +558,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 }
             }
         }
+        Command::Stats { days, json } => {
+            let r = proto::call("stats", json!({ "days": days }))?;
+            if json {
+                return print_json(&r).map(|_| ExitCode::SUCCESS);
+            }
+            print_stats(days, &r);
+        }
         Command::Shutdown { force } => {
             proto::call("shutdown", json!({ "force": force }))?;
+            if force {
+                holder::quit();
+            }
         }
         Command::Remote { action, port } => {
             let status = match action {
@@ -565,6 +617,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Reply { message, text } => {
             proto::call("reply", json!({ "id": parse_id(&message)?, "body": text_arg(&text)? }))?;
+        }
+        Command::Brief { repo } => {
+            let repo = repo_arg(repo)?;
+            let list = proto::call("worker.list", json!({ "repo": repo, "agent": agent_env() }))?;
+            let inbox = proto::call("inbox", json!({ "repo": repo }))?;
+            let workers = list["workers"].as_array().cloned().unwrap_or_default();
+            let questions = inbox["open_questions"].as_array().cloned().unwrap_or_default();
+            print!("{}", brief::brief(&workers, &questions));
         }
         Command::Inbox { repo } => {
             let result = proto::call("inbox", json!({ "repo": repo_arg(repo)? }))?;
@@ -676,15 +736,10 @@ fn mux_env() -> Option<std::collections::BTreeMap<String, String>> {
 fn print_message(m: &Value) {
     let id = &m["id"];
     let worker = m["worker"].as_str().unwrap_or("");
+    // orchestrator.md says what to do with each kind; only the reply command carries something it
+    // cannot, the message's id.
     let next = match m["kind"].as_str().unwrap_or("") {
-        "question" => format!("Answer: echoctl reply {id} \"<answer>\""),
-        "done" => format!("Settled. Validate the report, then: echoctl worker close {worker}"),
-        "blocker" => format!(
-            "Show the human the exact prompt. On their yes: echoctl worker key {worker} enter. On no: echoctl worker key {worker} esc, then echoctl worker send {worker} \"<what to do instead>\""
-        ),
-        "exited" => format!("No Final Report. Check: echoctl worker read {worker}; then start the Task again or report it"),
-        "lost" => format!("Resume: echoctl worker resume {worker}"),
-        "human" => "The human acted in the Hub App. Reflect it; do not redo it".to_string(),
+        "question" => format!("echoctl reply {id} \"<answer>\""),
         _ => String::new(),
     };
     let kind = match m["kind"].as_str().unwrap_or("") {
@@ -697,6 +752,9 @@ fn print_message(m: &Value) {
         m["title"].as_str().unwrap_or(""),
         m["body"].as_str().unwrap_or("").trim_end()
     );
+    if m["closed"].as_bool() == Some(true) {
+        println!("({worker} is closed)");
+    }
     if !next.is_empty() {
         println!("-> {next}");
     }
@@ -715,18 +773,14 @@ fn worker(command: WorkerCommand) -> Result<ExitCode> {
             json,
             cli,
             model,
+            keep,
+            verify,
         } => {
-            let spec = match (spec, spec_file) {
-                (Some(spec), _) => spec,
-                (None, Some(file)) => {
-                    std::fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?
-                }
-                (None, None) => bail!("give --spec or --spec-file"),
-            };
+            let spec = spec_arg(spec, spec_file)?;
             let result = proto::call(
                 "worker.start",
                 json!({ "repo": repo_arg(repo)?, "profile": profile, "spec": spec, "worktree": worktree, "title": title,
-                        "agent": agent_env(), "cli": cli, "model": model }),
+                        "agent": agent_env(), "cli": cli, "model": model, "keep": keep, "verify": verify }),
             )?;
             if json {
                 print_json(&result)?;
@@ -783,11 +837,17 @@ fn worker(command: WorkerCommand) -> Result<ExitCode> {
             let result = proto::call("worker.read", json!({ "id": parse_id(&worker)?, "lines": lines }))?;
             println!("{}", result["screen"].as_str().unwrap_or("").trim_end());
         }
-        WorkerCommand::Send { worker, text, no_enter } => {
-            proto::call(
+        WorkerCommand::Send {
+            worker,
+            text,
+            no_enter,
+            force,
+        } => {
+            let result = proto::call(
                 "worker.send",
-                json!({ "id": parse_id(&worker)?, "text": text, "enter": !no_enter }),
+                json!({ "id": parse_id(&worker)?, "text": text, "enter": !no_enter, "force": force }),
             )?;
+            print_started(&worker, &result["started"]);
         }
         WorkerCommand::Key { worker, keys } => {
             for key in &keys {
@@ -802,8 +862,198 @@ fn worker(command: WorkerCommand) -> Result<ExitCode> {
             let result = proto::call("worker.resume", json!({ "id": parse_id(&worker)? }))?;
             println!("Resumed {}", result["id"].as_str().unwrap_or(""));
         }
+        WorkerCommand::Task {
+            worker,
+            spec,
+            spec_file,
+            from_report,
+        } => {
+            let spec = match (&spec, &spec_file, &from_report) {
+                (None, None, Some(_)) => String::new(),
+                _ => spec_arg(spec, spec_file)?,
+            };
+            let mut params = json!({ "id": parse_id(&worker)?, "spec": spec });
+            if let Some(from) = from_report {
+                params["from_report"] = json!(parse_id(&from)?);
+            }
+            let result = proto::call("worker.task", params)?;
+            println!("Gave {} its next Task", result["id"].as_str().unwrap_or(""));
+            print_started(&worker, &result["started"]);
+        }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn print_stats(days: i64, r: &Value) {
+    let n = |v: &Value| v.as_f64().unwrap_or(0.0);
+    println!(
+        "Last {days} days: {} Workers, {} with transcripts, {} turns",
+        n(&r["workers"]),
+        n(&r["withTranscript"]),
+        n(&r["turns"])
+    );
+    let (workers, orchestrators) = (n(&r["dollars"]), n(&r["orchestrators"]["dollars"]));
+    println!(
+        "Dollars           ${:.0} at list prices: Workers ${workers:.0} ({:.0}%), Orchestrators ${orchestrators:.0}",
+        workers + orchestrators,
+        workers / (workers + orchestrators).max(1.0) * 100.0
+    );
+    if n(&r["withTranscript"]) > 0.0 {
+        print_worker_stats(r);
+    }
+    print_orchestrator_stats(days, &r["orchestrators"]);
+}
+
+fn print_worker_stats(r: &Value) {
+    let n = |v: &Value| v.as_f64().unwrap_or(0.0);
+    let k = |v: &Value| format!("{}k", n(v) as u64 / 1000);
+    let share = &r["share"];
+    println!(
+        "Start context     median {} (re-read on every turn)",
+        k(&r["startContext"])
+    );
+    println!("Context per turn  average {}", k(&r["contextPerTurn"]));
+    println!(
+        "Token cost        cache reads {:.0}%, cache writes {:.0}%, output {:.0}%; cold starts {:.0}%",
+        n(&share["cacheReads"]),
+        n(&share["cacheWrites"]),
+        n(&share["output"]),
+        n(&share["coldStarts"])
+    );
+    let per = &r["perWorker"];
+    println!(
+        "Per Worker        {} Reads, {} cat/head/sed, {} searches; {:.0}% of Reads repeat a file",
+        n(&per["reads"]),
+        n(&per["shellReads"]),
+        n(&per["searches"]),
+        n(&r["repeatReads"])
+    );
+    let follow_ups = &r["followUps"];
+    println!(
+        "Follow-ups        {} typed in after a Final Report, median context carried in {}; {} compactions",
+        n(&follow_ups["count"]),
+        k(&follow_ups["carriedContext"]),
+        n(&r["compactions"])
+    );
+    println!(
+        "\n{:<10}{:>8}{:>14}{:>15}{:>14}{:>6}{:>9}",
+        "profile", "Workers", "turns/Worker", "start context", "context/turn", "cost", "dollars"
+    );
+    for p in r["profiles"].as_array().into_iter().flatten() {
+        println!(
+            "{:<10}{:>8}{:>14}{:>15}{:>14}{:>5.0}%{:>9}",
+            p["profile"].as_str().unwrap_or(""),
+            n(&p["workers"]),
+            n(&p["turnsPerWorker"]),
+            k(&p["startContext"]),
+            k(&p["contextPerTurn"]),
+            n(&p["share"]),
+            format!("${}", n(&p["dollars"]))
+        );
+    }
+}
+
+fn print_orchestrator_stats(days: i64, o: &Value) {
+    let n = |v: &Value| v.as_f64().unwrap_or(0.0);
+    let k = |v: &Value| format!("{}k", n(v) as u64 / 1000);
+    let kb = |v: &Value| format!("{:.0} kB", n(v) / 1000.0);
+    if n(&o["withTranscript"]) == 0.0 {
+        return;
+    }
+    println!(
+        "\nOrchestrators, last {days} days: {} with transcripts, {} requests, cache write lifetime {}",
+        n(&o["withTranscript"]),
+        n(&o["requests"]),
+        o["cacheWrite"].as_str().unwrap_or("none")
+    );
+    let (context, share, cold) = (&o["context"], &o["share"], &o["cold"]);
+    println!(
+        "Context           first {}, median {}, last {} per request",
+        k(&context["first"]),
+        k(&context["median"]),
+        k(&context["last"])
+    );
+    println!(
+        "Token cost        cache reads {:.0}%, cache writes {:.0}%, output {:.0}%; cold requests {:.0}%",
+        n(&share["cacheReads"]),
+        n(&share["cacheWrites"]),
+        n(&share["output"]),
+        n(&share["coldRequests"])
+    );
+    let gaps = &cold["gaps"];
+    println!(
+        "Cold requests     {} ({:.0}% of requests): after a gap under 5 min {}, 5 min to 1 h {}, over 1 h {}; {} right after an empty wait",
+        n(&cold["requests"]),
+        n(&cold["ofRequests"]),
+        n(&gaps["under5m"]),
+        n(&gaps["from5mTo1h"]),
+        n(&gaps["over1h"]),
+        n(&cold["afterEmptyWait"])
+    );
+    println!(
+        "\n{:<16}{:>9}{:>6}{:>8}{:>7}",
+        "woken by", "requests", "cold", "cost", ""
+    );
+    for w in o["wakes"].as_array().into_iter().flatten().take(8) {
+        println!(
+            "{:<16}{:>9}{:>6}{:>7.0}%",
+            w["after"].as_str().unwrap_or(""),
+            n(&w["requests"]),
+            n(&w["cold"]),
+            n(&w["share"])
+        );
+    }
+    println!("\n{:<20}{:>7}{:>10}", "tool result", "calls", "size");
+    for t in o["toolResults"].as_array().into_iter().flatten().take(8) {
+        println!(
+            "{:<20}{:>7}{:>10}",
+            t["command"].as_str().unwrap_or(""),
+            n(&t["calls"]),
+            kb(&t["bytes"])
+        );
+    }
+    println!(
+        "\n{:<6}{:<24}{:>9}{:>24}{:>6}{:>10}{:>9}{:>7}",
+        "agent", "name", "requests", "context first/med/last", "cold", "cold cost", "dollars", "cache"
+    );
+    for s in o["sessions"].as_array().into_iter().flatten() {
+        let c = &s["context"];
+        println!(
+            "{:<6}{:<24}{:>9}{:>24}{:>6}{:>9.0}%{:>9}{:>7}",
+            s["agent"].as_str().unwrap_or(""),
+            s["name"]
+                .as_str()
+                .unwrap_or("(unnamed)")
+                .chars()
+                .take(22)
+                .collect::<String>(),
+            n(&s["requests"]),
+            format!("{}/{}/{}", k(&c["first"]), k(&c["median"]), k(&c["last"])),
+            n(&s["cold"]),
+            n(&s["coldShare"]),
+            format!("${}", n(&s["dollars"])),
+            s["cacheWrite"].as_str().unwrap_or("")
+        );
+    }
+}
+
+/// What a Worker did with typed text: began a turn, or not yet, which needs a look.
+fn print_started(worker: &str, started: &Value) {
+    match started.as_bool() {
+        Some(true) => println!("{worker} started working."),
+        Some(false) => {
+            println!("{worker} has not started working after 5 s. Read its screen: echoctl worker read {worker}")
+        }
+        None => {}
+    }
+}
+
+fn spec_arg(spec: Option<String>, spec_file: Option<PathBuf>) -> Result<String> {
+    match (spec, spec_file) {
+        (Some(spec), _) => Ok(spec),
+        (None, Some(file)) => std::fs::read_to_string(&file).with_context(|| format!("reading {}", file.display())),
+        (None, None) => bail!("give --spec or --spec-file"),
+    }
 }
 
 /// The Notification hook must never break the Worker: it reports what it can and exits 0.

@@ -15,8 +15,10 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
+use crate::chat;
 use crate::cli;
 use crate::db::{self, kind, state, Worker};
+use crate::holder;
 use crate::launch;
 use crate::lessons;
 use crate::paths;
@@ -27,6 +29,7 @@ use crate::remote::{self, Remote};
 use crate::repo;
 use crate::screen::{self, Look};
 use crate::settings;
+use crate::stats;
 
 /// How long a turn may take to start before `worker.start` gives up on it.
 const START_TIMEOUT: Duration = Duration::from_secs(90);
@@ -41,6 +44,16 @@ const KEEP_REPORTS_SECONDS: i64 = 5 * 60;
 /// A blocked or lost Worker still needs the human, so Echo keeps it this long unless dismissed.
 const KEEP_NEEDS_SECONDS: i64 = 7 * 24 * 60 * 60;
 const SCREEN_LINES: usize = 25;
+/// How long `wait` holds a message that woke it, for others to arrive with it.
+const COALESCE: Duration = Duration::from_secs(5);
+/// How many times a failed verification sends a writer back to fix its change.
+const MAX_RETRIES: i64 = 1;
+/// An Orchestrator is renewed only after it sat unchanged at its input box this long, and only
+/// once its session has made this many requests (a new one is never renewed at once).
+const RENEW_QUIET: Duration = Duration::from_secs(120);
+const MIN_RENEW_REQUESTS: usize = 20;
+/// How often a quiet Orchestrator's transcript is measured.
+const RENEW_CHECK: Duration = Duration::from_secs(600);
 
 pub struct Hub {
     db: Mutex<Connection>,
@@ -311,6 +324,90 @@ impl Hub {
         }
     }
 
+    fn chat_read(&self, p: &Value) -> Result<Value> {
+        // Whose transcript, its CLI, its running terminal, the texts Echo or others typed in, and
+        // (for an agent) its earlier sessions, oldest first.
+        let (session, cli, live, inputs, earlier) = match p.get("worker").and_then(Value::as_i64) {
+            Some(id) => {
+                let worker = db::worker(&self.db(), id)?;
+                let inputs = db::inputs(&self.db(), id)?;
+                (worker.session_id, worker.cli, self.live(id).ok(), inputs, vec![])
+            }
+            None => {
+                let agent = db::agent(&self.db(), id_param(p, "agent")?)?;
+                let echo =
+                    [launch::RESUMED, launch::RENEWED].map(|text| (db::origin::ECHO.to_string(), text.to_string()));
+                let earlier = db::agent_sessions(&self.db(), agent.id)?;
+                (
+                    agent.session_id,
+                    agent.cli,
+                    self.agent_live(agent.id).ok(),
+                    echo.to_vec(),
+                    earlier,
+                )
+            }
+        };
+        let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
+        let projects = stats::projects_dir();
+        // The session before `of`, among the earlier ones.
+        let previous = |of: &str| -> Option<String> {
+            if of == session {
+                return earlier.last().cloned();
+            }
+            let at = earlier.iter().position(|s| s == of)?;
+            at.checked_sub(1).map(|at| earlier[at].clone())
+        };
+        // An older page: the lines before `before` in `page_session`, else the session before it.
+        if let Some(before) = p.get("before").and_then(Value::as_u64) {
+            let mut page_session = str_param(p, "page_session")?.to_string();
+            let before = Some(before).filter(|&b| b > 0);
+            let mut renewed = None;
+            if before.is_none() {
+                let Some(prev) = previous(&page_session) else {
+                    return Ok(json!({ "items": [], "start": 0, "page_session": page_session, "more": false }));
+                };
+                renewed = Some(chat::renewed(&page_session));
+                page_session = prev;
+            }
+            let page = stats::transcript(&projects, &page_session)
+                .map(|path| chat::read(&path, limit, None, before))
+                .transpose()?
+                .unwrap_or(chat::Page {
+                    items: vec![],
+                    start: 0,
+                    end: 0,
+                });
+            let mut items = page.items;
+            chat::mark_origins(&mut items, &inputs);
+            items.extend(renewed);
+            let more = page.start > 0 || previous(&page_session).is_some();
+            return Ok(json!({ "items": items, "start": page.start, "page_session": page_session, "more": more }));
+        }
+        let state = chat_state(live.as_deref());
+        let more = !earlier.is_empty();
+        if cli.as_deref().is_some_and(|cli| cli != "claude") {
+            return Ok(
+                json!({ "session": session, "supported": false, "items": [], "end": 0, "start": 0,
+                              "more": false, "state": state }),
+            );
+        }
+        let Some(path) = stats::transcript(&projects, &session) else {
+            return Ok(
+                json!({ "session": session, "supported": true, "items": [], "end": 0, "start": 0,
+                              "more": more, "state": state }),
+            );
+        };
+        let same = p.get("session").and_then(Value::as_str) == Some(session.as_str());
+        let after = p.get("after").and_then(Value::as_u64).filter(|_| same);
+        let page = chat::read(&path, limit, after, None)?;
+        let mut items = page.items;
+        chat::mark_origins(&mut items, &inputs);
+        Ok(
+            json!({ "session": session, "supported": true, "items": items, "end": page.end, "start": page.start,
+                   "more": more || page.start > 0, "state": state }),
+        )
+    }
+
     /// Re-runs `check` after every change until it yields, `timeout` passes, or `gone` says stop.
     fn wait_until<T>(
         &self,
@@ -397,8 +494,14 @@ impl Hub {
                 .chain(["TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID"].map(String::from))
                 .collect(),
         };
+        let live = Live::spawn(&format!("s{id}"), id, spawn, self.shell_exit())?;
+        shells.insert(id, Arc::clone(&live));
+        Ok(live)
+    }
+
+    fn shell_exit(self: &Arc<Self>) -> impl FnOnce(i64) + Send + 'static {
         let hub: Weak<Hub> = Arc::downgrade(self);
-        let live = Live::spawn(id, spawn, move |id| {
+        move |id| {
             if let Some(hub) = hub.upgrade() {
                 // Only this shell: a newer one may have taken its place.
                 let mut shells = hub.shells.lock().unwrap();
@@ -406,9 +509,7 @@ impl Hub {
                     shells.remove(&id);
                 }
             }
-        })?;
-        shells.insert(id, Arc::clone(&live));
-        Ok(live)
+        }
     }
 
     /// Ends the agent's shell, so whoever follows the agent attaches to it when it starts.
@@ -524,18 +625,31 @@ impl Hub {
             .unwrap_or_default();
         let repo = PathBuf::from(&agent.repo);
         let home = PathBuf::from(agent.home());
+        let orchestrator = agent.kind == db::agent_kind::ORCHESTRATOR;
+        // An Orchestrator's own model setting sits over the repo's and the human's general one, and
+        // under what was picked for this agent; with none of them, it runs the built-in default.
+        let human = settings::read(&paths::state_dir()).unwrap_or_default();
         let (agent_cli, model) = cli::pick(
             &paths::state_dir(),
             Some(&repo),
-            &[&cli::Choice {
-                cli: agent.cli.clone(),
-                model: agent.model.clone(),
-            }],
+            &[
+                &cli::Choice {
+                    cli: None,
+                    model: orchestrator.then(|| settings::orchestrator_model(&human)).flatten(),
+                },
+                &cli::Choice {
+                    cli: agent.cli.clone(),
+                    model: agent.model.clone(),
+                },
+            ],
         )?;
+        let model = model.or_else(|| {
+            (orchestrator && agent_cli == cli::Cli::Claude).then(|| settings::ORCHESTRATOR_MODEL.to_string())
+        });
+        let effort = orchestrator.then(|| settings::orchestrator_effort(&human));
         let resume = agent_cli.has_session(&agent.session_id);
         // What the human asked for up front, like an issue to work on; a resumed session has its own.
         let request = picked("request").filter(|_| !resume);
-        let orchestrator = agent.kind == db::agent_kind::ORCHESTRATOR;
         let (program, args) = match &self.test_agent {
             Some(test) => {
                 // Tests name a Normal session after the fake agent script it should run.
@@ -551,6 +665,7 @@ impl Hub {
                     resume,
                     request,
                     model,
+                    effort,
                     extra,
                 };
                 let start = if orchestrator {
@@ -580,14 +695,7 @@ impl Hub {
                 spawn = with_setup(spawn, &setup);
             }
         }
-        let hub: Weak<Hub> = Arc::downgrade(self);
-        let live = Live::spawn(agent.id, spawn, move |id| {
-            if let Some(hub) = hub.upgrade() {
-                hub.agents.lock().unwrap().remove(&id);
-                hub.agent_prompts.lock().unwrap().remove(&id);
-                hub.notify();
-            }
-        })?;
+        let live = Live::spawn(&format!("a{}", agent.id), agent.id, spawn, self.agent_exit())?;
         self.agents.lock().unwrap().insert(agent.id, Arc::clone(&live));
         // Only once the agent is live: an attach before that would start a new shell in its place.
         self.stop_shell(agent.id);
@@ -595,6 +703,58 @@ impl Hub {
         std::thread::spawn(move || hub.watch_agent(live));
         self.notify();
         Ok(view(true, resume))
+    }
+
+    /// Renews an idle Orchestrator whose context passed the human's `orchestratorRotateAt`
+    /// (features/0061). Nothing happens unless that setting is on, the session has made enough
+    /// requests to be worth it, and no Worker, message, or question is waiting on it.
+    fn renew_if_due(self: &Arc<Self>, id: i64) -> Result<bool> {
+        let Some(at) = settings::orchestrator_rotate_at(&settings::read(&paths::state_dir())?) else {
+            return Ok(false);
+        };
+        let agent = db::agent(&self.db(), id)?;
+        if db::agent_has_work(&self.db(), &agent.repo, id)? {
+            return Ok(false);
+        }
+        let Some((requests, context)) = stats::session_context(&agent.session_id) else {
+            return Ok(false);
+        };
+        if requests < MIN_RENEW_REQUESTS || context < at {
+            return Ok(false);
+        }
+        eprintln!("hubd: renewing a{id} at {context} tokens of context after {requests} requests");
+        self.renew_agent(id)?;
+        Ok(true)
+    }
+
+    /// Starts an Orchestrator again on a new Claude session, for a fresh context; the old session
+    /// stays in Claude Code's history. What it needs, it reads with `echoctl brief`.
+    fn renew_agent(self: &Arc<Self>, id: i64) -> Result<Value> {
+        let agent = db::agent(&self.db(), id)?;
+        if agent.kind != db::agent_kind::ORCHESTRATOR {
+            bail!("only an Orchestrator's session is renewed");
+        }
+        db::end_agent_session(&self.db(), id, &agent.session_id)?;
+        db::set_agent_session(&self.db(), id, &uuid::Uuid::new_v4().to_string())?;
+        self.stop_agent(id);
+        for _ in 0..200 {
+            if !self.agent_is_live(id) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        self.open_agent(&json!({ "agent": id, "request": launch::RENEWED }))
+    }
+
+    fn agent_exit(self: &Arc<Self>) -> impl FnOnce(i64) + Send + 'static {
+        let hub: Weak<Hub> = Arc::downgrade(self);
+        move |id| {
+            if let Some(hub) = hub.upgrade() {
+                hub.agents.lock().unwrap().remove(&id);
+                hub.agent_prompts.lock().unwrap().remove(&id);
+                hub.notify();
+            }
+        }
     }
 
     /// Stops an agent's terminal; it stays on the repo's list, ready to resume.
@@ -698,9 +858,68 @@ impl Hub {
         Ok(json!({ "command": command, "session": session, "dir": dir }))
     }
 
-    fn recover(&self) -> Result<()> {
+    /// Takes over every terminal the holder kept while no daemon ran; a Worker that was live and
+    /// whose terminal is gone is lost.
+    fn recover(self: &Arc<Self>) -> Result<()> {
+        let state = paths::state_dir();
+        for key in holder::list() {
+            let (Some(kind), Ok(id)) = (key.chars().next(), key[1..].parse::<i64>()) else {
+                continue;
+            };
+            let adopted = match kind {
+                'w' => db::worker(&self.db(), id).ok().map(|worker| {
+                    let repo = Path::new(&worker.repo);
+                    let picked = cli::Choice {
+                        cli: worker.cli.clone(),
+                        model: worker.model.clone(),
+                    };
+                    let worker_cli = profile::load(&self.hub_dir, &state, Some(repo), &worker.profile)
+                        .and_then(|profile| cli::pick(&state, Some(repo), &[&profile.choice(), &picked]))
+                        .map_or(cli::Cli::Claude, |(c, _)| c);
+                    Live::adopt(&key, id, worker_cli, self.worker_exit()).map(|live| {
+                        live.map(|live| {
+                            self.live.lock().unwrap().insert(id, Arc::clone(&live));
+                            let hub = Arc::clone(self);
+                            std::thread::spawn(move || hub.watch(live));
+                        })
+                    })
+                }),
+                'a' => db::agent(&self.db(), id).ok().map(|agent| {
+                    let choice = cli::Choice {
+                        cli: agent.cli.clone(),
+                        model: agent.model.clone(),
+                    };
+                    let agent_cli = cli::pick(&state, Some(Path::new(&agent.repo)), &[&choice])
+                        .map_or(cli::Cli::Claude, |(c, _)| c);
+                    Live::adopt(&key, id, agent_cli, self.agent_exit()).map(|live| {
+                        live.map(|live| {
+                            self.agents.lock().unwrap().insert(id, Arc::clone(&live));
+                            let hub = Arc::clone(self);
+                            std::thread::spawn(move || hub.watch_agent(live));
+                        })
+                    })
+                }),
+                's' => Some(Live::adopt(&key, id, cli::Cli::Claude, self.shell_exit()).map(|live| {
+                    live.map(|live| {
+                        self.shells.lock().unwrap().insert(id, live);
+                    })
+                })),
+                _ => None,
+            };
+            match adopted {
+                Some(Ok(_)) => eprintln!("hubd: took over {key}"),
+                Some(Err(error)) => eprintln!("hubd: could not take over {key}: {error:#}"),
+                // Nothing in the database owns it any more.
+                None => {
+                    if let Ok(Some(live)) = Live::adopt(&key, id, cli::Cli::Claude, |_| {}) {
+                        live.kill();
+                    }
+                }
+            }
+        }
+        let held: Vec<i64> = self.live.lock().unwrap().keys().copied().collect();
         let db = self.db();
-        for worker in db::mark_lost(&db)? {
+        for worker in db::mark_lost(&db, &held)? {
             let body = format!(
                 "The Hub Daemon restarted while w{} was live; its terminal is gone. Resume it: echoctl worker resume w{}",
                 worker.id, worker.id
@@ -748,14 +967,19 @@ impl Hub {
                 Ok(json!({ "screen": if lines > 0 { screen::tail(&screen, lines) } else { screen } }))
             }
             "worker.send" => {
-                let live = self.live(id_param(p, "id")?)?;
-                live.write(str_param(p, "text")?.as_bytes())?;
-                if p.get("enter").and_then(Value::as_bool).unwrap_or(true) {
-                    // Typed text and its Enter in one write reads as a paste with a newline.
-                    std::thread::sleep(Duration::from_millis(150));
-                    live.write(b"\r")?;
+                let id = id_param(p, "id")?;
+                let live = self.live(id)?;
+                if !p.get("force").and_then(Value::as_bool).unwrap_or(false) {
+                    refuse_over_dialog(&live)?;
                 }
-                Ok(json!({}))
+                let text = str_param(p, "text")?;
+                if !p.get("enter").and_then(Value::as_bool).unwrap_or(true) {
+                    live.write(text.as_bytes())?;
+                    return Ok(json!({}));
+                }
+                db::insert_input(&self.db(), id, db::origin::ORCHESTRATOR, text)?;
+                type_in(&live, text)?;
+                Ok(json!({ "started": started(&live) }))
             }
             "worker.key" => {
                 let live = self.live(id_param(p, "id")?)?;
@@ -810,6 +1034,65 @@ impl Hub {
                 }
                 Ok(json!({}))
             }
+            // An agent's conversation as chat items (ADR 0010). `after` continues from the `end` a
+            // read gave, while the agent stays on the same `session`.
+            // An agent's or Worker's conversation as chat items (ADR 0010). `after` continues from
+            // the `end` a read gave, while it stays on the same `session`.
+            "chat.read" => self.chat_read(p),
+            // What `/` completes in the chat's message box.
+            "chat.commands" => {
+                let (session, cwd) = match p.get("worker").and_then(Value::as_i64) {
+                    Some(id) => {
+                        let worker = db::worker(&self.db(), id)?;
+                        (worker.session_id, PathBuf::from(worker.cwd))
+                    }
+                    None => {
+                        let agent = db::agent(&self.db(), id_param(p, "agent")?)?;
+                        let cwd = agent
+                            .cwd
+                            .clone()
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| PathBuf::from(&agent.repo));
+                        (agent.session_id, cwd)
+                    }
+                };
+                let transcript = stats::transcript(&stats::projects_dir(), &session);
+                let dirs = [paths::home().join(".claude/commands"), cwd.join(".claude/commands")];
+                Ok(json!({ "commands": chat::commands(transcript.as_deref(), &dirs) }))
+            }
+            // The chat's message box: typed at the input box, never over a prompt it shows
+            // (features/0045), so text cannot answer it. Into a Worker it is an Intervention.
+            "chat.send" => {
+                let text = str_param(p, "text")?;
+                let live = match p.get("worker").and_then(Value::as_i64) {
+                    Some(id) => self.live(id).context("it is not running")?,
+                    None => self
+                        .agent_live(id_param(p, "agent")?)
+                        .context("it is not running; start it first")?,
+                };
+                match live.cli.look(&live.screen()) {
+                    Look::PermissionPrompt => bail!("it shows a permission prompt; Approve or Deny it first"),
+                    Look::TrustPrompt => bail!("it still shows its folder-trust dialog; try again in a moment"),
+                    _ => {}
+                }
+                match p.get("worker").and_then(Value::as_i64) {
+                    Some(id) => db::insert_input(&self.db(), id, db::origin::HUMAN, text)?,
+                    None => {
+                        self.name_from_input(id_param(p, "agent")?, text.lines().next().unwrap_or(""))?;
+                    }
+                }
+                type_in(&live, text)?;
+                Ok(json!({}))
+            }
+            // Esc from the chat: interrupts the turn.
+            "chat.interrupt" => {
+                let live = match p.get("worker").and_then(Value::as_i64) {
+                    Some(id) => self.live(id)?,
+                    None => self.agent_live(id_param(p, "agent")?).context("it is not running")?,
+                };
+                live.write(b"\x1b")?;
+                Ok(json!({}))
+            }
             "remote.status" => Ok(remote::status(self)),
             "remote.enable" => remote::enable(self, p.get("port").and_then(Value::as_u64).map(|p| p as u16)),
             "remote.disable" => remote::disable(self),
@@ -823,6 +1106,7 @@ impl Hub {
                 Ok(json!({}))
             }
             "agent.open" => self.open_agent(p),
+            "agent.renew" => self.renew_agent(id_param(p, "agent")?),
             "ui" => self.ui(p),
             "agent.close" => {
                 self.stop_agent(id_param(p, "agent")?);
@@ -853,6 +1137,18 @@ impl Hub {
                 Ok(json!({}))
             }
             "usage" => Ok(self.usage.lock().unwrap().view()),
+            "stats" => {
+                let days = p.get("days").and_then(Value::as_i64).unwrap_or(7).max(1);
+                let since = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs() as i64
+                    - days * 86_400;
+                let workers = db::worker_sessions_since(&self.db(), since)?;
+                let orchestrators = db::orchestrator_sessions_since(&self.db(), since)?;
+                let mut report = stats::report(&workers);
+                report["orchestrators"] = stats::orchestrators(&orchestrators, since);
+                Ok(report)
+            }
             "decide" => self.decide(p),
             "worker.close" => self.close_worker(id_param(p, "id")?),
             "worker.dismiss" => {
@@ -861,6 +1157,22 @@ impl Hub {
                 Ok(json!({}))
             }
             "worker.resume" => self.resume_worker(id_param(p, "id")?),
+            "worker.task" => {
+                let mut spec = p
+                    .get("spec")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim_end()
+                    .to_string();
+                if let Some(from) = p.get("from_report").and_then(Value::as_i64) {
+                    let source = db::worker(&self.db(), from).with_context(|| format!("--from-report w{from}"))?;
+                    spec = spec_with_report(&spec, &source)?;
+                }
+                if spec.trim().is_empty() {
+                    bail!("give --spec, --spec-file, or --from-report");
+                }
+                self.next_task(id_param(p, "id")?, &spec, db::origin::ORCHESTRATOR)
+            }
             "worker.diff" => {
                 let worker = db::worker(&self.db(), id_param(p, "id")?)?;
                 let cwd = Path::new(&worker.cwd);
@@ -1031,6 +1343,10 @@ impl Hub {
             "settings.get" => {
                 let all = settings::read(&paths::state_dir())?;
                 Ok(json!({ "cli": all.get("cli"), "model": all.get("model"),
+                           "orchestratorModel": all.get("orchestratorModel"),
+                           "orchestratorEffort": all.get("orchestratorEffort"),
+                           "orchestratorLessons": settings::orchestrator_lessons(&all),
+                           "orchestratorRotateAt": settings::orchestrator_rotate_at(&all),
                            "orchestrator": settings::Rules::from(&all).view() }))
             }
             "settings.set" => {
@@ -1040,6 +1356,10 @@ impl Hub {
                 let allowed = [
                     "cli",
                     "model",
+                    "orchestratorModel",
+                    "orchestratorEffort",
+                    "orchestratorLessons",
+                    "orchestratorRotateAt",
                     "maxWorkers",
                     "planApproval",
                     "review",
@@ -1051,8 +1371,21 @@ impl Hub {
                 if let Some(name) = patch.get("cli").and_then(Value::as_str).filter(|v| !v.is_empty()) {
                     cli::Cli::parse(name)?;
                 }
+                if let Some(effort) = patch
+                    .get("orchestratorEffort")
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty())
+                {
+                    if !settings::EFFORTS.contains(&effort) {
+                        bail!("orchestratorEffort must be one of {}", settings::EFFORTS.join(", "));
+                    }
+                }
                 let all = settings::update(&paths::state_dir(), patch)?;
                 Ok(json!({ "cli": all.get("cli"), "model": all.get("model"),
+                           "orchestratorModel": all.get("orchestratorModel"),
+                           "orchestratorEffort": all.get("orchestratorEffort"),
+                           "orchestratorLessons": settings::orchestrator_lessons(&all),
+                           "orchestratorRotateAt": settings::orchestrator_rotate_at(&all),
                            "orchestrator": settings::Rules::from(&all).view() }))
             }
             "worker.pick" => self.pick_worker(id_param(p, "id")?),
@@ -1101,9 +1434,21 @@ impl Hub {
                     }
                 }
                 db::settle(&db, id, final_state, &body)?;
-                db::insert_message(&db, &worker, kind::DONE, &body)?;
+                // A verifier reports to the daemon, and a writer it verifies is heard of only
+                // once the verdict is in (features/0055); the Orchestrator hears of neither yet.
+                let verifying = worker.verify && final_state == state::DONE;
+                if worker.verifies.is_none() && !verifying {
+                    db::insert_message(&db, &worker, kind::DONE, &body)?;
+                }
                 drop(db);
                 self.notify();
+                let hub = Arc::clone(self);
+                if let Some(writer) = worker.verifies {
+                    let final_state = final_state.to_string();
+                    std::thread::spawn(move || hub.verified(id, writer, &final_state, &body));
+                } else if verifying {
+                    std::thread::spawn(move || hub.verify(id));
+                }
                 Ok(json!({}))
             }
             "session" => {
@@ -1158,9 +1503,14 @@ impl Hub {
                 Ok(json!({ "open_questions": open }))
             }
             "shutdown" => {
-                let live = self.live.lock().unwrap().len() + self.agents.lock().unwrap().len();
-                if live > 0 && !p.get("force").and_then(Value::as_bool).unwrap_or(false) {
-                    bail!("{live} terminal(s) still live (Workers or Orchestrators); close them first or pass --force");
+                // Without --force the terminals keep running in the holder, for the next daemon.
+                if !p.get("force").and_then(Value::as_bool).unwrap_or(false) {
+                    let _ = std::fs::remove_file(paths::socket());
+                    std::thread::spawn(|| {
+                        std::thread::sleep(Duration::from_millis(200));
+                        std::process::exit(0);
+                    });
+                    return Ok(json!({}));
                 }
                 let killed: Vec<Arc<Live>> = self.live.lock().unwrap().values().cloned().collect();
                 for live in &killed {
@@ -1183,6 +1533,7 @@ impl Hub {
                 for live in self.shells.lock().unwrap().values() {
                     live.kill();
                 }
+                holder::quit();
                 let _ = std::fs::remove_file(paths::socket());
                 std::thread::spawn(|| {
                     std::thread::sleep(Duration::from_millis(200));
@@ -1197,12 +1548,12 @@ impl Hub {
     fn spawn_for(&self, worker: &Worker, launch: Launch) -> Result<Spawn> {
         let launch_kind = match launch {
             Launch::New { .. } => LaunchKind::New,
-            Launch::Resume => LaunchKind::Resume,
+            Launch::Resume | Launch::Next { .. } => LaunchKind::Resume,
         };
         let (worker_cli, program, args) = match &self.test_agent {
             Some(agent) => {
                 let spec = match launch {
-                    Launch::New { spec } => spec.to_string(),
+                    Launch::New { spec } | Launch::Next { spec } => spec.to_string(),
                     Launch::Resume => "resume".to_string(),
                 };
                 (cli::Cli::Claude, agent.clone(), vec![spec])
@@ -1274,18 +1625,22 @@ impl Hub {
 
     fn launch(self: &Arc<Self>, worker: &Worker, launch: Launch) -> Result<()> {
         let spawn = self.spawn_for(worker, launch)?;
+        let live = Live::spawn(&format!("w{}", worker.id), worker.id, spawn, self.worker_exit())?;
+        self.live.lock().unwrap().insert(worker.id, Arc::clone(&live));
+        let hub = Arc::clone(self);
+        std::thread::spawn(move || hub.watch(live));
+        Ok(())
+    }
+
+    fn worker_exit(self: &Arc<Self>) -> impl FnOnce(i64) + Send + 'static {
         let hub: Weak<Hub> = Arc::downgrade(self);
-        let live = Live::spawn(worker.id, spawn, move |id| {
+        move |id| {
             if let Some(hub) = hub.upgrade() {
                 if let Err(error) = hub.on_exit(id) {
                     eprintln!("hubd: w{id} exit: {error:#}");
                 }
             }
-        })?;
-        self.live.lock().unwrap().insert(worker.id, Arc::clone(&live));
-        let hub = Arc::clone(self);
-        std::thread::spawn(move || hub.watch(live));
-        Ok(())
+        }
     }
 
     fn start_worker(self: &Arc<Self>, p: &Value) -> Result<Value> {
@@ -1331,8 +1686,23 @@ impl Hub {
                 bail!("{} is not a worktree of {}", path.display(), repo_root.display());
             }
             (path, None)
+        } else if let Some(target) = choice.strip_prefix("worker:") {
+            // Where another Worker works, as a verifier does, without listing every Worker for it.
+            let id = target
+                .strip_prefix('w')
+                .and_then(|n| n.parse::<i64>().ok())
+                .with_context(|| format!("--worktree worker:<w id> needs a Worker id like w12, not {target:?}"))?;
+            let other = db::worker(&self.db(), id).with_context(|| format!("--worktree worker:{target}"))?;
+            if other.repo != repo_root.display().to_string() {
+                bail!("{target} works in {}, not in {}", other.repo, repo_root.display());
+            }
+            let cwd = PathBuf::from(&other.cwd);
+            if !cwd.is_dir() {
+                bail!("{target}'s folder {} is gone", cwd.display());
+            }
+            (cwd, None)
         } else {
-            bail!("--worktree must be current, new:<type>/<task>, or path:<abs path>");
+            bail!("--worktree must be current, new:<type>/<task>, path:<abs path>, or worker:<w id>");
         };
         // A worktree of its own gets the repo's ignored files now; its setup runs in its terminal.
         let prep = repo::prep(&repo_root)?;
@@ -1356,6 +1726,23 @@ impl Hub {
                 model: runs.model.as_deref(),
             },
         )?;
+        // Verifying by the daemon only happens while the human's Settings have a review on.
+        let flag = |key: &str| p.get(key).and_then(Value::as_bool).unwrap_or(false);
+        let review = settings::Rules::from(&settings::read(&paths::state_dir()).unwrap_or_default()).review;
+        db::set_worker_role(
+            &self.db(),
+            id,
+            flag("keep"),
+            flag("verify") && review,
+            p.get("verifies").and_then(Value::as_i64),
+        )?;
+        // Echo's fan-out is the human's Task; the daemon's verifier is Echo's; the rest, the Orchestrator's.
+        let from = match p.get("origin").and_then(Value::as_str) {
+            Some("human") => db::origin::HUMAN,
+            Some("echo") => db::origin::ECHO,
+            _ => db::origin::ORCHESTRATOR,
+        };
+        db::insert_input(&self.db(), id, from, spec)?;
         let worker = db::worker(&self.db(), id)?;
         if let Err(error) = self.launch(&worker, Launch::New { spec }) {
             db::settle(&self.db(), id, state::EXITED, &format!("could not start: {error:#}"))?;
@@ -1372,8 +1759,8 @@ impl Hub {
                 Ok((now.state != state::STARTING).then_some(now.state))
             },
         )?;
-        let view =
-            json!({ "id": format!("w{id}"), "cwd": cwd, "branch": branch, "session_id": session_id, "title": title });
+        let view = json!({ "id": format!("w{id}"), "cwd": cwd, "branch": branch, "session_id": session_id,
+                           "title": title, "verify": worker.verify });
         match started.as_deref() {
             Some(state::EXITED) => {
                 // Its terminal may be gone already; the exit message kept its last screen.
@@ -1400,9 +1787,47 @@ impl Hub {
         }
         db::set_state(&self.db(), id, state::STARTING)?;
         let worker = db::worker(&self.db(), id)?;
+        db::insert_input(&self.db(), id, db::origin::ECHO, profile::RESUMED)?;
         self.launch(&worker, Launch::Resume)?;
         self.notify();
         Ok(json!({ "id": format!("w{id}") }))
+    }
+
+    /// A settled Worker's next Task, in the same session and worktree: typed in at its input box, or
+    /// its session resumed on it when its terminal is gone.
+    fn next_task(self: &Arc<Self>, id: i64, spec: &str, from: &str) -> Result<Value> {
+        let worker = db::worker(&self.db(), id)?;
+        if state::is_live(&worker.state) {
+            bail!("w{id} is still on its Task; give it the next one after its Final Report");
+        }
+        db::insert_input(&self.db(), id, from, spec)?;
+        let started = match self.live(id) {
+            Ok(live) => {
+                self.hand_over(&live, &worker, spec)?;
+                self.notify();
+                Some(started(&live))
+            }
+            Err(_) => {
+                db::set_state(&self.db(), id, state::STARTING)?;
+                let worker = db::worker(&self.db(), id)?;
+                self.launch(&worker, Launch::Next { spec })?;
+                None
+            }
+        };
+        self.notify();
+        Ok(json!({ "id": format!("w{id}"), "started": started }))
+    }
+
+    /// Types work into a Worker at its input box; a settled one is running again, so its next
+    /// `echoctl done` is taken.
+    fn hand_over(&self, live: &Live, worker: &Worker, text: &str) -> Result<()> {
+        refuse_over_dialog(live)?;
+        // Running before the text goes in, so a report it sends at once is taken.
+        *live.handed.lock().unwrap() = Some(Instant::now());
+        if !state::is_live(&worker.state) {
+            db::set_state(&self.db(), worker.id, state::RUNNING)?;
+        }
+        type_in(live, text)
     }
 
     /// The human's review of a Worker's changes: typed into the Worker when it is live and that is
@@ -1416,12 +1841,11 @@ impl Hub {
         match str_param(p, "to")? {
             "worker" => {
                 let live = self.live(id)?;
-                live.write(format!("The human reviewed your changes. Address each comment:\n\n{body}").as_bytes())?;
-                // As worker.send: the text, then its Enter on its own.
-                std::thread::sleep(Duration::from_millis(150));
-                live.write(b"\r")?;
+                let worker = db::worker(&self.db(), id)?;
+                let review = format!("The human reviewed your changes. Address each comment:\n\n{body}");
+                db::insert_input(&self.db(), id, db::origin::HUMAN, &review)?;
+                self.hand_over(&live, &worker, &review)?;
                 let db = self.db();
-                let worker = db::worker(&db, id)?;
                 let note = format!("The human sent w{id} a review of its changes in Echo:\n{body}");
                 db::insert_message(&db, &worker, kind::HUMAN, &note)?;
             }
@@ -1452,6 +1876,7 @@ impl Hub {
                 let mut params = p.clone();
                 params["worktree"] = json!(format!("new:{branch}-{n}"));
                 params["fanout"] = json!(fanout);
+                params["origin"] = json!("human");
                 let hub = Arc::clone(self);
                 std::thread::spawn(move || hub.start_worker(&params))
             })
@@ -1589,10 +2014,12 @@ impl Hub {
             }
             *current = Some(blocker_kind.to_string());
         }
-        let body = format!(
-            "Blocked: {blocker_kind}\n{message}\n\nWorker screen (last {SCREEN_LINES} lines):\n{}",
-            screen::tail(&live.screen(), SCREEN_LINES)
-        );
+        let screen = live.screen();
+        let prompt = match blocker_kind {
+            "permission_prompt" => live.cli.prompt_lines(&screen),
+            _ => String::new(),
+        };
+        let body = blocker_body(blocker_kind, message, &prompt, &screen::tail(&screen, SCREEN_LINES));
         db::insert_message(&self.db(), &worker, kind::BLOCKER, &body)?;
         self.notify();
         Ok(())
@@ -1657,7 +2084,13 @@ impl Hub {
                     db::set_state(&self.db(), live.id, state::RUNNING)?;
                     self.notify();
                 }
-                let idle = look == Look::Idle && changed_at.elapsed() >= IDLE_BLOCKER && live.age() >= IDLE_BLOCKER;
+                let handed = live
+                    .handed
+                    .lock()
+                    .unwrap()
+                    .is_none_or(|at| at.elapsed() >= IDLE_BLOCKER);
+                let idle =
+                    look == Look::Idle && changed_at.elapsed() >= IDLE_BLOCKER && live.age() >= IDLE_BLOCKER && handed;
                 if worker.state == state::RUNNING && idle && db::open_questions(&self.db(), live.id)?.is_empty() {
                     self.report_blocker(&live, "idle_prompt", "Idle at its input box with no Final Report.")?;
                 }
@@ -1694,22 +2127,50 @@ impl Hub {
         Ok(json!({ "question": question, "answer": answer }))
     }
 
+    /// Returns once a message that wakes the Orchestrator has waited `COALESCE` for others, with
+    /// every message then waiting; a `status` alone never wakes it (features/0054).
     fn wait(&self, repo: &str, agent: Option<i64>, timeout: Duration, stream: &UnixStream) -> Result<Value> {
-        let messages = self.wait_until(
+        let hold = std::env::var("HUB_COALESCE_MS")
+            .ok()
+            .and_then(|ms| ms.parse().ok())
+            .map_or(COALESCE, Duration::from_millis);
+        let mut woken_at: Option<Instant> = None;
+        let mut messages = self.wait_until(
             timeout,
             || peer_gone(stream),
             || {
                 if peer_gone(stream) {
                     return Ok(None); // never hand messages to a listener that hung up
                 }
-                let taken = db::take_undelivered(&self.db(), repo, agent)?;
-                Ok((!taken.is_empty()).then_some(taken))
+                if !db::has_waking(&self.db(), repo, agent)? {
+                    woken_at = None;
+                    return Ok(None);
+                }
+                if woken_at.get_or_insert_with(Instant::now).elapsed() < hold {
+                    return Ok(None);
+                }
+                Ok(Some(db::take_undelivered(&self.db(), repo, agent)?))
             },
         )?;
+        // Time ran out during the hold: what woke it is still owed.
+        if messages.is_none() && !peer_gone(stream) && db::has_waking(&self.db(), repo, agent)? {
+            messages = Some(db::take_undelivered(&self.db(), repo, agent)?);
+        }
         let db = self.db();
         let mut out = Vec::new();
+        let mut to_close = Vec::new();
         for message in messages.unwrap_or_default() {
             let worker = db::worker(&db, message.worker_id)?;
+            // Its Final Report reached the Orchestrator: a Worker with no branch of its own and
+            // not asked to stay is done for good (features/0056).
+            if message.kind == kind::DONE
+                && worker.branch.is_none()
+                && !worker.keep
+                && !state::is_live(&worker.state)
+                && worker.closed_at.is_none()
+            {
+                to_close.push(worker.id);
+            }
             out.push(json!({
                 "id": message.id,
                 "kind": message.kind,
@@ -1719,9 +2180,120 @@ impl Hub {
                 "state": worker.state,
                 "branch": worker.branch,
                 "body": message.body,
+                "closed": to_close.contains(&worker.id),
             }));
         }
+        drop(db);
+        for id in to_close {
+            self.close_worker(id)?;
+        }
         Ok(json!({ "messages": out }))
+    }
+
+    /// A writer started `--verify` reported done: a `sasuke` checks it in the same worktree before
+    /// the Orchestrator hears of it.
+    fn verify(self: &Arc<Self>, writer: i64) {
+        if let Err(error) = self.start_verifier(writer) {
+            self.deliver(writer, &format!("Verification did not start: {error:#}"), "");
+        }
+    }
+
+    fn start_verifier(self: &Arc<Self>, writer_id: i64) -> Result<()> {
+        let (writer, task) = {
+            let db = self.db();
+            (db::worker(&db, writer_id)?, db::worker_spec(&db, writer_id)?)
+        };
+        let spec = format!(
+            "Verify the work of w{writer_id} ({}: {}) in this worktree.\n\n\
+             Begin your Final Report with one line, `Verdict: pass` or `Verdict: fail`, then your findings.\n\n\
+             The Task it was given:\n\n{}\n\nIts Final Report:\n\n{}\n",
+            writer.profile,
+            writer.title,
+            task.trim_end(),
+            writer.final_report.as_deref().unwrap_or("").trim_end()
+        );
+        self.start_worker(&json!({
+            "repo": writer.repo,
+            "profile": "sasuke",
+            "spec": spec,
+            "worktree": format!("worker:w{writer_id}"),
+            "agent": writer.agent_id,
+            "title": format!("verify w{writer_id}: {}", writer.title),
+            "verifies": writer_id,
+            "origin": "echo",
+        }))?;
+        Ok(())
+    }
+
+    /// The verifier's report is in: a pass, a failure the writer gets one retry for, or anything
+    /// else, which the Orchestrator decides. Only then does the Orchestrator hear of the writer.
+    fn verified(self: &Arc<Self>, verifier: i64, writer_id: i64, final_state: &str, report: &str) {
+        let outcome = (|| -> Result<()> {
+            let writer = db::worker(&self.db(), writer_id)?;
+            let verdict = if final_state == state::DONE {
+                verdict(report)
+            } else {
+                None
+            };
+            match verdict {
+                Some(true) => self.deliver(writer_id, &format!("Verified by w{verifier}: pass."), report),
+                Some(false) if writer.retries < MAX_RETRIES => {
+                    db::add_retry(&self.db(), writer_id)?;
+                    let task = format!(
+                        "w{verifier} (sasuke) verified your change and it failed. Fix every P0 and P1 finding \
+                         within this Task and its scope, run the verify command again, and finish with \
+                         `echoctl done` as before.\n\n{}",
+                        report.trim_end()
+                    );
+                    if let Err(error) = self.next_task(writer_id, &task, db::origin::ECHO) {
+                        let note = format!(
+                            "Verification by w{verifier} failed and w{writer_id} could not take the retry: {error:#}"
+                        );
+                        self.deliver(writer_id, &note, report);
+                    }
+                }
+                Some(false) => {
+                    let note =
+                        format!("Verification by w{verifier} failed again after {MAX_RETRIES} retry: needs the human.");
+                    self.deliver(writer_id, &note, report)
+                }
+                None => {
+                    let note = format!(
+                        "w{verifier} ended {final_state} without a `Verdict:` line: judge its report yourself."
+                    );
+                    self.deliver(writer_id, &note, report)
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = outcome {
+            eprintln!("hubd: verifying w{writer_id}: {error:#}");
+        }
+        if let Err(error) = self.close_worker(verifier) {
+            eprintln!("hubd: closing w{verifier}: {error:#}");
+        }
+    }
+
+    /// The one message the Orchestrator gets for a verified writer: its Final Report and how the
+    /// verification ended.
+    fn deliver(&self, writer_id: i64, outcome: &str, verifier_report: &str) {
+        let result = (|| -> Result<()> {
+            let db = self.db();
+            let writer = db::worker(&db, writer_id)?;
+            let mut body = format!(
+                "{}\n\n{outcome}",
+                writer.final_report.as_deref().unwrap_or("").trim_end()
+            );
+            if !verifier_report.trim().is_empty() {
+                body += &format!("\n\nVerifier's report:\n{}", verifier_report.trim_end());
+            }
+            db::insert_message(&db, &writer, kind::DONE, &body)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            eprintln!("hubd: delivering w{writer_id}: {error:#}");
+        }
+        self.notify();
     }
 
     fn view(&self, db: &Connection, worker: &Worker) -> Result<Value> {
@@ -2228,9 +2800,19 @@ impl Hub {
     /// Watches an Orchestrator's or Normal session's screen for permission prompts, so they reach
     /// Needs you.
     fn watch_agent(self: Arc<Self>, live: Arc<Live>) {
+        let orchestrator = db::agent(&self.db(), live.id).is_ok_and(|a| a.kind == db::agent_kind::ORCHESTRATOR);
+        let mut quiet = Quiet::default();
         while live.is_alive() {
             std::thread::sleep(Duration::from_secs(1));
-            let waiting = live.cli.look(&live.screen()) == Look::PermissionPrompt;
+            let screen = live.screen();
+            if orchestrator && quiet.settled(live.cli.look(&screen), &screen, Instant::now()) {
+                match self.renew_if_due(live.id) {
+                    Ok(true) => return,
+                    Ok(false) => {}
+                    Err(error) => eprintln!("hubd: renewing a{}: {error:#}", live.id),
+                }
+            }
+            let waiting = live.cli.look(&screen) == Look::PermissionPrompt;
             let mut prompts = self.agent_prompts.lock().unwrap();
             let changed = if waiting {
                 // Keep the time it was first seen.
@@ -2445,6 +3027,49 @@ pub fn inherited_agent_vars() -> Vec<String> {
         .collect()
 }
 
+/// A Task that ends with another Worker's Final Report, verbatim.
+fn spec_with_report(spec: &str, source: &Worker) -> Result<String> {
+    let Some(report) = source.final_report.as_deref().filter(|r| !r.trim().is_empty()) else {
+        bail!("w{} has no Final Report yet", source.id);
+    };
+    let head = if spec.trim().is_empty() {
+        String::new()
+    } else {
+        format!("{}\n\n", spec.trim_end())
+    };
+    Ok(format!(
+        "{head}Final Report of w{} ({}: {}), verbatim:\n\n{}",
+        source.id,
+        source.profile,
+        source.title,
+        report.trim_end()
+    ))
+}
+
+/// A verifier's verdict from its report: its first `Verdict:` line, pass (true) or fail (false).
+fn verdict(report: &str) -> Option<bool> {
+    report.lines().find_map(|line| {
+        let line = line.trim().trim_start_matches(['*', '#', '-', ' ']);
+        line.get(..8).filter(|head| head.eq_ignore_ascii_case("verdict:"))?;
+        let word = line[8..].trim().trim_matches(['*', '`', ' ']).to_ascii_lowercase();
+        match word.split(|c: char| !c.is_alphabetic()).next() {
+            Some("pass") => Some(true),
+            Some("fail") => Some(false),
+            _ => None,
+        }
+    })
+}
+
+/// What a blocker message says: for a permission prompt the prompt's own lines, which is all the
+/// Orchestrator shows the human; else, or when the prompt could not be read, the screen's tail.
+fn blocker_body(blocker_kind: &str, message: &str, prompt: &str, screen_tail: &str) -> String {
+    if prompt.is_empty() {
+        format!("Blocked: {blocker_kind}\n{message}\n\nWorker screen (last {SCREEN_LINES} lines):\n{screen_tail}")
+    } else {
+        format!("Blocked: {blocker_kind}\n{message}\n\nThe prompt:\n{prompt}")
+    }
+}
+
 fn is_agent_var(key: &str) -> bool {
     key == "CLAUDECODE"
         || key == "AI_AGENT"
@@ -2486,9 +3111,70 @@ pub fn key_bytes(key: &str) -> Result<Vec<u8>> {
     })
 }
 
+/// Whether an agent's screen has sat unchanged at its input box long enough to renew its session.
+#[derive(Default)]
+struct Quiet {
+    since: Option<(Instant, u64)>,
+    checked: Option<Instant>,
+}
+
+impl Quiet {
+    /// Fed once a second with what the screen looks like; true when it has been unchanged and at
+    /// its input box (idle, or waiting on background work it started) for `RENEW_QUIET`, and its
+    /// size was not measured in the last `RENEW_CHECK`.
+    fn settled(&mut self, look: Look, screen: &str, now: Instant) -> bool {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        screen.hash(&mut hasher);
+        let hash = hasher.finish();
+        if !matches!(look, Look::Idle | Look::Waiting) {
+            self.since = None;
+            return false;
+        }
+        let since = match self.since {
+            Some((since, seen)) if seen == hash => since,
+            _ => {
+                self.since = Some((now, hash));
+                return false;
+            }
+        };
+        if now.duration_since(since) < RENEW_QUIET || self.checked.is_some_and(|c| now.duration_since(c) < RENEW_CHECK)
+        {
+            return false;
+        }
+        self.checked = Some(now);
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_screen_is_settled_only_when_unchanged_at_its_input_box_for_two_minutes_and_checked_rarely() {
+        let t0 = Instant::now();
+        let at = |secs: u64| t0 + Duration::from_secs(secs);
+        let mut quiet = Quiet::default();
+        assert!(!quiet.settled(Look::Idle, "a", at(0)));
+        assert!(!quiet.settled(Look::Idle, "a", at(119)), "not yet");
+        assert!(
+            !quiet.settled(Look::Idle, "b", at(121)),
+            "the screen changed: the wait starts over"
+        );
+        assert!(
+            !quiet.settled(Look::Working, "b", at(300)),
+            "a turn running is not quiet"
+        );
+        assert!(!quiet.settled(Look::Idle, "b", at(301)));
+        assert!(
+            quiet.settled(Look::Waiting, "b", at(430)),
+            "waiting on its own listener counts"
+        );
+        assert!(!quiet.settled(Look::Waiting, "b", at(431)), "measured just now");
+        assert!(!quiet.settled(Look::Waiting, "b", at(1000)));
+        assert!(quiet.settled(Look::Waiting, "b", at(1031)), "again after ten minutes");
+    }
 
     #[test]
     fn mux_sessions_are_safe_names() {
@@ -2562,6 +3248,76 @@ mod tests {
     }
 
     #[test]
+    fn a_verdict_is_the_first_verdict_line_of_the_report() {
+        assert_eq!(verdict("Verdict: pass\nfindings"), Some(true));
+        assert_eq!(verdict("intro\n**Verdict: FAIL**\nP1 x"), Some(false));
+        assert_eq!(verdict("## verdict: `pass`"), Some(true));
+        assert_eq!(verdict("Verdict: fail\nVerdict: pass"), Some(false));
+        assert_eq!(verdict("looks fine"), None);
+        assert_eq!(verdict("Verdict: unsure"), None);
+    }
+
+    #[test]
+    fn a_task_ends_with_the_report_it_carries_verbatim() {
+        let source = |report: Option<&str>| Worker {
+            id: 4,
+            repo: "/r".into(),
+            profile: "sasuke".into(),
+            title: "verify w3".into(),
+            cwd: "/r".into(),
+            branch: None,
+            session_id: "s".into(),
+            state: "done".into(),
+            final_report: report.map(String::from),
+            created_at: 0,
+            settled_at: None,
+            closed_at: None,
+            last_message_at: None,
+            agent_id: None,
+            dismissed_at: None,
+            fanout: None,
+            cli: None,
+            model: None,
+            keep: false,
+            verify: false,
+            verifies: None,
+            retries: 0,
+        };
+        let task = spec_with_report("Fix these.\n", &source(Some("Verdict: fail\nP1 a.rs:1\n"))).unwrap();
+        assert_eq!(
+            task,
+            "Fix these.\n\nFinal Report of w4 (sasuke: verify w3), verbatim:\n\nVerdict: fail\nP1 a.rs:1"
+        );
+        assert!(spec_with_report("", &source(Some("x")))
+            .unwrap()
+            .starts_with("Final Report of w4"));
+        assert!(spec_with_report("Fix.", &source(None))
+            .unwrap_err()
+            .to_string()
+            .contains("w4 has no Final Report"));
+    }
+
+    #[test]
+    fn a_permission_prompts_blocker_carries_the_prompt_not_the_screen() {
+        let prompt = "Bash command\nrm -rf junk\nDo you want to proceed?";
+        let body = blocker_body(
+            "permission_prompt",
+            "A permission prompt is waiting.",
+            prompt,
+            "SCREEN TAIL",
+        );
+        assert!(
+            body.contains(prompt) && !body.contains("SCREEN TAIL") && !body.contains("Worker screen"),
+            "{body}"
+        );
+        // Without a readable prompt, and for an idle Worker, the screen's tail is all there is.
+        for (kind, prompt) in [("permission_prompt", ""), ("idle_prompt", "")] {
+            let body = blocker_body(kind, "m", prompt, "SCREEN TAIL");
+            assert!(body.contains("Worker screen (last 25 lines):\nSCREEN TAIL"), "{body}");
+        }
+    }
+
+    #[test]
     fn agent_session_markers_are_not_inherited() {
         assert!(is_agent_var("CLAUDE_CODE_CHILD_SESSION"));
         assert!(is_agent_var("CLAUDECODE"));
@@ -2588,6 +3344,67 @@ impl Drop for Watching<'_> {
         if let Some(count) = self.hub.watchers.lock().unwrap().get_mut(self.repo) {
             *count = count.saturating_sub(1);
         }
+    }
+}
+
+/// How long a Worker has to show a turn under way after text is typed into it.
+const START_WAIT: Duration = Duration::from_secs(5);
+
+/// Typing into a dialog would answer it: the first character picks a choice, Enter takes one.
+/// What the chat's Working row shows: whether the terminal runs, what its screen looks like, and
+/// while it works, its spinner and current step.
+fn chat_state(live: Option<&Live>) -> Value {
+    let Some(live) = live else {
+        return json!({ "live": false, "look": "stopped" });
+    };
+    let screen = live.screen();
+    let look = match live.cli.look(&screen) {
+        Look::TrustPrompt => "trust",
+        Look::PermissionPrompt => "prompt",
+        Look::Working => "working",
+        Look::Waiting => "waiting",
+        Look::Idle => "idle",
+    };
+    let (spinner, step) = screen::activity(&screen);
+    json!({ "live": true, "look": look, "spinner": spinner, "step": step })
+}
+
+fn refuse_over_dialog(live: &Live) -> Result<()> {
+    match live.cli.look(&live.screen()) {
+        Look::PermissionPrompt => bail!(
+            "w{} shows a permission prompt, and typing would answer it; decide it with `echoctl worker key w{} enter` or `esc` first, or pass --force",
+            live.id,
+            live.id
+        ),
+        Look::TrustPrompt => bail!("w{} still shows its folder-trust dialog; try again in a moment", live.id),
+        _ => Ok(()),
+    }
+}
+
+/// Types text at the input box, then Enter on its own; several lines go as one paste, so the
+/// first line break does not send the rest early.
+fn type_in(live: &Live, text: &str) -> Result<()> {
+    if text.contains('\n') && live.with_screen(|s| s.bracketed_paste()) {
+        live.write(format!("\x1b[200~{text}\x1b[201~").as_bytes())?;
+    } else {
+        live.write(text.as_bytes())?;
+    }
+    std::thread::sleep(Duration::from_millis(150));
+    live.write(b"\r")?;
+    Ok(())
+}
+
+/// Whether a turn got under way (working, or stopped at a prompt) within `START_WAIT`.
+fn started(live: &Live) -> bool {
+    let deadline = Instant::now() + START_WAIT;
+    loop {
+        if matches!(live.cli.look(&live.screen()), Look::Working | Look::PermissionPrompt) {
+            return true;
+        }
+        if Instant::now() >= deadline || !live.is_alive() {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 

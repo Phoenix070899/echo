@@ -16,28 +16,57 @@ pub enum Look {
     Idle,
 }
 
+/// How many non-blank lines from the bottom a live dialog or spinner can be in; anything above
+/// is transcript, where a quoted prompt or spinner must not count.
+const RECENT: usize = 12;
+
+/// Reads Claude Code's screen. Only the bottom counts: a dialog is live only
+/// while no input box sits below it, and a spinner only just above the input box.
 pub fn look(screen: &str) -> Look {
-    if screen.contains("Yes, I trust this folder") {
+    let lines: Vec<&str> = screen.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    let recent = lines.len().saturating_sub(RECENT);
+    // Ctrl+O's transcript view shows old prompts and spinners; the human is reading it.
+    if lines[lines.len().saturating_sub(3)..]
+        .iter()
+        .any(|line| line.to_lowercase().contains("showing detailed transcript"))
+    {
+        return Look::Working;
+    }
+    let input = input_box(&lines);
+    let live = |at: usize| at >= recent && input.is_none_or(|box_at| at > box_at);
+    if lines
+        .iter()
+        .rposition(|line| line.contains("Yes, I trust this folder"))
+        .is_some_and(live)
+    {
         return Look::TrustPrompt;
     }
-    let lines: Vec<&str> = screen.lines().map(str::trim).collect();
-    let asks = lines.iter().any(|line| line.starts_with("Do you want to"));
-    let choices = lines.iter().any(|line| line.contains("1. Yes"));
-    if asks && choices {
-        return Look::PermissionPrompt;
+    if let Some(ask) = lines.iter().rposition(|line| line.starts_with("Do you want to")) {
+        if live(ask) && lines[ask..].iter().any(|line| line.contains("1. Yes")) {
+            return Look::PermissionPrompt;
+        }
     }
-    if lines.iter().any(|line| is_spinner(line)) {
+    // The spinner sits in the few lines above the input box; without one, anywhere recent.
+    let above = match input {
+        Some(at) => &lines[at.saturating_sub(6).max(recent)..at],
+        None => &lines[recent..],
+    };
+    let footer = input.map_or(&lines[..0], |at| &lines[at..]);
+    if above.iter().any(|line| is_spinner(line)) || footer.iter().any(|line| line.contains("esc to interrupt")) {
         return Look::Working;
     }
     // Only the footer below the input box counts: the transcript keeps "1 shell still running" after it ends.
-    let footer = lines
-        .iter()
-        .rposition(|line| line.starts_with('❯'))
-        .map_or(&lines[..0], |at| &lines[at..]);
     if footer.iter().any(|line| line.split('·').any(is_background_count)) {
         return Look::Waiting;
     }
     Look::Idle
+}
+
+/// The input box: a `❯` line between two horizontal rules, the last one on screen.
+fn input_box(lines: &[&str]) -> Option<usize> {
+    (1..lines.len().saturating_sub(1))
+        .rev()
+        .find(|&at| lines[at].starts_with('❯') && lines[at - 1].starts_with('─') && lines[at + 1].starts_with('─'))
 }
 
 /// Whether the screen shows a turn that finished at the input box, as in
@@ -72,6 +101,28 @@ fn is_spinner(line: &str) -> bool {
     let after = &line[at + "… (".len()..];
     let glyph_word = line.split_whitespace().count() >= 2 && !line.starts_with('❯');
     glyph_word && after.chars().next().is_some_and(|c| c.is_ascii_digit())
+}
+
+/// What a working Claude Code shows it is doing: its spinner line without the glyph, as in
+/// `Nesting… (3s · ↓ 89 tokens)`, and the last `⏺` step above it, as in `Sleeping 8 seconds`.
+pub fn activity(screen: &str) -> (Option<String>, Option<String>) {
+    let lines: Vec<&str> = screen.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    let recent = lines.len().saturating_sub(RECENT);
+    let Some(at) = lines[recent..]
+        .iter()
+        .rposition(|line| is_spinner(line))
+        .map(|at| at + recent)
+    else {
+        return (None, None);
+    };
+    let spinner = lines[at].split_once(' ').map(|(_, rest)| rest.trim().to_string());
+    let step = lines[..at]
+        .iter()
+        .rev()
+        .take(RECENT)
+        .find_map(|line| line.strip_prefix("⏺ "))
+        .map(|step| step.trim().to_string());
+    (spinner, step)
 }
 
 /// The permission prompt's own lines: what is asked about, up to "Do you want to ...".
@@ -231,6 +282,73 @@ mod tests {
     #[test]
     fn typed_ellipsis_in_the_prompt_is_not_a_spinner() {
         assert_eq!(look("❯ wait… (1 more thing)"), Look::Idle);
+    }
+
+    #[test]
+    fn an_old_prompt_in_the_transcript_is_not_live() {
+        let screen = "Bash command\n rm -rf junk\nDo you want to proceed?\n❯ 1. Yes\n  2. No\n⏺ Removed junk.\n\
+                      ✻ Brewed for 3s · done 4:38 PM\n────\n❯ \n────\n  ⏵⏵ auto mode on";
+        assert_eq!(look(screen), Look::Idle);
+    }
+
+    #[test]
+    fn a_trust_dialog_quoted_in_the_transcript_is_not_live() {
+        let screen = "⏺ The dialog says \"Yes, I trust this folder\".\n────\n❯ \n────\n  ⏵⏵ auto mode on";
+        assert_eq!(look(screen), Look::Idle);
+    }
+
+    #[test]
+    fn a_spinner_quoted_far_above_the_input_box_is_not_working() {
+        let mut screen = String::from("⏺ The spinner reads · Churning… (21s · ↓ 81 tokens)\n");
+        for n in 0..8 {
+            screen += &format!("  line {n}\n");
+        }
+        screen += "✻ Brewed for 3s · done 4:38 PM\n────\n❯ \n────\n  ⏵⏵ auto mode on";
+        assert_eq!(look(&screen), Look::Idle);
+    }
+
+    #[test]
+    fn esc_to_interrupt_in_the_footer_is_working() {
+        let screen = "⏺ Reading files\n────\n❯ \n────\n  ⏵⏵ auto mode on · esc to interrupt";
+        assert_eq!(look(screen), Look::Working);
+    }
+
+    /// Claude Code 2.1.308's screens, captured from a real session.
+    const REAL_PROMPT: &str = "  ⎿  $ touch made-by-test.txt\n────────────────\n Bash command\n Create made-by-test.txt\n\
+                               ╌╌╌╌\n touch made-by-test.txt\n╌╌╌╌\n Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and always allow\n\
+                               3. Yes, and switch to auto mode\n   4. No\n Esc to cancel · Tab to amend";
+    const REAL_WORKING: &str = "❯ Run the bash command: sleep 8 && echo hi\n⏺ Sleeping 8 seconds then echo hi\n  ⎿  $ sleep 8 && echo hi\n\
+                                ✶ Nesting… (3s · ↓ 89 tokens)\n                    ◐ medium · /effort\n────────────────\n❯ \n\
+                                ────────────────\n    Haiku 5.5 | ctx: 5% used\n  ⏵⏵ auto mode on (shift+tab to cycle) · ← 2 agents";
+
+    #[test]
+    fn reads_real_claude_screens() {
+        assert_eq!(look(REAL_PROMPT), Look::PermissionPrompt);
+        assert_eq!(look(REAL_WORKING), Look::Working);
+        let finished = REAL_WORKING.replace("✶ Nesting… (3s · ↓ 89 tokens)", "✻ Brewed for 9s · done 4:38 PM");
+        assert_eq!(look(&finished), Look::Idle);
+        // The prompt answered: it scrolls into the transcript and the input box comes back below it.
+        let answered = format!("{REAL_PROMPT}\n⏺ Done.\n────────────────\n❯ \n────────────────\n  ⏵⏵ auto mode on");
+        assert_eq!(look(&answered), Look::Idle);
+    }
+
+    #[test]
+    fn activity_is_the_spinner_and_the_step_above_it() {
+        assert_eq!(
+            activity(REAL_WORKING),
+            (
+                Some("Nesting… (3s · ↓ 89 tokens)".into()),
+                Some("Sleeping 8 seconds then echo hi".into())
+            )
+        );
+        let finished = REAL_WORKING.replace("✶ Nesting… (3s · ↓ 89 tokens)", "✻ Brewed for 9s · done 4:38 PM");
+        assert_eq!(activity(&finished), (None, None));
+    }
+
+    #[test]
+    fn the_transcript_view_is_never_a_prompt() {
+        let screen = "Do you want to proceed?\n❯ 1. Yes\n  2. No\n  Showing detailed transcript · ctrl+o to toggle";
+        assert_eq!(look(screen), Look::Working);
     }
 
     #[test]

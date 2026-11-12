@@ -120,8 +120,8 @@ private struct SectionRow: View {
             .padding(.horizontal, 16)
             .frame(height: 36)
             .frame(maxWidth: .infinity)
-            // Lanh's rows: a rounded fill inset from the column's edges, no bar.
-            .background(picked ? Ledger.selected : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            // Astryx's rows: a rounded fill inset from the column's edges, no bar.
+            .background(picked ? Ledger.selected : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
             .padding(.horizontal, 8)
             .contentShape(Rectangle())
         }

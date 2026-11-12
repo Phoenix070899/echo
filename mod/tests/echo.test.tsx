@@ -61,7 +61,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       $.ui.mount({ plugin: 'echo', surface, component: 'AssistantMessage', props: { text, isFirstOfReply: true } })
     const calm = await reply('Needs you\n- Nothing.\nDone\n- ok')
     expect((await calm.find({ type: 'Box' }))?.props.backgroundColor).toBe('#0f161e')
-    expect((await calm.find({ type: 'Box' }))?.props.borderStyle).toBe('round')
+    expect((await calm.find({ type: 'Box' }))?.props.borderStyle).toBeUndefined()
     const urgent = await reply('Needs you\n- Approve the merge of feat/x')
     expect((await urgent.find({ type: 'Box' }))?.props.backgroundColor).toBe('#1e1900')
   })

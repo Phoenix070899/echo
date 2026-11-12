@@ -691,3 +691,41 @@ func row(_ id: String, phase: String, quiet: Int, model: String? = nil, effort: 
     #expect(!tango.dark && tango.highlighter == "#ffe347" && tango.accent == "#3465a4")
     #expect(CustomLook.presets.map(\.name) == ["Echo Light", "Echo Dark", "Ayu Dark", "Tango Light", "Hub Dark"])
 }
+
+@Test func needsComeInTheLedgersOrder() throws {
+    let need = { (message: Int, agent: Int?, worker: String?) in
+        """
+        {"kind":"question","message":\(message),"agent":\(agent.map(String.init) ?? "null"),\
+        "worker":\(worker.map { "\"\($0)\"" } ?? "null"),"profile":"lee","title":"t","body":"","prompt":"","at":\(message)}
+        """
+    }
+    let line = """
+    {"repo":"/r","orchestrator":{"live":true},"agents":[{"id":1,"kind":"orchestrator","name":null,"model":null,"live":true},\
+    {"id":2,"kind":"claude","name":null,"model":null,"live":true}],"workers":[],\
+    "needs":[\(need(7, 2, nil)),\(need(8, 1, "w4")),\(need(9, 99, "w5"))]}
+    """
+    let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(line.utf8))
+    #expect(snapshot.orderedNeeds.map(\.message) == [8, 9, 7], "a1's, with the unknown agent's, then a2's")
+}
+
+@Test func workersOfARepoWithNoOrchestratorGoToItsFirstAgent() throws {
+    let line = """
+    {"repo":"/r","orchestrator":{"live":false},"agents":[{"id":1,"kind":"claude","name":null,"model":null,"live":true}],\
+    "workers":[\(row("w1", phase: "running", quiet: 5, agent: nil))],"needs":[]}
+    """
+    let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(line.utf8))
+    #expect(snapshot.groups.first?.running.map(\.id) == ["w1"])
+}
+
+@Test func decodesWorkerStats() throws {
+    let line = """
+    {"workers":3,"withTranscript":2,"turns":40,"startContext":109000,"contextPerTurn":196000,\
+    "share":{"cacheReads":63.0,"cacheWrites":26.0,"output":11.0,"coldStarts":9.0},\
+    "perWorker":{"reads":1.5,"shellReads":4.8,"searches":4.5},"repeatReads":1.0,\
+    "profiles":[{"profile":"naruto","workers":2,"turnsPerWorker":20,"startContext":109000,"contextPerTurn":227000,"share":100.0}]}
+    """
+    let stats = try JSONDecoder().decode(WorkerStats.self, from: Data(line.utf8))
+    #expect(stats.profiles.first?.profile == "naruto")
+    #expect(tokenCount(stats.startContext) == "109k")
+    #expect(tokenCount(850) == "850")
+}

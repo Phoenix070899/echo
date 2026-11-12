@@ -88,12 +88,13 @@ echoctl a10                  open a named agent
 echoctl attach <w12|a3>      make this terminal a Worker's or an agent's terminal (Ctrl-] detaches)
 echoctl status               dashboard rows for this repo's Workers
 echoctl sessions             repos the daemon knows, each with its agents
-echoctl daemon | shutdown    run or stop the Hub Daemon
+echoctl daemon | shutdown    run or stop the Hub Daemon (agents keep running; --force stops them too)
+echoctl stats [--days N]     what Workers spent tokens on and how much they read
 echoctl profile <action>     see and change the Agent Profiles Workers start as
 echoctl ui <action>          have Echo open a file, show an agent, a diff, or a Settings section, notify, or start an Orchestrator
                              (agents learn it from the echoctl:echo skill in skills/)
 
-Orchestrator:  echoctl worker start|list|read|send|key|close|resume, echoctl wait, echoctl reply, echoctl inbox
+Orchestrator:  echoctl worker start|list|read|send|task|key|close|resume, echoctl wait, echoctl reply, echoctl inbox
 Worker:        echoctl ask, echoctl send, echoctl done
 ```
 

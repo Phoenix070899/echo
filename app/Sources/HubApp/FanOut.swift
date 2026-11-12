@@ -307,7 +307,7 @@ struct TryColumn: View {
         }
         .font(Ledger.font(12.5))
         .padding(14)
-        .background(Ledger.wash, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Ledger.wash, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         // Read again as it works and when it settles.
         .task(id: "\(worker.id) \(worker.phase) \(worker.progress ?? "")") {
             if !alone { await load() }

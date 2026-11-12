@@ -152,6 +152,98 @@ final class AppModel: ObservableObject {
     /// A short note shown under the title bar for a few seconds; see `note(_:)`.
     @Published var notice: String?
 
+    /// Agents and Workers the human switched to their terminal (⇧⌘T), by label (`a3`, `w12`);
+    /// every other one with a chat shows it (ADR 0010). Remembered per agent and Worker.
+    @Published private(set) var terminalChats: Set<String> = AppModel.loadTerminalChats() {
+        didSet { UserDefaults.standard.set(Array(terminalChats), forKey: "terminalChats") }
+    }
+
+    /// The labels saved, and the agent ids saved before Workers had chats (`terminalAgents`).
+    private static func loadTerminalChats() -> Set<String> {
+        let labels = UserDefaults.standard.array(forKey: "terminalChats") as? [String] ?? []
+        let agents = (UserDefaults.standard.array(forKey: "terminalAgents") as? [Int] ?? []).map { "a\($0)" }
+        return Set(labels + agents)
+    }
+
+    /// Whether `agent` has a chat: an Orchestrator or a Claude Code session, not a plain shell.
+    func hasChat(_ agent: Agent) -> Bool { !agent.isTerminal }
+
+    func showsChat(_ agent: Agent) -> Bool { hasChat(agent) && !terminalChats.contains("a\(agent.id)") }
+
+    /// A Worker's main view is its chat unless the human switched it to its terminal or report.
+    func showsChat(_ worker: WorkerRow) -> Bool {
+        worker.number != nil && !terminalChats.contains(worker.id)
+    }
+
+    /// The selected agent or Worker, when its main view has a chat to switch to and from.
+    var chatTarget: TerminalTarget? {
+        switch selection {
+        case .agent(let repo, let id)?:
+            guard let agent = agents(repo).first(where: { $0.id == id }), hasChat(agent) else { return nil }
+            return .agent(id: id)
+        case .worker(let repo, let id)?:
+            guard let worker = snapshot(repo).workers.first(where: { $0.id == id }), let number = worker.number,
+                  workerView(repo, worker) == .main else { return nil }
+            return .worker(id: number)
+        case nil:
+            return nil
+        }
+    }
+
+    /// Whether the selected agent or Worker shows its chat now.
+    var chatShown: Bool {
+        guard let target = chatTarget else { return false }
+        return !terminalChats.contains(target.label)
+    }
+
+    private var chatFeeds: [TerminalTarget: ChatFeed] = [:]
+    /// The chats that stay laid out, most recently shown last.
+    private var keptChatTargets: [TerminalTarget] = []
+    private static let keptChats = 6
+
+    private var composers: [TerminalTarget: Composer] = [:]
+
+    /// The unsent message to an agent or Worker, kept across switches.
+    func composer(_ target: TerminalTarget) -> Composer {
+        if let composer = composers[target] { return composer }
+        let composer = Composer()
+        composers[target] = composer
+        return composer
+    }
+
+    /// The chats `ChatDeck` keeps, with `target` among them.
+    func keptChats(showing target: TerminalTarget) -> [TerminalTarget] {
+        if !keptChatTargets.contains(target) {
+            keptChatTargets.append(target)
+            if keptChatTargets.count > Self.keptChats { keptChatTargets.removeFirst() }
+        }
+        return keptChatTargets
+    }
+
+    /// The chat as last read; kept while Echo runs, as terminals are (ui-ux/0050).
+    func chatFeed(_ target: TerminalTarget) -> ChatFeed {
+        if let feed = chatFeeds[target] { return feed }
+        let feed = ChatFeed()
+        chatFeeds[target] = feed
+        return feed
+    }
+
+    /// Shows `target`'s chat, or its terminal (or a settled Worker's Final Report).
+    func setChat(_ target: TerminalTarget, on: Bool) {
+        if on {
+            terminalChats.remove(target.label)
+        } else if terminalChats.insert(target.label).inserted {
+            terminalFocusRequest += 1
+        }
+    }
+
+    /// Switches the selection between its chat and its terminal (or a settled Worker's Final
+    /// Report); the terminal takes the keyboard.
+    func toggleChat() {
+        guard let target = chatTarget else { return }
+        setChat(target, on: terminalChats.contains(target.label))
+    }
+
     /// The Files column beside the terminal (⇧⌘E); remembered, hidden until first shown.
     @Published var filesShown = UserDefaults.standard.bool(forKey: "filesShown") {
         didSet { UserDefaults.standard.set(filesShown, forKey: "filesShown") }
@@ -491,6 +583,10 @@ final class AppModel: ObservableObject {
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
             Task { @MainActor in AppModel.shared.refreshSessions() }
         }
+        refreshStats()
+        Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { _ in
+            Task { @MainActor in AppModel.shared.refreshStats() }
+        }
         readTmuxPrefix()
         removeOldDrops()
     }
@@ -629,6 +725,8 @@ final class AppModel: ObservableObject {
             // Every publish redraws the whole window; this runs every 5 seconds.
             if self.sessions != sessions { self.sessions = sessions }
             self.daemonReached()
+            // A daemon that was down or older at launch had none to give; ask again until one does.
+            if self.workerStats == nil && !self.statsReading { self.refreshStats() }
             for session in sessions where self.following[session.repo] == nil {
                 self.follow(repo: session.repo)
             }
@@ -796,6 +894,27 @@ final class AppModel: ObservableObject {
         if let repo = selectedRepo, let first = agents(repo).first { select(.agent(repo: repo, id: first.id)) }
     }
 
+    /// ⌘J: the next Need after the one on screen, in the ledger's order, repo tab by repo tab.
+    func showNextNeed() {
+        let needs: [(repo: String, need: Need)] = tabSessions.flatMap { session in
+            snapshot(session.repo).orderedNeeds.map { (session.repo, $0) }
+        }
+        let shown = needs.firstIndex { repo, need in
+            switch selection {
+            case .worker(repo, let id)?: need.worker == id
+            case .agent(repo, let id)?: need.worker == nil && need.agent == id
+            default: false
+            }
+        }
+        guard !needs.isEmpty else { return }
+        let next = needs[shown.map { ($0 + 1) % needs.count } ?? 0]
+        if let worker = next.need.worker {
+            select(.worker(repo: next.repo, id: worker))
+        } else if let agent = next.need.agent {
+            select(.agent(repo: next.repo, id: agent))
+        }
+    }
+
     /// The repo's agent at a ledger number (1 is the first), as ⌘1 to ⌘9 pick it.
     func showAgent(number: Int) {
         guard let repo = selectedRepo else { return }
@@ -870,7 +989,8 @@ final class AppModel: ObservableObject {
         }
         trackers[repo] = tracker
         if let before {
-            for worker in snapshot.justSettled(since: before) {
+            // None for the Worker the human is looking at: they saw it settle.
+            for worker in snapshot.justSettled(since: before) where !(NSApp.isActive && selection == .worker(repo: repo, id: worker.id)) {
                 Notifier.post(settled: worker, repo: repo, agent: worker.agent.flatMap { snapshot.agent($0) })
             }
         }
@@ -1265,6 +1385,27 @@ final class AppModel: ObservableObject {
             for number in numbers { try client.dismissWorker(number) }
         } then: { _ in }
     }
+
+    /// Workers of the last 7 days, read from their transcripts; nil until the first read ends.
+    @Published var workerStats: WorkerStats?
+
+    /// Reading every transcript takes seconds, so it runs off the main thread, quietly.
+    func refreshStats() {
+        statsReading = true
+        background(quiet: true) { client in
+            let result = try client.call("stats", ["days": 7])
+            let data = try JSONSerialization.data(withJSONObject: result)
+            return try JSONDecoder().decode(WorkerStats.self, from: data)
+        } then: { stats in
+            self.statsReading = false
+            if self.workerStats != stats { self.workerStats = stats }
+        } failed: {
+            self.statsReading = false
+        }
+    }
+
+    /// A stats read is under way, so the 5-second refresh does not start a second one.
+    private var statsReading = false
 
     func refreshUsage() {
         background { client in try client.call("usage.refresh") } then: { _ in }
