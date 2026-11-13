@@ -946,6 +946,153 @@ fn a_cli_or_model_that_cannot_run_stops_a_worker_before_it_starts() {
 }
 
 #[test]
+fn kiro_is_a_cli_a_bad_kiro_model_stops_a_worker_before_its_worktree() {
+    let hub = Hub::new("pickkiro");
+    let err = hub.fails(&[
+        "worker",
+        "start",
+        "lee",
+        "--spec",
+        "done quickly",
+        "--cli",
+        "kiro",
+        "--model",
+        "openai/gpt-5",
+        "--worktree",
+        "new:feat/kiro",
+    ]);
+    assert!(err.contains("kiro runs its own model ids"), "{err}");
+    assert!(!hub.ok(&["worker", "list"]).contains("w1"), "no Worker row was made");
+    assert_eq!(git(&hub.repo, &["branch", "--list", "feat/kiro"]).trim(), "");
+    assert_eq!(
+        git(&hub.repo, &["worktree", "list"]).lines().count(),
+        1,
+        "no worktree was made"
+    );
+    // The same refusal when the settings name the CLI and the model, not the flags, for a
+    // Profile that names neither.
+    let profiles = hub.state.join("profiles");
+    std::fs::create_dir_all(&profiles).unwrap();
+    std::fs::write(
+        profiles.join("scout.md"),
+        "---\nname: scout\ndescription: Scouts.\ntools: Read\nwrites: false\n---\n\nYou scout.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        hub.state.join("settings.json"),
+        r#"{"cli": "kiro", "model": "anthropic/claude-sonnet-5-5"}"#,
+    )
+    .unwrap();
+    let err = hub.fails(&[
+        "worker",
+        "start",
+        "scout",
+        "--spec",
+        "done quickly",
+        "--worktree",
+        "new:feat/kiro",
+    ]);
+    assert!(err.contains("kiro runs its own model ids"), "{err}");
+    assert_eq!(git(&hub.repo, &["branch", "--list", "feat/kiro"]).trim(), "");
+}
+
+#[test]
+fn a_kiro_worker_starts_from_the_flags_the_repo_or_the_humans_settings() {
+    let hub = Hub::new("startkiro");
+    hub.ok(&[
+        "worker",
+        "start",
+        "lee",
+        "--spec",
+        "done quickly",
+        "--cli",
+        "kiro",
+        "--model",
+        "kiro/claude-haiku-5.5",
+    ]);
+    assert!(hub.wait().contains("done (done) from w1"));
+
+    // A Profile that names neither takes the repo's `.echo/settings.json`, over the human's.
+    let profiles = hub.state.join("profiles");
+    std::fs::create_dir_all(&profiles).unwrap();
+    std::fs::write(
+        profiles.join("scout.md"),
+        "---\nname: scout\ndescription: Scouts.\ntools: Read\nwrites: false\n---\n\nYou scout.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        hub.state.join("settings.json"),
+        r#"{"cli": "kiro", "model": "claude-sonnet-5.5"}"#,
+    )
+    .unwrap();
+    let listed = hub.ok(&["profile", "list"]);
+    let scout = listed.lines().find(|l| l.starts_with("scout ")).unwrap();
+    assert!(scout.contains("kiro claude-sonnet-5.5"), "{scout}");
+    std::fs::create_dir_all(hub.repo.join(".echo")).unwrap();
+    std::fs::write(
+        hub.repo.join(".echo/settings.json"),
+        r#"{"cli": "kiro", "model": "claude-haiku-5.5"}"#,
+    )
+    .unwrap();
+    let listed = hub.ok(&["profile", "list"]);
+    let scout = listed.lines().find(|l| l.starts_with("scout ")).unwrap();
+    assert!(scout.contains("kiro claude-haiku-5.5"), "{scout}");
+    hub.ok(&["worker", "start", "scout", "--spec", "done quickly"]);
+    assert!(hub.wait().contains("done (done) from w2"));
+}
+
+#[test]
+fn a_profile_set_to_kiro_lists_with_its_model_and_gemini_is_still_refused() {
+    let hub = Hub::new("profilekiro");
+    hub.ok(&["sessions"]);
+    let edited = hub.call(
+        "profile.set",
+        serde_json::json!({ "name": "lee", "fields": { "cli": "kiro", "model": "claude-sonnet-5.5" } }),
+    );
+    assert!(edited["error"].is_null(), "{edited}");
+    let listed = hub.ok(&["profile", "list"]);
+    let lee = listed.lines().find(|l| l.starts_with("lee ")).unwrap();
+    assert!(lee.contains("kiro claude-sonnet-5.5"), "{lee}");
+    let refused = hub.call(
+        "profile.set",
+        serde_json::json!({ "name": "lee", "fields": { "cli": "gemini" } }),
+    );
+    assert!(
+        refused["error"].as_str().unwrap().contains("not supported"),
+        "{refused}"
+    );
+    let lee = std::fs::read_to_string(hub.state.join("profiles/lee.md")).unwrap();
+    assert!(lee.contains("cli: kiro"), "the refused edit changed nothing: {lee}");
+}
+
+#[test]
+fn settings_take_kiro_for_the_cli_and_for_both_models() {
+    let hub = Hub::new("settingskiro");
+    hub.ok(&["sessions"]);
+    let set = hub.call(
+        "settings.set",
+        serde_json::json!({ "settings": { "cli": "kiro", "model": "claude-sonnet-5.5", "orchestratorModel": "claude-opus-5.5" } }),
+    );
+    assert!(set["error"].is_null(), "{set}");
+    let got = hub.call("settings.get", serde_json::json!({}));
+    assert_eq!(got["result"]["cli"], "kiro", "{got}");
+    assert_eq!(got["result"]["model"], "claude-sonnet-5.5", "{got}");
+    assert_eq!(got["result"]["orchestratorModel"], "claude-opus-5.5", "{got}");
+    let file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(hub.state.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(file["cli"], "kiro");
+    let refused = hub.call("settings.set", serde_json::json!({ "settings": { "cli": "gemini" } }));
+    assert!(
+        refused["error"].as_str().unwrap().contains("not supported yet"),
+        "{refused}"
+    );
+    let got = hub.call("settings.get", serde_json::json!({}));
+    assert_eq!(got["result"]["cli"], "kiro", "a refused CLI changes nothing: {got}");
+    let cleared = hub.call("settings.set", serde_json::json!({ "settings": { "cli": "" } }));
+    assert!(cleared["result"]["cli"].is_null(), "{cleared}");
+}
+
+#[test]
 fn the_orchestrators_own_model_and_effort_are_settings() {
     let hub = Hub::new("orchsettings");
     hub.ok(&["sessions"]);

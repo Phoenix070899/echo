@@ -67,7 +67,16 @@ echoctl profile new code-reviewer  a blank Profile to fill in
 
 A Profile's `cli` and `model` (`provider/model`) can be left out: they then come from the repo's `.echo/settings.json`, else `~/.echo/settings.json` (`{"cli": "claude", "model": "anthropic/claude-sonnet-5-5"}`), else claude's own default.
 `echoctl worker start --cli --model` overrides all of them for one Worker.
-The CLIs are `claude` (Anthropic models) and `codex` (OpenAI models, as `openai/<model>`).
+The CLIs are `claude` (Anthropic models), `codex` (OpenAI models, as `openai/<model>`) and `kiro`.
+
+`kiro` runs `kiro-cli chat --v3`, so it needs `kiro-cli` installed and signed in; your Kiro credits pay for it.
+Kiro names models its own way: a bare id such as `claude-sonnet-5.5` (a dot, not a dash), or `kiro/<id>`; `kiro-cli chat --list-models` lists them.
+Another provider's `provider/model` form, like `openai/gpt-5`, is refused with a message naming it, and the start fails before a worktree is made.
+With `{"cli": "kiro", "model": "claude-sonnet-5.5"}` in `settings.json`, also set `orchestratorModel` to a Kiro id: an `anthropic/...` value is refused for a Kiro Orchestrator.
+Echo gives a Kiro agent its prompt, folders and hooks through a generated agent file, `~/.kiro/agents/echo-<hash>.md`; the name comes from the file's content, and the files are small and safe to delete.
+A Kiro Worker's allow and deny rules sit in that file; a Kiro Orchestrator may run `echoctl` commands without asking and is asked about everything else.
+Kiro Orchestrators wait for their Workers with a foreground `echoctl wait` they run again, since Kiro has no background command to wake them.
+For now Kiro has no chat tab, no usage bar, no stats and no Orchestrator renewal by context size; they show as unsupported or not counted.
 
 A repo's `.echo/settings.json` can also prepare new worktrees: `"copy": [".env"]` copies files git ignores from the main checkout, and `"setup": "pnpm install"` runs before the agent starts.
 

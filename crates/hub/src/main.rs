@@ -244,10 +244,10 @@ enum WorkerCommand {
         repo: Option<PathBuf>,
         #[arg(long)]
         json: bool,
-        /// The agent CLI to run, over the Profile's and the settings' (claude).
+        /// The agent CLI to run (claude, codex or kiro), over the Profile's and the settings' (claude).
         #[arg(long)]
         cli: Option<String>,
-        /// The model, as provider/model (anthropic/claude-opus-5-5), over the Profile's and the settings'.
+        /// The model, as provider/model (anthropic/claude-opus-5-5; kiro takes its own ids, claude-sonnet-5.5), over the Profile's and the settings'.
         #[arg(long)]
         model: Option<String>,
         /// Leave it open after its Final Report, though it has no branch of its own (else it closes).

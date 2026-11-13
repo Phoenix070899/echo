@@ -377,6 +377,33 @@ mod tests {
     }
 
     #[test]
+    fn accepts_kiro_as_a_cli_with_its_own_model_id() {
+        let text = NARUTO
+            .replace("cli: claude", "cli: kiro")
+            .replace("claude-sonnet-5-5", "claude-sonnet-5.5");
+        let profile = parse("naruto", &text).unwrap();
+        assert_eq!(profile.cli.as_deref(), Some("kiro"));
+        assert_eq!(profile.model.as_deref(), Some("claude-sonnet-5.5"));
+        assert_eq!(
+            profile.choice(),
+            crate::cli::Choice {
+                cli: Some("kiro".into()),
+                model: Some("claude-sonnet-5.5".into())
+            }
+        );
+    }
+
+    #[test]
+    fn a_kiro_profile_says_which_cli_it_wants_when_the_name_is_wrong() {
+        let text = NARUTO.replace("cli: claude", "cli: kiro-cli");
+        let err = parse("naruto", &text).unwrap_err().to_string();
+        assert!(
+            err.contains("profile naruto") && err.contains("claude, codex and kiro"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn real_profiles_load() {
         let hub = crate::paths::hub_dir();
         for name in ["hinata", "naruto", "jiraiya", "sasuke", "ino", "lee"] {
