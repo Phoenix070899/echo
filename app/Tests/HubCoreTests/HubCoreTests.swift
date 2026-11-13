@@ -348,6 +348,24 @@ func row(_ id: String, phase: String, quiet: Int, model: String? = nil, effort: 
     #expect(old.workers[0].modelLine == nil)
 }
 
+@Test func aWorkerRowNamesItsCliWhenItIsNotClaude() throws {
+    func decode(_ extra: String) throws -> WorkerRow {
+        let line = """
+        {"repo":"/r","orchestrator":{"live":true},"workers":[{"id":"w3","profile":"naruto","title":"t",\
+        "state":"running","phase":"running","quietSince":1,"place":"in place","branch":null,"live":true,\
+        "blocker":null,"openQuestions":[],"finalReport":null,"model":"claude-haiku-5.5","effort":"high",\
+        "progress":null\(extra)}],"needs":[]}
+        """
+        return try JSONDecoder().decode(Snapshot.self, from: Data(line.utf8)).workers[0]
+    }
+    let kiro = try decode(#","cli":"kiro""#)
+    #expect(kiro.cli == "kiro")
+    #expect(kiro.modelLine == "kiro: claude-haiku-5.5, high effort")
+    let older = try decode("")
+    #expect(older.cli == nil, "a snapshot without the field still decodes")
+    #expect(older.modelLine == "claude-haiku-5.5, high effort")
+}
+
 @Test func theLedgerSplitsRunningFromSettled() throws {
     let line = """
     {"repo":"/r","orchestrator":{"live":true},"workers":[\(row("w1", phase: "running", quiet: 30)),\

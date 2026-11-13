@@ -292,9 +292,12 @@ public struct WorkerRow: Decodable, Equatable, Identifiable, Sendable {
     public let live: Bool
     public let blocker: String?
     public let finalReport: String?
-    /// From the Worker's Agent Profile.
+    /// What it runs with: the CLI and model the daemon picked for it (a forced CLI included) and
+    /// its Agent Profile's effort.
     public let model: String?
     public let effort: String?
+    /// The CLI it runs on when that is not claude (`kiro`); nil for Claude and from an older daemon.
+    public let cli: String?
     /// The first line of the Worker's latest status message.
     public let progress: String?
     /// The Orchestrator that started it.
@@ -322,10 +325,12 @@ public struct WorkerRow: Decodable, Equatable, Identifiable, Sendable {
     /// trouble: the Worker finished its turn and only skipped the report.
     public var isTrouble: Bool { !isActive && phase != "done" && phase != "ended" }
 
-    /// "claude-sonnet-5-5, high effort".
+    /// "claude-sonnet-5-5, high effort", and "kiro: claude-haiku-5-5, high effort" on another CLI.
     public var modelLine: String? {
-        guard let model else { return nil }
-        return effort.map { "\(model), \($0) effort" } ?? model
+        guard model != nil || cli != nil else { return nil }
+        let name = model ?? "its own model"
+        let line = effort.map { "\(name), \($0) effort" } ?? name
+        return cli.map { "\($0): \(line)" } ?? line
     }
 }
 

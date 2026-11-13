@@ -824,6 +824,7 @@ fn worker_rows_carry_model_effort_and_progress() {
         };
         assert_eq!(row["model"], "claude-haiku-5-5");
         assert_eq!(row["effort"], "low");
+        assert!(row.get("cli").is_none(), "a Claude Worker's row names no CLI: {row}");
         assert_eq!(snapshot["orchestrator"]["model"], serde_json::Value::Null);
         if row["progress"] == "41 of 44 tests passing" {
             break;
@@ -840,6 +841,36 @@ fn snapshot(hub: &Hub) -> serde_json::Value {
     let mut lines = BufReader::new(stream).lines();
     lines.next();
     serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap()
+}
+
+#[test]
+fn a_forced_kiro_workers_row_shows_the_model_and_cli_it_ran_with_and_its_profiles_effort() {
+    let hub = Hub::new("rowforced");
+    let profiles = hub.state.join("profiles");
+    std::fs::create_dir_all(&profiles).unwrap();
+    std::fs::write(
+        profiles.join("scout.md"),
+        "---\nname: scout\ndescription: Scouts.\ncli: claude\nmodel: anthropic/claude-sonnet-5-5\neffort: high\n\
+         tools: Read\nwrites: false\n---\n\nYou scout.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        hub.state.join("settings.json"),
+        r#"{"cli": "kiro", "model": "claude-haiku-5.5", "forceCli": true}"#,
+    )
+    .unwrap();
+    hub.ok(&["worker", "start", "scout", "--spec", "done quickly"]);
+    hub.eventually("w1 to finish", || snapshot(&hub)["workers"][0]["phase"] == "done");
+    let row = snapshot(&hub)["workers"][0].clone();
+    assert_eq!(row["cli"], "kiro", "{row}");
+    assert_eq!(
+        row["model"], "claude-haiku-5.5",
+        "the forced model, not the Profile's: {row}"
+    );
+    assert_eq!(
+        row["effort"], "high",
+        "the Profile's effort still applies under force: {row}"
+    );
 }
 
 #[test]

@@ -2629,6 +2629,29 @@ impl Hub {
                 &worker.profile,
             )
             .ok();
+            // The CLI and model it runs with, as `spawn_for` picks them: `forceCli` puts the Profile's
+            // own aside. Its effort is the Profile's, which the CLI gets whatever the force.
+            let choice = cli::Choice {
+                cli: worker.cli.clone(),
+                model: worker.model.clone(),
+            };
+            let own = profile.as_ref().map(|profile| profile.choice());
+            let picked = cli::pick(
+                &paths::state_dir(),
+                Some(Path::new(&worker.repo)),
+                own.as_ref(),
+                &[&choice],
+            );
+            let (worker_cli, model) = match picked {
+                Ok(picked) => picked,
+                Err(_) => (
+                    cli::Cli::Claude,
+                    worker
+                        .model
+                        .clone()
+                        .or_else(|| profile.as_ref().and_then(|p| p.model.clone())),
+                ),
+            };
             // The Worker's latest `echoctl send --type status`, first line only: the ledger's progress line.
             let progress = db::last_message(&db, worker.id, kind::STATUS)?
                 .and_then(|m| m.body.lines().map(str::trim).find(|l| !l.is_empty()).map(String::from));
@@ -2663,13 +2686,16 @@ impl Hub {
                 "finalReport": worker.final_report,
                 "agent": worker.agent_id,
                 // The model it runs, as the human reads it: "claude-haiku-5-5", not "anthropic/claude-haiku-5-5".
-                "model": worker.model.clone().or_else(|| profile.as_ref().and_then(|p| p.model.clone()))
-                    .map(|m| m.rsplit('/').next().unwrap_or(&m).to_string()),
+                "model": model.map(|m| m.rsplit('/').next().unwrap_or(&m).to_string()),
                 "effort": profile.as_ref().and_then(|p| p.effort.clone()),
                 "progress": progress,
                 "settledAt": worker.settled_at,
                 "fanout": worker.fanout,
             });
+            // Only a CLI other than claude is named, so a Claude Worker's row is what it always was.
+            if worker_cli != cli::Cli::Claude {
+                row["cli"] = json!(worker_cli.name());
+            }
             // Echo counts the quiet time up itself, so an unchanged repo sends an unchanged snapshot.
             if for_echo {
                 row["quietSince"] = json!(quiet_since);
