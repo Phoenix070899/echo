@@ -1057,59 +1057,69 @@ fn spec_arg(spec: Option<String>, spec_file: Option<PathBuf>) -> Result<String> 
 }
 
 /// The Notification hook must never break the Worker: it reports what it can and exits 0.
-/// The hook every agent CLI runs: Claude Code's Notification hook, and Codex's SessionStart,
-/// PermissionRequest, and Stop hooks. It prints nothing, so it never answers a prompt itself.
+/// The hook every agent CLI runs: Claude Code's Notification hook, Codex's SessionStart,
+/// PermissionRequest, and Stop hooks, and Kiro's SessionStart and Stop hooks. It prints nothing,
+/// so it never answers a prompt itself.
 fn notify() {
     let report = || -> Result<()> {
         let mut input = String::new();
         std::io::stdin().read_to_string(&mut input)?;
         let event: Value = serde_json::from_str(&input).unwrap_or_default();
-        let worker = this_worker().ok();
-        if event["hook_event_name"] == "SessionStart" {
-            // Codex names its session only once it starts; resuming needs that name.
-            if let Some(id) = event["session_id"].as_str() {
-                proto::call(
-                    "session",
-                    json!({ "worker": worker, "agent": agent_env(), "session_id": id }),
-                )?;
-            }
-            return Ok(());
+        if let Some((method, params)) = hook_call(&event, this_worker().ok(), agent_env()) {
+            proto::call(method, params)?;
         }
-        let Some(worker) = worker else { return Ok(()) };
-        let (kind, message) = match event["hook_event_name"].as_str() {
-            Some("PermissionRequest") => (
-                "permission_prompt".to_string(),
-                format!(
-                    "{} wants approval: {}",
-                    event["tool_name"].as_str().unwrap_or("A tool"),
-                    event["tool_input"]["command"]
-                        .as_str()
-                        .map(String::from)
-                        .unwrap_or_else(|| event["tool_input"].to_string())
-                ),
-            ),
-            Some("Stop") => (
-                "idle_prompt".to_string(),
-                "Its turn ended with no Final Report.".to_string(),
-            ),
-            _ => (
-                event["notification_type"]
-                    .as_str()
-                    .unwrap_or("notification")
-                    .to_string(),
-                event["message"]
-                    .as_str()
-                    .or(event["title"].as_str())
-                    .unwrap_or("")
-                    .to_string(),
-            ),
-        };
-        proto::call("notify", json!({ "worker": worker, "kind": kind, "message": message }))?;
         Ok(())
     };
     if let Err(error) = report() {
         eprintln!("echoctl notify: {error:#}");
     }
+}
+
+/// The daemon call a hook event asks for, if any.
+///
+/// The events carry their own name, so no CLI is told from another by its payload: Claude Code
+/// sends only `Notification` here, Codex and Kiro send `SessionStart` and `Stop`, and a `Stop`
+/// from either of the latter two means "its turn ended".
+fn hook_call(event: &Value, worker: Option<i64>, agent: Option<i64>) -> Option<(&'static str, Value)> {
+    let name = event["hook_event_name"].as_str();
+    // Codex and Kiro name the session only once it starts; resuming needs that name. Kiro's id is
+    // `sess_<uuid>`, which is also how its `--resume-id` and its session folder spell it.
+    if matches!(name, Some("SessionStart" | "agentSpawn")) {
+        let id = event["session_id"].as_str().filter(|id| !id.is_empty())?;
+        return Some(("session", json!({ "worker": worker, "agent": agent, "session_id": id })));
+    }
+    let worker = worker?;
+    let (kind, message) = match name {
+        // Kiro's other events are not subscribed in its agent file; if one comes, it says nothing.
+        Some("UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "SessionEnd") => return None,
+        Some("PermissionRequest") => (
+            "permission_prompt".to_string(),
+            format!(
+                "{} wants approval: {}",
+                event["tool_name"].as_str().unwrap_or("A tool"),
+                event["tool_input"]["command"]
+                    .as_str()
+                    .map(String::from)
+                    .unwrap_or_else(|| event["tool_input"].to_string())
+            ),
+        ),
+        Some("Stop") => (
+            "idle_prompt".to_string(),
+            "Its turn ended with no Final Report.".to_string(),
+        ),
+        _ => (
+            event["notification_type"]
+                .as_str()
+                .unwrap_or("notification")
+                .to_string(),
+            event["message"]
+                .as_str()
+                .or(event["title"].as_str())
+                .unwrap_or("")
+                .to_string(),
+        ),
+    };
+    Some(("notify", json!({ "worker": worker, "kind": kind, "message": message })))
 }
 
 /// A new Ghostty window attached to the Worker.
@@ -1133,4 +1143,111 @@ fn open(id: i64) -> Result<()> {
         bail!("osascript could not open a Ghostty window");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KIRO_SESSION_START: &str = include_str!("../tests/fixtures/kiro/hook-SessionStart.json");
+    const KIRO_STOP: &str = include_str!("../tests/fixtures/kiro/hook-Stop.json");
+    const KIRO_ID: &str = "sess_934e96d5-ec7e-4376-89d4-109bb8026636";
+
+    fn event(text: &str) -> Value {
+        serde_json::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn kiros_session_start_records_its_session_id_as_the_hook_spells_it() {
+        let (method, params) = hook_call(&event(KIRO_SESSION_START), Some(7), Some(2)).unwrap();
+        assert_eq!(method, "session");
+        assert_eq!(params["worker"], 7);
+        assert_eq!(params["agent"], 2);
+        assert_eq!(params["session_id"], KIRO_ID);
+    }
+
+    #[test]
+    fn a_session_start_with_no_worker_names_the_agent() {
+        let (method, params) = hook_call(&event(KIRO_SESSION_START), None, Some(2)).unwrap();
+        assert_eq!(method, "session");
+        assert!(params["worker"].is_null());
+        assert_eq!(params["agent"], 2);
+    }
+
+    #[test]
+    fn kiros_documented_alias_records_the_session_too() {
+        let spawned = json!({ "hook_event_name": "agentSpawn", "session_id": KIRO_ID, "cwd": "/tmp" });
+        let (method, params) = hook_call(&spawned, Some(7), None).unwrap();
+        assert_eq!((method, params["session_id"].as_str()), ("session", Some(KIRO_ID)));
+        let nameless = json!({ "hook_event_name": "agentSpawn", "cwd": "/tmp" });
+        assert!(hook_call(&nameless, Some(7), None).is_none());
+    }
+
+    #[test]
+    fn a_session_start_without_an_id_calls_nothing() {
+        for text in [
+            r#"{"hook_event_name":"SessionStart"}"#,
+            r#"{"hook_event_name":"SessionStart","session_id":""}"#,
+        ] {
+            assert!(hook_call(&event(text), Some(7), None).is_none(), "{text}");
+        }
+    }
+
+    #[test]
+    fn kiros_stop_reports_the_idle_blocker_as_codexs_does() {
+        let codex = json!({ "hook_event_name": "Stop", "session_id": "0199-codex", "turn_id": "t1", "cwd": "/tmp" });
+        let from_kiro = hook_call(&event(KIRO_STOP), Some(7), None).unwrap();
+        assert_eq!(from_kiro, hook_call(&codex, Some(7), None).unwrap());
+        assert_eq!(from_kiro.0, "notify");
+        assert_eq!(from_kiro.1["worker"], 7);
+        assert_eq!(from_kiro.1["kind"], "idle_prompt");
+        assert_eq!(from_kiro.1["message"], "Its turn ended with no Final Report.");
+    }
+
+    #[test]
+    fn a_stop_outside_a_worker_calls_nothing() {
+        assert!(hook_call(&event(KIRO_STOP), None, Some(2)).is_none());
+    }
+
+    #[test]
+    fn kiro_events_nobody_subscribed_to_say_nothing() {
+        for text in [
+            include_str!("../tests/fixtures/kiro/hook-UserPromptSubmit.json"),
+            include_str!("../tests/fixtures/kiro/hook-PreToolUse.json"),
+            include_str!("../tests/fixtures/kiro/hook-PostToolUse.json"),
+            include_str!("../tests/fixtures/kiro/hook-SessionEnd.json"),
+        ] {
+            assert!(hook_call(&event(text), Some(7), Some(2)).is_none(), "{text}");
+        }
+    }
+
+    #[test]
+    fn claudes_notifications_and_codexs_permission_requests_map_as_before() {
+        let idle = json!({ "hook_event_name": "Notification", "notification_type": "idle_prompt",
+                           "message": "Claude is waiting for your input" });
+        let (method, params) = hook_call(&idle, Some(3), Some(1)).unwrap();
+        assert_eq!(method, "notify");
+        assert_eq!(
+            params,
+            json!({ "worker": 3, "kind": "idle_prompt", "message": "Claude is waiting for your input" })
+        );
+        let permission = json!({ "hook_event_name": "Notification", "notification_type": "permission_prompt",
+                                 "message": "Claude needs your permission to use Bash" });
+        assert_eq!(
+            hook_call(&permission, Some(3), None).unwrap().1["kind"],
+            "permission_prompt"
+        );
+        let titled = json!({ "title": "Heads up" });
+        assert_eq!(
+            hook_call(&titled, Some(3), None).unwrap().1,
+            json!({ "worker": 3, "kind": "notification", "message": "Heads up" })
+        );
+        let request = json!({ "hook_event_name": "PermissionRequest", "tool_name": "Bash",
+                              "tool_input": { "command": "rm -rf junk" } });
+        assert_eq!(
+            hook_call(&request, Some(3), None).unwrap().1,
+            json!({ "worker": 3, "kind": "permission_prompt", "message": "Bash wants approval: rm -rf junk" })
+        );
+        assert!(hook_call(&idle, None, Some(1)).is_none());
+    }
 }

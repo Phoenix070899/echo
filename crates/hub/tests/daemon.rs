@@ -61,6 +61,35 @@ impl Hub {
             .unwrap()
     }
 
+    /// `echoctl notify` as an agent CLI's hook runs it: the event on stdin, the Worker in the environment.
+    fn hook(&self, worker: &str, event: &str) -> Output {
+        let bin = Path::new(env!("CARGO_BIN_EXE_echoctl"));
+        let mut child = Command::new(bin)
+            .arg("notify")
+            .current_dir(&self.repo)
+            .env("HUB_STATE", &self.state)
+            .env_remove("HUB_AGENT")
+            .env("HUB_WORKER", worker)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(event.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    fn worker(&self, id: &str) -> serde_json::Value {
+        let listed = self.call("worker.list", serde_json::json!({ "repo": self.repo_key() }));
+        listed["result"]["workers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["id"] == id)
+            .unwrap_or_else(|| panic!("no {id} in {listed}"))
+            .clone()
+    }
+
     fn ok(&self, args: &[&str]) -> String {
         let out = self.run(args);
         assert!(
@@ -150,6 +179,56 @@ fn question_reply_and_final_report() {
         "done",
         "settled Workers stay on the Dashboard a while"
     );
+}
+
+#[test]
+fn kiros_session_start_hook_replaces_the_workers_session_id() {
+    let hub = Hub::new("kirosid");
+    hub.ok(&["worker", "start", "lee", "--spec", "idle"]);
+    let before = hub.worker("w1")["session_id"].as_str().unwrap().to_string();
+    assert!(!before.starts_with("sess_"), "{before}");
+    let started = include_str!("fixtures/kiro/hook-SessionStart.json");
+    let out = hub.hook("1", started);
+    assert!(out.status.success() && out.stdout.is_empty(), "{out:?}");
+    // Stored as the hook spells it: Kiro's `--resume-id` and session folder use the same name.
+    assert_eq!(
+        hub.worker("w1")["session_id"],
+        "sess_934e96d5-ec7e-4376-89d4-109bb8026636"
+    );
+    // A Kiro event nobody subscribed to changes nothing and reports nothing.
+    for ignored in [
+        include_str!("fixtures/kiro/hook-UserPromptSubmit.json"),
+        include_str!("fixtures/kiro/hook-PreToolUse.json"),
+        include_str!("fixtures/kiro/hook-SessionEnd.json"),
+    ] {
+        assert!(hub.hook("1", ignored).status.success());
+    }
+    let after = hub.worker("w1");
+    assert_eq!(after["session_id"], "sess_934e96d5-ec7e-4376-89d4-109bb8026636");
+    assert!(after["blocker"].is_null(), "{after}");
+}
+
+#[test]
+fn kiros_stop_hook_reports_the_idle_blocker_unless_a_background_shell_runs() {
+    let hub = Hub::new("kirostop");
+    hub.ok(&["worker", "start", "lee", "--spec", "monitor the server"]);
+    hub.ok(&["worker", "start", "lee", "--spec", "finish quietly"]);
+    hub.eventually("w1 to show waiting", || {
+        hub.status().as_array().unwrap().iter().any(|w| w["state"] == "waiting")
+    });
+    hub.eventually("w2 to end its turn on screen", || {
+        hub.ok(&["worker", "read", "w2"]).contains("Brewed for 18s")
+    });
+    let stop = include_str!("fixtures/kiro/hook-Stop.json");
+    // As for Codex: waiting on its own background shell, the Stop is nothing for the human to do.
+    assert!(hub.hook("1", stop).status.success());
+    assert!(hub.worker("w1")["blocker"].is_null());
+    assert!(hub.hook("2", stop).status.success());
+    assert_eq!(hub.worker("w2")["blocker"], "idle_prompt");
+    let blocker = hub.wait();
+    assert!(blocker.contains("blocker from w2"), "{blocker}");
+    assert!(blocker.contains("Its turn ended with no Final Report."), "{blocker}");
+    assert!(hub.worker("w1")["blocker"].is_null());
 }
 
 #[test]
@@ -2413,7 +2492,9 @@ fn a_checkouts_side_shell_runs_commands_outlives_the_daemon_and_stops() {
     // A crashed daemon leaves it running; the next takes it over with its screen.
     kill_listener(&hub.state.join("hubd.sock"));
     hub.ok(&["status"]);
-    hub.eventually("the next daemon to take the shell over", || status()["live"] == true && shows("side-repo-5"));
+    hub.eventually("the next daemon to take the shell over", || {
+        status()["live"] == true && shows("side-repo-5")
+    });
 
     assert_eq!(hub.call("side.stop", serde_json::json!({ "path": dir }))["ok"], true);
     hub.eventually("the shell to stop", || status()["live"] == false);
