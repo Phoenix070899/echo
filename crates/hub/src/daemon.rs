@@ -398,19 +398,40 @@ impl Hub {
 
     /// The CLI an agent or Worker runs on, found as at its start (`cli::recovered`), for choosing
     /// whose transcript its chat reads. None for a CLI Echo does not run.
-    fn chat_cli(&self, stored: Option<&str>, repo: &str, profile: Option<&str>) -> Option<cli::Cli> {
-        if stored.is_some_and(|name| cli::Cli::parse(name).is_err()) {
+    fn chat_cli(&self, choices: &[cli::Choice], repo: &str, profile: Option<&str>) -> Option<cli::Cli> {
+        let named = choices.iter().filter_map(|choice| choice.cli.as_deref());
+        if named.into_iter().any(|name| cli::Cli::parse(name).is_err()) {
             return None;
         }
         let (state, repo) = (paths::state_dir(), Path::new(repo));
         let profile = profile
             .and_then(|name| profile::load(&self.hub_dir, &state, Some(repo), name).ok())
             .map(|profile| profile.choice());
-        let picked = cli::Choice {
-            cli: stored.map(String::from),
+        let picked: Vec<&cli::Choice> = choices.iter().collect();
+        Some(cli::recovered(&state, Some(repo), profile.as_ref(), &picked))
+    }
+
+    /// What names a Worker's CLI, lowest first: its Orchestrator's Team for all Workers and for its
+    /// Profile (as of now, when readable), then what was picked for it.
+    fn worker_choices(&self, worker: &Worker) -> Vec<cli::Choice> {
+        let team = self.worker_team(&self.db(), worker.agent_id).ok().flatten();
+        let (all, own) = team.map(|team| team.worker_levels(&worker.profile)).unwrap_or_default();
+        vec![
+            all.runs(),
+            own.runs(),
+            cli::Choice {
+                cli: worker.cli.clone(),
+                model: worker.model.clone(),
+            },
+        ]
+    }
+
+    /// An agent's stored CLI as `chat_cli` takes it.
+    fn agent_choices(&self, agent: &db::Agent) -> Vec<cli::Choice> {
+        vec![cli::Choice {
+            cli: self.agent_stored_cli(agent),
             model: None,
-        };
-        Some(cli::recovered(&state, Some(repo), profile.as_ref(), &[&picked]))
+        }]
     }
 
     fn chat_read(&self, p: &Value) -> Result<Value> {
@@ -420,7 +441,7 @@ impl Hub {
             Some(id) => {
                 let worker = db::worker(&self.db(), id)?;
                 let inputs = db::inputs(&self.db(), id)?;
-                let cli = self.chat_cli(worker.cli.as_deref(), &worker.repo, Some(&worker.profile));
+                let cli = self.chat_cli(&self.worker_choices(&worker), &worker.repo, Some(&worker.profile));
                 (worker.session_id, cli, self.live(id).ok(), inputs, vec![])
             }
             None => {
@@ -428,7 +449,7 @@ impl Hub {
                 let echo =
                     [launch::RESUMED, launch::RENEWED].map(|text| (db::origin::ECHO.to_string(), text.to_string()));
                 let earlier = db::agent_sessions(&self.db(), agent.id)?;
-                let cli = self.chat_cli(self.agent_stored_cli(&agent).as_deref(), &agent.repo, None);
+                let cli = self.chat_cli(&self.agent_choices(&agent), &agent.repo, None);
                 (
                     agent.session_id,
                     cli,
@@ -913,6 +934,15 @@ impl Hub {
             .transpose()
     }
 
+    /// The Team of the Orchestrator that started a Worker, read now. None for a Worker with no
+    /// agent, an agent that is gone, or an agent with no Team.
+    fn worker_team(&self, db: &Connection, agent: Option<i64>) -> Result<Option<team::Team>> {
+        let Some(agent) = agent.and_then(|id| db::agent(db, id).ok()) else {
+            return Ok(None);
+        };
+        self.agent_team(&agent)
+    }
+
     /// The CLI an agent is known by before it runs: its own, else its Team's.
     fn agent_stored_cli(&self, agent: &db::Agent) -> Option<String> {
         agent.cli.clone().or_else(|| {
@@ -1114,24 +1144,26 @@ impl Hub {
                 continue;
             };
             let adopted = match kind {
-                'w' => db::worker(&self.db(), id).ok().map(|worker| {
-                    let repo = Path::new(&worker.repo);
-                    let picked = cli::Choice {
-                        cli: worker.cli.clone(),
-                        model: worker.model.clone(),
-                    };
-                    let profile = profile::load(&self.hub_dir, &state, Some(repo), &worker.profile)
-                        .ok()
-                        .map(|profile| profile.choice());
-                    let worker_cli = cli::recovered(&state, Some(repo), profile.as_ref(), &[&picked]);
-                    Live::adopt(&key, id, worker_cli, self.worker_exit()).map(|live| {
-                        live.map(|live| {
-                            self.live.lock().unwrap().insert(id, Arc::clone(&live));
-                            let hub = Arc::clone(self);
-                            std::thread::spawn(move || hub.watch(live));
+                'w' => {
+                    // Read first: `worker_choices` takes the database itself.
+                    let worker = db::worker(&self.db(), id).ok();
+                    worker.map(|worker| {
+                        let repo = Path::new(&worker.repo);
+                        let choices = self.worker_choices(&worker);
+                        let picked: Vec<&cli::Choice> = choices.iter().collect();
+                        let profile = profile::load(&self.hub_dir, &state, Some(repo), &worker.profile)
+                            .ok()
+                            .map(|profile| profile.choice());
+                        let worker_cli = cli::recovered(&state, Some(repo), profile.as_ref(), &picked);
+                        Live::adopt(&key, id, worker_cli, self.worker_exit()).map(|live| {
+                            live.map(|live| {
+                                self.live.lock().unwrap().insert(id, Arc::clone(&live));
+                                let hub = Arc::clone(self);
+                                std::thread::spawn(move || hub.watch(live));
+                            })
                         })
                     })
-                }),
+                }
                 'a' => db::agent(&self.db(), id).ok().map(|agent| {
                     let choice = cli::Choice {
                         cli: self.agent_stored_cli(&agent),
@@ -1293,7 +1325,7 @@ impl Hub {
                 let (session, cwd, cli) = match p.get("worker").and_then(Value::as_i64) {
                     Some(id) => {
                         let worker = db::worker(&self.db(), id)?;
-                        let cli = self.chat_cli(worker.cli.as_deref(), &worker.repo, Some(&worker.profile));
+                        let cli = self.chat_cli(&self.worker_choices(&worker), &worker.repo, Some(&worker.profile));
                         (worker.session_id, PathBuf::from(worker.cwd), cli)
                     }
                     None => {
@@ -1303,7 +1335,7 @@ impl Hub {
                             .clone()
                             .map(PathBuf::from)
                             .unwrap_or_else(|| PathBuf::from(&agent.repo));
-                        let cli = self.chat_cli(self.agent_stored_cli(&agent).as_deref(), &agent.repo, None);
+                        let cli = self.chat_cli(&self.agent_choices(&agent), &agent.repo, None);
                         (agent.session_id, cwd, cli)
                     }
                 };
@@ -1465,6 +1497,16 @@ impl Hub {
                     .map(|r| repo::root(Path::new(r)))
                     .transpose()?;
                 let state = paths::state_dir();
+                // What each Profile runs with under a Team's `workers`, when one is named.
+                let team = match p
+                    .get("team")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                {
+                    Some(name) => Some(team::load(&self.hub_dir, &state, repo.as_deref(), name)?),
+                    None => None,
+                };
                 let mut broken = Vec::new();
                 let mut profiles = Vec::new();
                 for entry in profile::entries(&self.hub_dir, &state, repo.as_deref()) {
@@ -1475,11 +1517,13 @@ impl Hub {
                             continue;
                         }
                     };
-                    let (cli, model, problem) = match cli::pick(&state, repo.as_deref(), Some(&p.choice()), &[]) {
-                        Ok((cli, model)) => (cli.name().to_string(), model, None),
+                    let resolved = profile::resolve(&state, repo.as_deref(), p, team.as_ref(), &cli::Choice::default());
+                    let (cli, model, effort, problem) = match resolved {
+                        Ok((cli, model, effort)) => (cli.name().to_string(), model, effort, None),
                         Err(e) => (
                             p.cli.clone().unwrap_or_else(|| "claude".into()),
                             p.model.clone(),
+                            p.effort.clone(),
                             Some(e.to_string()),
                         ),
                     };
@@ -1487,7 +1531,8 @@ impl Hub {
                         "name": p.name, "description": p.description, "writes": p.writes,
                         // What it runs with here, and what its own file says.
                         "cli": cli, "model": model.unwrap_or_else(|| format!("{cli} default")),
-                        "ownCli": p.cli, "ownModel": p.model, "effort": p.effort,
+                        "ownCli": p.cli, "ownModel": p.model, "effort": effort, "ownEffort": p.effort,
+                        "team": team.as_ref().map(|team| team.name.clone()),
                         "level": entry.level.label(), "path": entry.path,
                         "replaces": entry.replaces.iter().map(|l| l.label()).collect::<Vec<_>>(),
                         "problem": problem,
@@ -1815,15 +1860,19 @@ impl Hub {
         }
     }
 
-    /// A Worker's Profile and the CLI and model picked for it.
+    /// A Worker's Profile, with the effort picked for it, and the CLI and model picked for it. Its
+    /// Orchestrator's Team is read now, so an edited Team applies at a resume (features/0081).
     fn pick_for(&self, worker: &Worker) -> Result<(profile::Profile, cli::Cli, Option<String>)> {
         let repo = Path::new(&worker.repo);
-        let profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(repo), &worker.profile)?;
+        let mut profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(repo), &worker.profile)?;
+        let team = self.worker_team(&self.db(), worker.agent_id)?;
         let picked = cli::Choice {
             cli: worker.cli.clone(),
             model: worker.model.clone(),
         };
-        let (worker_cli, model) = cli::pick(&paths::state_dir(), Some(repo), Some(&profile.choice()), &[&picked])?;
+        let (worker_cli, model, effort) =
+            profile::resolve(&paths::state_dir(), Some(repo), &profile, team.as_ref(), &picked)?;
+        profile.effort = effort;
         Ok((profile, worker_cli, model))
     }
 
@@ -1938,19 +1987,21 @@ impl Hub {
             cli: picked("cli").map(String::from),
             model: picked("model").map(String::from),
         };
-        // A CLI or model that cannot run, or a Kiro Worker without its notes, fails here, before a
-        // worktree is made for it.
-        let (worker_cli, _) = cli::pick(&paths::state_dir(), Some(&repo_root), Some(&profile.choice()), &[&runs])?;
+        // The Orchestrator starting it (`HUB_AGENT` via `echoctl worker start`), else the repo's first.
+        let agent = match p.get("agent").and_then(Value::as_i64) {
+            Some(agent) => Some(agent),
+            None => db::first_orchestrator(&self.db(), &repo_root.display().to_string())?.map(|a| a.id),
+        };
+        // A CLI or model that cannot run (the Orchestrator's Team included), or a Kiro Worker without
+        // its notes, fails here, before a worktree is made for it.
+        let team = self.worker_team(&self.db(), agent)?;
+        let (worker_cli, _, _) =
+            profile::resolve(&paths::state_dir(), Some(&repo_root), &profile, team.as_ref(), &runs)?;
         worker_cli.check_worker_notes(&self.hub_dir)?;
         let spec = str_param(p, "spec")?;
         let title = match p.get("title").and_then(Value::as_str) {
             Some(title) if !title.trim().is_empty() => title.to_string(),
             _ => title_from_spec(spec),
-        };
-        // The Orchestrator starting it (`HUB_AGENT` via `echoctl worker start`), else the repo's first.
-        let agent = match p.get("agent").and_then(Value::as_i64) {
-            Some(agent) => Some(agent),
-            None => db::first_orchestrator(&self.db(), &repo_root.display().to_string())?.map(|a| a.id),
         };
         // In place means where its Orchestrator works, which may be that agent's own worktree.
         let home = self.home_of(agent, &repo_root.display().to_string());
@@ -2067,9 +2118,12 @@ impl Hub {
         if ![state::LOST, state::EXITED, state::ENDED].contains(&worker.state.as_str()) {
             bail!("w{id} is {}; only lost, exited, or ended Workers resume", worker.state);
         }
+        // Its Orchestrator's Team is read again, so a Team edited since it started applies now, and
+        // one that cannot run refuses the resume (a test daemon included).
+        let picked = self.pick_for(&worker)?;
         let worker_cli = match &self.test_agent {
             Some(_) => cli::Cli::Claude,
-            None => self.pick_for(&worker)?.1,
+            None => picked.1,
         };
         let (spec, message) = resume_message(&self.db(), id, worker_cli)?;
         db::set_state(&self.db(), id, state::STARTING)?;
@@ -2632,6 +2686,8 @@ impl Hub {
         let db = self.db();
         let now = db::now();
         let mut rows = Vec::new();
+        // Each Orchestrator's Team is read once for the whole snapshot.
+        let mut teams: HashMap<Option<i64>, Option<team::Team>> = HashMap::new();
         for worker in db::workers(&db, repo)? {
             let recent = match worker.settled_at {
                 None => true,
@@ -2659,20 +2715,32 @@ impl Hub {
                 &worker.profile,
             )
             .ok();
-            // The CLI and model it runs with, as `spawn_for` picks them: `forceCli` puts the Profile's
-            // own aside. Its effort is the Profile's, which the CLI gets whatever the force.
+            // The CLI, model and effort it runs with, as `spawn_for` picks them: its Orchestrator's
+            // Team over its Profile, and `forceCli` putting the Profile's own cli and model aside
+            // where the Team names none.
             let choice = cli::Choice {
                 cli: worker.cli.clone(),
                 model: worker.model.clone(),
             };
-            let own = profile.as_ref().map(|profile| profile.choice());
-            let picked = cli::pick(
-                &paths::state_dir(),
-                Some(Path::new(&worker.repo)),
-                own.as_ref(),
-                &[&choice],
-            );
-            let (worker_cli, model) = match picked {
+            let team = teams
+                .entry(worker.agent_id)
+                .or_insert_with(|| self.worker_team(&db, worker.agent_id).ok().flatten());
+            let picked = profile
+                .as_ref()
+                .map(|profile| {
+                    profile::resolve(
+                        &paths::state_dir(),
+                        Some(Path::new(&worker.repo)),
+                        profile,
+                        team.as_ref(),
+                        &choice,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    cli::pick(&paths::state_dir(), Some(Path::new(&worker.repo)), None, &[&choice])
+                        .map(|(cli, model)| (cli, model, None))
+                });
+            let (worker_cli, model, effort) = match picked {
                 Ok(picked) => picked,
                 Err(_) => (
                     cli::Cli::Claude,
@@ -2680,6 +2748,7 @@ impl Hub {
                         .model
                         .clone()
                         .or_else(|| profile.as_ref().and_then(|p| p.model.clone())),
+                    profile.as_ref().and_then(|p| p.effort.clone()),
                 ),
             };
             // The Worker's latest `echoctl send --type status`, first line only: the ledger's progress line.
@@ -2717,7 +2786,7 @@ impl Hub {
                 "agent": worker.agent_id,
                 // The model it runs, as the human reads it: "claude-haiku-5-5", not "anthropic/claude-haiku-5-5".
                 "model": model.map(|m| m.rsplit('/').next().unwrap_or(&m).to_string()),
-                "effort": profile.as_ref().and_then(|p| p.effort.clone()),
+                "effort": effort,
                 "progress": progress,
                 "settledAt": worker.settled_at,
                 "fanout": worker.fanout,

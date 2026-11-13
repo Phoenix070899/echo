@@ -174,7 +174,11 @@ enum Command {
 #[derive(Subcommand)]
 enum ProfileCommand {
     /// Every Profile Workers can start as here, with where it comes from.
-    List,
+    List {
+        /// Show what each Profile runs with under this Team's `workers`.
+        #[arg(long)]
+        team: Option<String>,
+    },
     /// Copy a Profile into yours (or this repo's) to change it; the copy replaces the original.
     Copy {
         name: String,
@@ -390,7 +394,10 @@ fn profile_command(command: ProfileCommand) -> Result<()> {
     let (hub, state, repo) = (paths::hub_dir(), paths::state_dir(), profile_repo());
     let entries = profile::entries(&hub, &state, repo.as_deref());
     match command {
-        ProfileCommand::List => {
+        ProfileCommand::List { team } => {
+            let team = team
+                .map(|name| team::load(&hub, &state, repo.as_deref(), &name))
+                .transpose()?;
             let width = entries.iter().map(|e| e.name.len()).max().unwrap_or(0);
             for entry in &entries {
                 let from = match entry.replaces.last() {
@@ -399,11 +406,17 @@ fn profile_command(command: ProfileCommand) -> Result<()> {
                 };
                 match &entry.profile {
                     Ok(p) => {
-                        let runs = match cli::pick(&state, repo.as_deref(), Some(&p.choice()), &[]) {
-                            Ok((cli, Some(model))) => format!("{} {model}", cli.name()),
-                            Ok((cli, None)) => format!("{} default", cli.name()),
-                            Err(e) => format!("cannot run: {e}"),
-                        };
+                        let runs =
+                            match profile::resolve(&state, repo.as_deref(), p, team.as_ref(), &Default::default()) {
+                                Ok((cli, model, effort)) => {
+                                    let model = model.unwrap_or_else(|| "default".into());
+                                    match (&team, effort) {
+                                        (Some(_), Some(effort)) => format!("{} {model} {effort}", cli.name()),
+                                        _ => format!("{} {model}", cli.name()),
+                                    }
+                                }
+                                Err(e) => format!("cannot run: {e}"),
+                            };
                         println!("{:width$}  {from:25}  {runs:32}  {}", entry.name, p.description)
                     }
                     Err(e) => println!("{:width$}  {from:25}  does not load: {e}", entry.name),

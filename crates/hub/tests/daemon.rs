@@ -3054,3 +3054,282 @@ fn echoctl_ui_orchestrator_passes_its_team() {
     let refused = hub.fails(&["ui", "orchestrator", "--team", "nope"]);
     assert!(refused.contains("unknown team"), "{refused}");
 }
+
+/// A Team whose Workers run on Kiro: Haiku at medium for all, naruto on Sonnet at low.
+const KIRO_WORKERS: &str = r#"{"workers": {"cli": "kiro", "model": "claude-haiku-5.5", "effort": "medium",
+    "profiles": {"naruto": {"model": "claude-sonnet-5.5", "effort": "low"}}}}"#;
+
+fn open_orchestrator(hub: &Hub, team: Option<&str>) -> i64 {
+    let mut params = serde_json::json!({ "repo": hub.repo_key(), "kind": "orchestrator" });
+    if let Some(team) = team {
+        params["team"] = serde_json::json!(team);
+    }
+    let opened = hub.call("agent.open", params);
+    assert_eq!(opened["ok"], true, "{opened}");
+    opened["result"]["agent"].as_i64().unwrap()
+}
+
+fn start_under(hub: &Hub, agent: i64, args: &[&str]) -> String {
+    let mut line = vec!["worker", "start"];
+    line.extend_from_slice(args);
+    let out = hub.run_with(&line, &[("HUB_AGENT", &agent.to_string())]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The ledger row of `w<n>` as Echo gets it.
+fn row_of(hub: &Hub, n: u32) -> serde_json::Value {
+    snapshot(hub)["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == format!("w{n}"))
+        .cloned()
+        .unwrap_or_else(|| panic!("no w{n} in {}", snapshot(hub)))
+}
+
+/// What a row names of how its Worker runs.
+fn runs_of(row: &serde_json::Value) -> (serde_json::Value, serde_json::Value, serde_json::Value) {
+    (row["cli"].clone(), row["model"].clone(), row["effort"].clone())
+}
+
+#[test]
+fn workers_run_with_the_team_of_the_orchestrator_that_started_them() {
+    let hub = Hub::new("team-workers");
+    hub.ok(&["status"]);
+    put_team(&hub, "lean", KIRO_WORKERS);
+    let (with, without) = (open_orchestrator(&hub, Some("lean")), open_orchestrator(&hub, None));
+    start_under(&hub, with, &["lee", "--spec", "done quickly"]);
+    start_under(&hub, with, &["naruto", "--spec", "done quickly"]);
+    start_under(
+        &hub,
+        with,
+        &["lee", "--spec", "done quickly", "--model", "claude-opus-5.5"],
+    );
+    start_under(&hub, without, &["lee", "--spec", "done quickly"]);
+    start_under(&hub, without, &["naruto", "--spec", "done quickly"]);
+    hub.eventually("every Worker to finish", || {
+        (1..=5).all(|n| row_of(&hub, n)["phase"] == "done")
+    });
+    let kiro = |model: &str, effort: &str| (serde_json::json!("kiro"), model.into(), effort.into());
+    assert_eq!(
+        runs_of(&row_of(&hub, 1)),
+        kiro("claude-haiku-5.5", "medium"),
+        "Team workers"
+    );
+    assert_eq!(
+        runs_of(&row_of(&hub, 2)),
+        kiro("claude-sonnet-5.5", "low"),
+        "the Team's entry for naruto"
+    );
+    assert_eq!(
+        runs_of(&row_of(&hub, 3)),
+        kiro("claude-opus-5.5", "medium"),
+        "what was picked for the Worker beats the Team's model"
+    );
+    // An Orchestrator with no Team: its Workers run exactly as the Profiles say, as before.
+    let plain = |model: &str, effort: &str| (serde_json::Value::Null, model.into(), effort.into());
+    assert_eq!(runs_of(&row_of(&hub, 4)), plain("claude-haiku-5-5", "low"));
+    assert_eq!(runs_of(&row_of(&hub, 5)), plain("claude-sonnet-5-5", "high"));
+    assert_eq!(row_of(&hub, 1)["agent"], with);
+    assert_eq!(row_of(&hub, 4)["agent"], without);
+}
+
+#[test]
+fn a_fan_out_and_a_verifier_follow_the_team_of_their_orchestrator() {
+    let hub = Hub::new("team-fanout");
+    hub.ok(&["status"]);
+    put_team(
+        &hub,
+        "lean",
+        r#"{"workers": {"cli": "kiro", "model": "claude-haiku-5.5", "effort": "low",
+            "profiles": {"sasuke": {"model": "claude-sonnet-5.5", "effort": "medium"}}}}"#,
+    );
+    let other = open_orchestrator(&hub, None);
+    let with = open_orchestrator(&hub, Some("lean"));
+    assert!(other < with, "the repo's first Orchestrator has no Team");
+    let fanned = hub.call(
+        "worker.fanout",
+        serde_json::json!({ "repo": hub.repo_key(), "agent": with, "profile": "lee", "spec": "done",
+                            "branch": "feat/try", "count": 2 }),
+    );
+    assert_eq!(fanned["result"]["workers"], serde_json::json!(["w1", "w2"]), "{fanned}");
+    hub.eventually("both tries to finish", || {
+        row_of(&hub, 1)["phase"] == "done" && row_of(&hub, 2)["phase"] == "done"
+    });
+    for n in [1, 2] {
+        let row = row_of(&hub, n);
+        assert_eq!(
+            runs_of(&row),
+            (serde_json::json!("kiro"), "claude-haiku-5.5".into(), "low".into()),
+            "{row}"
+        );
+    }
+    // The verifier the daemon starts for a writer is its Worker too: sasuke, by the Team's entry.
+    start_under(&hub, with, &["lee", "--spec", "next FAILME", "--verify"]);
+    hub.eventually("the verifier to start", || {
+        snapshot(&hub)["workers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["profile"] == "sasuke")
+    });
+    let verifier = snapshot(&hub)["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["profile"] == "sasuke")
+        .cloned()
+        .unwrap();
+    assert_eq!(verifier["agent"], with, "{verifier}");
+    assert_eq!(
+        runs_of(&verifier),
+        (serde_json::json!("kiro"), "claude-sonnet-5.5".into(), "medium".into()),
+        "{verifier}"
+    );
+}
+
+#[test]
+fn forcecli_applies_to_a_team_worker_only_where_the_team_names_nothing() {
+    let hub = Hub::new("team-force");
+    hub.ok(&["status"]);
+    std::fs::write(
+        hub.state.join("settings.json"),
+        r#"{"cli": "kiro", "model": "claude-haiku-5.5", "forceCli": true}"#,
+    )
+    .unwrap();
+    put_team(
+        &hub,
+        "naruto-only",
+        r#"{"workers": {"profiles": {"naruto": {"model": "claude-sonnet-5.5"}}}}"#,
+    );
+    let agent = open_orchestrator(&hub, Some("naruto-only"));
+    start_under(&hub, agent, &["lee", "--spec", "done quickly"]);
+    start_under(&hub, agent, &["naruto", "--spec", "done quickly"]);
+    hub.eventually("both Workers to finish", || {
+        row_of(&hub, 1)["phase"] == "done" && row_of(&hub, 2)["phase"] == "done"
+    });
+    let kiro = |model: &str, effort: &str| (serde_json::json!("kiro"), model.into(), effort.into());
+    assert_eq!(
+        runs_of(&row_of(&hub, 1)),
+        kiro("claude-haiku-5.5", "low"),
+        "the Team names nothing for lee: force applies, with lee's effort"
+    );
+    assert_eq!(
+        runs_of(&row_of(&hub, 2)),
+        kiro("claude-sonnet-5.5", "high"),
+        "the Team's model beats the forced one; the forced cli stays"
+    );
+}
+
+#[test]
+fn a_team_that_cannot_run_stops_a_worker_before_its_worktree_and_a_resume_reads_it_again() {
+    let hub = Hub::new("team-resume");
+    hub.ok(&["status"]);
+    put_team(&hub, "lean", KIRO_WORKERS);
+    let agent = open_orchestrator(&hub, Some("lean"));
+    start_under(&hub, agent, &["lee", "--spec", "exit"]);
+    hub.eventually("w1 to give up", || row_of(&hub, 1)["phase"] == "exited");
+    assert_eq!(runs_of(&row_of(&hub, 1)).1, "claude-haiku-5.5");
+
+    // Edited to a model Kiro refuses, the Team stops the next start before a worktree is made...
+    put_team(
+        &hub,
+        "lean",
+        r#"{"workers": {"cli": "kiro", "model": "anthropic/claude-haiku-5-5"}}"#,
+    );
+    let refused = hub.run_with(
+        &[
+            "worker",
+            "start",
+            "lee",
+            "--spec",
+            "done",
+            "--worktree",
+            "new:feat/team",
+        ],
+        &[("HUB_AGENT", &agent.to_string())],
+    );
+    assert!(!refused.status.success());
+    let message = String::from_utf8_lossy(&refused.stderr).into_owned();
+    assert!(message.contains("lean"), "{message}");
+    assert_eq!(git(&hub.repo, &["branch", "--list", "feat/team"]).trim(), "");
+    assert_eq!(git(&hub.repo, &["worktree", "list"]).lines().count(), 1);
+    assert!(!hub.ok(&["worker", "list"]).contains("w2"), "no Worker row was made");
+    // ...and refuses to resume the Worker the Team no longer lets run.
+    let resume = hub.fails(&["worker", "resume", "w1"]);
+    assert!(resume.contains("lean"), "{resume}");
+
+    // Mended with another model, the same Worker resumes on it.
+    put_team(
+        &hub,
+        "lean",
+        r#"{"workers": {"cli": "kiro", "model": "claude-sonnet-5.5", "effort": "high"}}"#,
+    );
+    assert!(hub.ok(&["worker", "resume", "w1"]).contains("Resumed w1"));
+    assert_eq!(
+        runs_of(&row_of(&hub, 1)),
+        (serde_json::json!("kiro"), "claude-sonnet-5.5".into(), "high".into())
+    );
+}
+
+#[test]
+fn profile_list_shows_what_each_profile_runs_with_under_a_team() {
+    let hub = Hub::new("team-profiles");
+    hub.ok(&["status"]);
+    put_team(&hub, "lean", KIRO_WORKERS);
+    let plain = hub.ok(&["profile", "list"]);
+    let lee = |listed: &str| listed.lines().find(|l| l.starts_with("lee ")).unwrap().to_string();
+    assert!(lee(&plain).contains("claude anthropic/claude-haiku-5-5"), "{plain}");
+    let under = hub.ok(&["profile", "list", "--team", "lean"]);
+    assert!(lee(&under).contains("kiro claude-haiku-5.5 medium"), "{under}");
+    let naruto = under.lines().find(|l| l.starts_with("naruto ")).unwrap();
+    assert!(naruto.contains("kiro claude-sonnet-5.5 low"), "{under}");
+    assert!(hub
+        .fails(&["profile", "list", "--team", "nope"])
+        .contains("unknown team"));
+
+    let listed = hub.call(
+        "profiles.list",
+        serde_json::json!({ "repo": hub.repo_key(), "team": "lean" }),
+    );
+    let find = |listed: &serde_json::Value, name: &str| {
+        listed["result"]["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .cloned()
+            .unwrap()
+    };
+    let lee = find(&listed, "lee");
+    assert_eq!(
+        (
+            &lee["cli"],
+            &lee["model"],
+            &lee["effort"],
+            &lee["ownEffort"],
+            &lee["team"]
+        ),
+        (
+            &serde_json::json!("kiro"),
+            &serde_json::json!("claude-haiku-5.5"),
+            &serde_json::json!("medium"),
+            &serde_json::json!("low"),
+            &serde_json::json!("lean")
+        ),
+        "{lee}"
+    );
+    let unlisted = hub.call("profiles.list", serde_json::json!({ "repo": hub.repo_key() }));
+    let lee = find(&unlisted, "lee");
+    assert_eq!(
+        (&lee["cli"], &lee["effort"], &lee["team"]),
+        (
+            &serde_json::json!("claude"),
+            &serde_json::json!("low"),
+            &serde_json::Value::Null
+        )
+    );
+    let bad = hub.call("profiles.list", serde_json::json!({ "team": "nope" }));
+    assert_eq!(bad["ok"], false, "{bad}");
+}

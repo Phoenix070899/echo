@@ -3,16 +3,13 @@
 //! same-named one before it, whole: Echo's own (`teams/` in the echo repo), the human's (`teams/`
 //! in the daemon's state), then the repo's (`.echo/teams/`, shared through its git).
 
-// An Orchestrator starts with its Team; the Worker side of a Team (`workers`) is not read yet.
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::cli::Cli;
+use crate::cli::{self, Cli};
 use crate::settings;
 
 /// A Team's file, apart from its name, which is the file's.
@@ -60,6 +57,30 @@ pub struct Choice {
     pub effort: Option<String>,
 }
 
+impl Choice {
+    /// Its CLI and model, as the order of `cli::pick` takes them; the effort is read apart.
+    pub fn runs(&self) -> cli::Choice {
+        cli::Choice {
+            cli: self.cli.clone(),
+            model: self.model.clone(),
+        }
+    }
+}
+
+impl Team {
+    /// What the Team names for a Worker of `profile`: first for all its Workers, then for that
+    /// Profile alone, which is the higher of the two (features/0081).
+    pub fn worker_levels(&self, profile: &str) -> (Choice, Choice) {
+        let Some(workers) = &self.workers else {
+            return Default::default();
+        };
+        (
+            workers.all.clone(),
+            workers.profiles.get(profile).cloned().unwrap_or_default(),
+        )
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WorkersSetup {
@@ -92,6 +113,7 @@ pub enum Origin {
     Repo,
 }
 
+#[allow(dead_code)] // used by the Team requests and `echoctl team` (T04)
 impl Origin {
     pub fn label(self) -> &'static str {
         match self {
@@ -124,6 +146,7 @@ pub fn dirs(hub: &Path, state: &Path, repo: Option<&Path>) -> Vec<(Origin, PathB
 }
 
 /// The folder a level's Teams are written to; Echo's own is never written.
+#[allow(dead_code)] // used by the Team requests and `echoctl team` (T04)
 pub fn level_dir(state: &Path, repo: Option<&Path>, origin: Origin) -> Result<PathBuf> {
     match (origin, repo) {
         (Origin::Shipped, _) => bail!("Echo's own Teams are not changed; duplicate one into yours"),
@@ -136,6 +159,7 @@ pub fn level_dir(state: &Path, repo: Option<&Path>, origin: Origin) -> Result<Pa
 /// One name's winning file: the Team it parses to, if it does, and what is wrong with it, if
 /// anything. A Team with a `problem` is listed but cannot be used.
 #[derive(Debug)]
+#[allow(dead_code)] // used by the Team requests and `echoctl team` (T04)
 pub struct Entry {
     pub name: String,
     pub origin: Origin,
@@ -230,6 +254,7 @@ pub fn load(hub: &Path, state: &Path, repo: Option<&Path>, name: &str) -> Result
 /// Writes `team` as `<name>.json` in `dir` (a level's folder, see `level_dir`), whole and atomically:
 /// the file is complete or the old one stays. The name and every field are checked first, so a Team
 /// that cannot run is never written; `fallback` is the CLI a field without its own runs on.
+#[allow(dead_code)] // used by the Team requests and `echoctl team` (T04)
 pub fn save(dir: &Path, team: &Team, fallback: Cli) -> Result<PathBuf> {
     if !valid_name(&team.name) {
         bail!("a Team name is 1 to 40 lowercase letters, digits, and -, like claude-lean");
@@ -250,6 +275,7 @@ pub fn save(dir: &Path, team: &Team, fallback: Cli) -> Result<PathBuf> {
 
 /// Deletes the Team's file at `origin`, so the one below it is in force again; Echo's own are
 /// never deleted.
+#[allow(dead_code)] // used by the Team requests and `echoctl team` (T04)
 pub fn delete(state: &Path, repo: Option<&Path>, origin: Origin, name: &str) -> Result<()> {
     if !valid_name(name) {
         bail!("{name:?} is not a Team name");

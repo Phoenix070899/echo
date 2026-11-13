@@ -338,6 +338,29 @@ impl Profile {
     }
 }
 
+/// A Worker's CLI, model and effort, from the highest: what was picked for it (`picked`), its
+/// Orchestrator's Team for its Profile, its Team for all Workers, then its Profile's own and the
+/// levels below (features/0081, 0036). `forceCli` (features/0075) puts a Profile's own cli and
+/// model aside but never what a Team names, so it applies only where the Team names nothing.
+/// Without a Team this is `cli::pick`, and the effort is the Profile's.
+pub fn resolve(
+    state: &Path,
+    repo: Option<&Path>,
+    profile: &Profile,
+    team: Option<&crate::team::Team>,
+    picked: &crate::cli::Choice,
+) -> Result<(Cli, Option<String>, Option<String>)> {
+    let (all, own) = team.map(|team| team.worker_levels(&profile.name)).unwrap_or_default();
+    let (cli, model) = crate::cli::pick(
+        state,
+        repo,
+        Some(&profile.choice()),
+        &[&all.runs(), &own.runs(), picked],
+    )?;
+    let effort = own.effort.or(all.effort).or_else(|| profile.effort.clone());
+    Ok((cli, model, effort))
+}
+
 /// What a Worker starts with, whatever its CLI; `picked` is the CLI and model already picked for it.
 pub fn start(
     hub: &Path,
@@ -574,5 +597,180 @@ mod tests {
         assert!(create(&hub, &state, None, "scout", Level::Yours)
             .unwrap()
             .ends_with("profiles/scout.md"));
+    }
+
+    /// What `resolve` gives naruto (claude, claude-sonnet-5-5, high in its file) under the settings
+    /// and the Team given, with `picked` as the explicit choice.
+    fn resolved(
+        settings: &str,
+        team: Option<&str>,
+        profile: &str,
+        picked: (Option<&str>, Option<&str>),
+    ) -> Result<(Cli, Option<String>, Option<String>)> {
+        static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let state = std::env::temp_dir().join(format!("hub-profile-resolve-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("settings.json"), settings).unwrap();
+        let mut found = parse("naruto", NARUTO).unwrap();
+        found.name = profile.to_string();
+        let team = team.map(|text| crate::team::parse(text).unwrap());
+        let picked = crate::cli::Choice {
+            cli: picked.0.map(String::from),
+            model: picked.1.map(String::from),
+        };
+        let resolved = resolve(&state, None, &found, team.as_ref(), &picked);
+        let _ = std::fs::remove_dir_all(&state);
+        resolved
+    }
+
+    fn runs(cli: Cli, model: &str, effort: &str) -> (Cli, Option<String>, Option<String>) {
+        (cli, Some(model.to_string()), Some(effort.to_string()))
+    }
+
+    #[test]
+    fn every_step_of_the_order_for_a_worker() {
+        let sonnet = "claude-sonnet-5-5";
+        let team = r#"{"workers": {"model": "claude-haiku-5-5", "effort": "low",
+            "profiles": {"naruto": {"model": "claude-opus-5-5", "effort": "max"}}}}"#;
+        let all_only = r#"{"workers": {"model": "claude-haiku-5-5", "effort": "low"}}"#;
+        let effort_only = r#"{"workers": {"effort": "medium"}}"#;
+        let kiro = r#"{"workers": {"cli": "kiro", "model": "claude-haiku-5.5", "effort": "low",
+            "profiles": {"naruto": {"model": "claude-sonnet-5.5"}}}}"#;
+        let none = (None, None);
+        let cases: [(&str, Option<&str>, &str, (Option<&str>, Option<&str>), _); 11] = [
+            (
+                "no Team: the Profile's own",
+                None,
+                "naruto",
+                none,
+                runs(Cli::Claude, sonnet, "high"),
+            ),
+            (
+                "an empty Team changes nothing",
+                Some("{}"),
+                "naruto",
+                none,
+                runs(Cli::Claude, sonnet, "high"),
+            ),
+            (
+                "Team workers over the Profile",
+                Some(all_only),
+                "naruto",
+                none,
+                runs(Cli::Claude, "claude-haiku-5-5", "low"),
+            ),
+            (
+                "a Team's effort alone leaves the Profile's model",
+                Some(effort_only),
+                "naruto",
+                none,
+                runs(Cli::Claude, sonnet, "medium"),
+            ),
+            (
+                "Team profile entry over Team workers",
+                Some(team),
+                "naruto",
+                none,
+                runs(Cli::Claude, "claude-opus-5-5", "max"),
+            ),
+            (
+                "another Profile's entry does not apply",
+                Some(team),
+                "naruto-two",
+                none,
+                runs(Cli::Claude, "claude-haiku-5-5", "low"),
+            ),
+            (
+                "picked over the Team's profile entry",
+                Some(team),
+                "naruto",
+                (None, Some("claude-fable-5-1")),
+                runs(Cli::Claude, "claude-fable-5-1", "max"),
+            ),
+            (
+                "the Team's cli carries its model",
+                Some(kiro),
+                "naruto-two",
+                none,
+                runs(Cli::Kiro, "claude-haiku-5.5", "low"),
+            ),
+            (
+                "an entry mixes its own fields with the Team's",
+                Some(kiro),
+                "naruto",
+                none,
+                runs(Cli::Kiro, "claude-sonnet-5.5", "low"),
+            ),
+            (
+                "picked cli and model over a Team",
+                Some(kiro),
+                "naruto",
+                (Some("claude"), Some("claude-opus-5-5")),
+                runs(Cli::Claude, "claude-opus-5-5", "low"),
+            ),
+            (
+                "a Team with workers for other Profiles only",
+                Some(r#"{"workers": {"profiles": {"lee": {"model": "claude-haiku-5-5"}}}}"#),
+                "naruto",
+                none,
+                runs(Cli::Claude, sonnet, "high"),
+            ),
+        ];
+        for (what, team, profile, picked, want) in cases {
+            assert_eq!(resolved("{}", team, profile, picked).unwrap(), want, "{what}");
+        }
+    }
+
+    #[test]
+    fn forcecli_applies_only_where_the_team_names_nothing() {
+        let force = r#"{"cli": "kiro", "model": "claude-haiku-5.5", "forceCli": true}"#;
+        let kiro = |model: &str, effort: &str| runs(Cli::Kiro, model, effort);
+        let entry =
+            r#"{"workers": {"profiles": {"naruto": {"cli": "kiro", "model": "claude-sonnet-5.5", "effort": "low"}}}}"#;
+        let model_only = r#"{"workers": {"model": "claude-sonnet-5.5"}}"#;
+        let effort_only = r#"{"workers": {"effort": "low"}}"#;
+        let cases: [(&str, Option<&str>, &str, _); 5] = [
+            (
+                "no Team: force puts the Profile's cli and model aside",
+                None,
+                "naruto",
+                kiro("claude-haiku-5.5", "high"),
+            ),
+            (
+                "a Team entry beats force",
+                Some(entry),
+                "naruto",
+                kiro("claude-sonnet-5.5", "low"),
+            ),
+            (
+                "no entry for this Profile: force applies",
+                Some(entry),
+                "lee",
+                kiro("claude-haiku-5.5", "high"),
+            ),
+            (
+                "a Team's model alone beats the forced model, the forced cli stays",
+                Some(model_only),
+                "naruto",
+                kiro("claude-sonnet-5.5", "high"),
+            ),
+            (
+                "a Team's effort alone leaves cli and model to force",
+                Some(effort_only),
+                "naruto",
+                kiro("claude-haiku-5.5", "low"),
+            ),
+        ];
+        for (what, team, profile, want) in cases {
+            assert_eq!(resolved(force, team, profile, (None, None)).unwrap(), want, "{what}");
+        }
+    }
+
+    #[test]
+    fn a_pair_the_teams_cli_cannot_run_is_an_error() {
+        let team = r#"{"workers": {"cli": "kiro", "model": "anthropic/claude-haiku-5-5"}}"#;
+        let error = resolved("{}", Some(team), "naruto", (None, None)).unwrap_err();
+        assert!(error.to_string().contains("kiro runs its own model ids"), "{error}");
     }
 }
