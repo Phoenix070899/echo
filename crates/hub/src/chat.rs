@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 /// Most lines a tool's output keeps; the terminal has the rest.
 const OUTPUT_LINES: usize = 40;
 /// Most characters any one text keeps, so a pasted log does not swell a reply.
-const TEXT_CHARS: usize = 20_000;
+pub(crate) const TEXT_CHARS: usize = 20_000;
 
 /// The chat items of one transcript line, in order.
 ///
@@ -158,7 +158,7 @@ fn tool(block: &Value, at: &Value) -> Value {
 }
 
 /// A tool result's text: a string, or a list of text blocks; at most `OUTPUT_LINES` lines.
-fn output(content: &Value) -> String {
+pub(crate) fn output(content: &Value) -> String {
     let text = match content {
         Value::String(text) => text.clone(),
         Value::Array(blocks) => blocks
@@ -176,7 +176,7 @@ fn output(content: &Value) -> String {
     cut(&kept, TEXT_CHARS)
 }
 
-fn first_line(text: &str) -> String {
+pub(crate) fn first_line(text: &str) -> String {
     text.lines()
         .find(|l| !l.trim().is_empty())
         .unwrap_or("")
@@ -184,7 +184,7 @@ fn first_line(text: &str) -> String {
         .to_string()
 }
 
-fn cut(text: &str, chars: usize) -> String {
+pub(crate) fn cut(text: &str, chars: usize) -> String {
     match text.char_indices().nth(chars) {
         Some((at, _)) => format!("{}…", &text[..at]),
         None => text.to_string(),
@@ -229,10 +229,22 @@ pub struct Page {
 /// Every item after byte `after`; else up to `limit` items ending at byte `before` (the file's end
 /// when not given). Only whole lines count, so a line being written waits for the next read.
 pub fn read(path: &Path, limit: usize, after: Option<u64>, before: Option<u64>) -> std::io::Result<Page> {
+    read_with(path, limit, after, before, || items)
+}
+
+/// `read` for a transcript whose lines `fresh` makes a parser for: one per range read, so a parser
+/// may remember what it saw on the lines before (a Kiro turn's error), never across two reads.
+pub(crate) fn read_with<P: FnMut(&str) -> Vec<Value>>(
+    path: &Path,
+    limit: usize,
+    after: Option<u64>,
+    before: Option<u64>,
+    fresh: impl Fn() -> P,
+) -> std::io::Result<Page> {
     let mut file = std::fs::File::open(path)?;
     let size = file.metadata()?.len();
     if let Some(after) = after.filter(|&a| a <= size) {
-        let (items, end) = parse_range(&mut file, after, size)?;
+        let (items, end) = parse_range(&mut file, after, size, fresh())?;
         return Ok(Page {
             items: items.into_iter().map(|(_, item)| item).collect(),
             start: after,
@@ -244,7 +256,7 @@ pub fn read(path: &Path, limit: usize, after: Option<u64>, before: Option<u64>) 
     let mut window: u64 = 2 << 20;
     loop {
         let from = stop.saturating_sub(window);
-        let (mut items, end) = parse_range(&mut file, from, stop)?;
+        let (mut items, end) = parse_range(&mut file, from, stop, fresh())?;
         if items.len() >= limit || from == 0 {
             items.drain(..items.len().saturating_sub(limit));
             let start = items.first().map_or(from, |(at, _)| *at);
@@ -260,7 +272,12 @@ pub fn read(path: &Path, limit: usize, after: Option<u64>, before: Option<u64>) 
 
 /// The items of every whole line between `start` and `stop`, each with its line's offset, skipping
 /// a line cut by `start`; and the offset after the last whole line.
-fn parse_range(file: &mut std::fs::File, start: u64, stop: u64) -> std::io::Result<(Vec<(u64, Value)>, u64)> {
+fn parse_range(
+    file: &mut std::fs::File,
+    start: u64,
+    stop: u64,
+    mut parse: impl FnMut(&str) -> Vec<Value>,
+) -> std::io::Result<(Vec<(u64, Value)>, u64)> {
     file.seek(SeekFrom::Start(start))?;
     let mut bytes = Vec::new();
     (&mut *file).take(stop.saturating_sub(start)).read_to_end(&mut bytes)?;
@@ -279,7 +296,7 @@ fn parse_range(file: &mut std::fs::File, start: u64, stop: u64) -> std::io::Resu
     for line in bytes[from..whole].split(|&b| b == b'\n') {
         let offset = start + at as u64;
         at += line.len() + 1;
-        for mut item in items(&String::from_utf8_lossy(line)) {
+        for mut item in parse(&String::from_utf8_lossy(line)) {
             // A line without a uuid is named by where it sits, so ids stay unique.
             let id = item["id"].as_str().unwrap_or("").to_string();
             if id.is_empty() || id.starts_with('.') {

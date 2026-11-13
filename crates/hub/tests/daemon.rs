@@ -2657,6 +2657,134 @@ fn a_renewed_orchestrators_chat_scrolls_back_into_its_earlier_session() {
     );
 }
 
+/// Plants a Kiro session's `messages.jsonl` under a workspace bucket of `home`, as Kiro lays it out.
+fn plant_kiro_session(home: &Path, folder: &str, text: &str) {
+    let dir = home.join("sessions/a44897a43362370a").join(folder);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("messages.jsonl"), text).unwrap();
+}
+
+fn chat_texts(read: &serde_json::Value) -> Vec<String> {
+    read["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["text"].as_str().or(i["summary"].as_str()).unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn a_kiro_workers_chat_reads_its_messages_jsonl_and_pages_back() {
+    let hub = Hub::new("kirochat");
+    let home = hub.state.join("kiro");
+    let home_text = home.display().to_string();
+    // The daemon looks for Kiro's sessions under KIRO_HOME; no real Kiro runs here.
+    hub.run_with(&["status"], &[("KIRO_HOME", &home_text)]);
+    hub.ok(&[
+        "worker",
+        "start",
+        "lee",
+        "--spec",
+        "idle",
+        "--cli",
+        "kiro",
+        "--model",
+        "claude-haiku-5.5",
+    ]);
+    let session = hub.worker("w1")["session_id"].as_str().unwrap().to_string();
+    let read = |params: serde_json::Value| hub.call("chat.read", params)["result"].clone();
+
+    // Before its first turn there is no file: supported, with nothing to show.
+    let empty = read(serde_json::json!({ "worker": 1 }));
+    assert_eq!(
+        (empty["supported"].as_bool(), empty["items"].as_array().map(Vec::len)),
+        (Some(true), Some(0))
+    );
+
+    // A session folder holds `sess_` and the id the daemon made; the `sess_` spelling is found.
+    plant_kiro_session(
+        &home,
+        &format!("sess_{session}"),
+        include_str!("fixtures/kiro/messages-two-turns.jsonl"),
+    );
+    let first = read(serde_json::json!({ "worker": 1, "limit": 3 }));
+    assert_eq!(first["supported"], true);
+    assert_eq!(chat_texts(&first), ["Now say hi.", "Do not run it. Just say ok.", "hi"]);
+    assert_eq!(first["more"], true);
+    let kinds: Vec<_> = first["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["user", "user", "reply"]);
+    let older = read(serde_json::json!({ "worker": 1, "before": first["start"], "page_session": session }));
+    assert_eq!(chat_texts(&older), ["Reply with the single word ok.", "ok"]);
+    assert_eq!(older["more"], false);
+
+    // Only what was written since comes back after `end`.
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(home.join(format!("sessions/a44897a43362370a/sess_{session}/messages.jsonl")))
+        .unwrap();
+    let thanks = r#"{"id":"m9","timestamp":"2026-11-13T13:05:00.000Z","payload":{"type":"user","content":"thanks"}}"#;
+    std::io::Write::write_all(&mut file, format!("{thanks}\n").as_bytes()).unwrap();
+    let next = read(serde_json::json!({ "worker": 1, "session": session, "after": first["end"] }));
+    assert_eq!(chat_texts(&next), ["thanks"]);
+}
+
+#[test]
+fn a_renewed_kiro_orchestrators_chat_scrolls_back_and_completes_no_claude_commands() {
+    let hub = Hub::new("kirorenew");
+    let home = hub.state.join("kiro");
+    let home_text = home.display().to_string();
+    hub.run_with(&["status"], &[("KIRO_HOME", &home_text)]);
+    let opened = hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "orchestrator", "name": "renew", "cli": "kiro" }),
+    );
+    assert_eq!(opened["ok"], true, "{opened}");
+    let agent = opened["result"]["agent"].as_i64().unwrap();
+    let read = |params: serde_json::Value| hub.call("chat.read", params)["result"].clone();
+    let first = read(serde_json::json!({ "agent": agent }))["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The id without Kiro's `sess_` prefix is found too.
+    plant_kiro_session(&home, &first, include_str!("fixtures/kiro/messages-single-turn.jsonl"));
+    let renewed = hub.call("agent.renew", serde_json::json!({ "agent": agent }));
+    assert_eq!(renewed["ok"], true, "{renewed}");
+    let second = read(serde_json::json!({ "agent": agent }))["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(first, second);
+    plant_kiro_session(
+        &home,
+        &format!("sess_{second}"),
+        include_str!("fixtures/kiro/messages-failed.jsonl"),
+    );
+    let now = read(serde_json::json!({ "agent": agent }));
+    assert_eq!(
+        (now["supported"].as_bool(), now["more"].as_bool()),
+        (Some(true), Some(true))
+    );
+    assert_eq!(chat_texts(&now).len(), 2);
+    let older = read(serde_json::json!({ "agent": agent, "before": now["start"], "page_session": second }));
+    assert_eq!(
+        chat_texts(&older),
+        [
+            "What is the secret codeword? Reply with just the codeword.",
+            "PINEAPPLE-42",
+            "Session renewed, context cleared"
+        ]
+    );
+    assert_eq!(older["page_session"], first);
+    // Kiro's slash commands are not Claude Code's.
+    let commands = hub.call("chat.commands", serde_json::json!({ "agent": agent }));
+    assert_eq!(commands["result"]["commands"], serde_json::json!([]), "{commands}");
+}
+
 #[test]
 fn a_checkouts_side_shell_runs_commands_outlives_the_daemon_and_stops() {
     let hub = Hub::new("side");

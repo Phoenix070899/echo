@@ -19,6 +19,7 @@ use crate::chat;
 use crate::cli;
 use crate::db::{self, kind, state, Worker};
 use crate::holder;
+use crate::kiro_chat;
 use crate::launch;
 use crate::lessons;
 use crate::paths;
@@ -360,6 +361,23 @@ impl Hub {
         }
     }
 
+    /// The CLI an agent or Worker runs on, found as at its start (`cli::recovered`), for choosing
+    /// whose transcript its chat reads. None for a CLI Echo does not run.
+    fn chat_cli(&self, stored: Option<&str>, repo: &str, profile: Option<&str>) -> Option<cli::Cli> {
+        if stored.is_some_and(|name| cli::Cli::parse(name).is_err()) {
+            return None;
+        }
+        let (state, repo) = (paths::state_dir(), Path::new(repo));
+        let profile = profile
+            .and_then(|name| profile::load(&self.hub_dir, &state, Some(repo), name).ok())
+            .map(|profile| profile.choice());
+        let picked = cli::Choice {
+            cli: stored.map(String::from),
+            model: None,
+        };
+        Some(cli::recovered(&state, Some(repo), profile.as_ref(), &[&picked]))
+    }
+
     fn chat_read(&self, p: &Value) -> Result<Value> {
         // Whose transcript, its CLI, its running terminal, the texts Echo or others typed in, and
         // (for an agent) its earlier sessions, oldest first.
@@ -367,24 +385,43 @@ impl Hub {
             Some(id) => {
                 let worker = db::worker(&self.db(), id)?;
                 let inputs = db::inputs(&self.db(), id)?;
-                (worker.session_id, worker.cli, self.live(id).ok(), inputs, vec![])
+                let cli = self.chat_cli(worker.cli.as_deref(), &worker.repo, Some(&worker.profile));
+                (worker.session_id, cli, self.live(id).ok(), inputs, vec![])
             }
             None => {
                 let agent = db::agent(&self.db(), id_param(p, "agent")?)?;
                 let echo =
                     [launch::RESUMED, launch::RENEWED].map(|text| (db::origin::ECHO.to_string(), text.to_string()));
                 let earlier = db::agent_sessions(&self.db(), agent.id)?;
+                let cli = self.chat_cli(agent.cli.as_deref(), &agent.repo, None);
                 (
                     agent.session_id,
-                    agent.cli,
+                    cli,
                     self.agent_live(agent.id).ok(),
                     echo.to_vec(),
                     earlier,
                 )
             }
         };
+        let kiro = cli == Some(cli::Cli::Kiro);
+        let inputs = if kiro { kiro_chat::typed_inputs(&inputs) } else { inputs };
         let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
         let projects = stats::projects_dir();
+        // The transcript file of a session, and a read of it, by whichever CLI wrote it.
+        let transcript = |session: &str| {
+            if kiro {
+                cli::kiro_transcript(session)
+            } else {
+                stats::transcript(&projects, session)
+            }
+        };
+        let read = |path: &Path, after: Option<u64>, before: Option<u64>| {
+            if kiro {
+                kiro_chat::read(path, limit, after, before)
+            } else {
+                chat::read(path, limit, after, before)
+            }
+        };
         // The session before `of`, among the earlier ones.
         let previous = |of: &str| -> Option<String> {
             if of == session {
@@ -405,8 +442,8 @@ impl Hub {
                 renewed = Some(chat::renewed(&page_session));
                 page_session = prev;
             }
-            let page = stats::transcript(&projects, &page_session)
-                .map(|path| chat::read(&path, limit, None, before))
+            let page = transcript(&page_session)
+                .map(|path| read(&path, None, before))
                 .transpose()?
                 .unwrap_or(chat::Page {
                     items: vec![],
@@ -421,13 +458,13 @@ impl Hub {
         }
         let state = chat_state(live.as_deref());
         let more = !earlier.is_empty();
-        if cli.as_deref().is_some_and(|cli| cli != "claude") {
+        if matches!(cli, None | Some(cli::Cli::Codex)) {
             return Ok(
                 json!({ "session": session, "supported": false, "items": [], "end": 0, "start": 0,
                               "more": false, "state": state }),
             );
         }
-        let Some(path) = stats::transcript(&projects, &session) else {
+        let Some(path) = transcript(&session) else {
             return Ok(
                 json!({ "session": session, "supported": true, "items": [], "end": 0, "start": 0,
                               "more": more, "state": state }),
@@ -435,7 +472,7 @@ impl Hub {
         };
         let same = p.get("session").and_then(Value::as_str) == Some(session.as_str());
         let after = p.get("after").and_then(Value::as_u64).filter(|_| same);
-        let page = chat::read(&path, limit, after, None)?;
+        let page = read(&path, after, None)?;
         let mut items = page.items;
         chat::mark_origins(&mut items, &inputs);
         Ok(
@@ -1189,10 +1226,11 @@ impl Hub {
             "chat.read" => self.chat_read(p),
             // What `/` completes in the chat's message box.
             "chat.commands" => {
-                let (session, cwd) = match p.get("worker").and_then(Value::as_i64) {
+                let (session, cwd, cli) = match p.get("worker").and_then(Value::as_i64) {
                     Some(id) => {
                         let worker = db::worker(&self.db(), id)?;
-                        (worker.session_id, PathBuf::from(worker.cwd))
+                        let cli = self.chat_cli(worker.cli.as_deref(), &worker.repo, Some(&worker.profile));
+                        (worker.session_id, PathBuf::from(worker.cwd), cli)
                     }
                     None => {
                         let agent = db::agent(&self.db(), id_param(p, "agent")?)?;
@@ -1201,9 +1239,15 @@ impl Hub {
                             .clone()
                             .map(PathBuf::from)
                             .unwrap_or_else(|| PathBuf::from(&agent.repo));
-                        (agent.session_id, cwd)
+                        let cli = self.chat_cli(agent.cli.as_deref(), &agent.repo, None);
+                        (agent.session_id, cwd, cli)
                     }
                 };
+                // Kiro's slash commands are not Claude Code's, and no fixed list of its own is
+                // known (features/0077), so its chat completes none.
+                if cli == Some(cli::Cli::Kiro) {
+                    return Ok(json!({ "commands": [] }));
+                }
                 let transcript = stats::transcript(&stats::projects_dir(), &session);
                 let dirs = [paths::home().join(".claude/commands"), cwd.join(".claude/commands")];
                 Ok(json!({ "commands": chat::commands(transcript.as_deref(), &dirs) }))

@@ -1,0 +1,8 @@
+{"id":"m1","timestamp":"2026-11-13T14:00:01.000Z","payload":{"type":"user","content":"hi","documents":[],"images":[],"_meta":{"kiro":{"peerPromptGeneration":1,"userMessageTag":"prompt_3e7e"}}}}
+this line is not JSON at all
+
+{"id":"x","payload":
+{"id":"a1","timestamp":"2026-11-13T14:00:02.000Z","payload":{"type":"assistant","content":"hello","operationType":"Say","executionId":"b0b0b0b0-0000-4000-8000-000000000008","turnId":"b0b0b0b0-0000-4000-8000-000000000008","_meta":{"kiro":{"agentMode":"echo-spike-a"}}}}
+[1,2,3]
+{"id":"m2","timestamp":"2026-11-13T14:00:03.000Z","payload":{"type":"user","content":"after the noise","documents":[],"images":[],"_meta":{"kiro":{"peerPromptGeneration":1,"userMessageTag":"prompt_3e7e"}}}}
+{"id":"m3","timestamp":"2026-11-13T14:00:04.000Z","payload":

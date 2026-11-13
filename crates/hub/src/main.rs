@@ -7,6 +7,7 @@ mod cli;
 mod daemon;
 mod db;
 mod holder;
+mod kiro_chat;
 mod launch;
 mod lessons;
 mod paths;

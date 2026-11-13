@@ -348,6 +348,21 @@ fn kiro_session_has_history(home: &Path, session_id: &str) -> bool {
         .any(|dir| dir.join("messages.jsonl").is_file())
 }
 
+/// The `messages.jsonl` of a Kiro session, wherever its workspace bucket is. When both spellings
+/// of the id have a folder (docs/bugs/0070), the file written last is the live one.
+pub fn kiro_transcript(session_id: &str) -> Option<PathBuf> {
+    kiro_transcript_in(&kiro_home(), session_id)
+}
+
+fn kiro_transcript_in(home: &Path, session_id: &str) -> Option<PathBuf> {
+    kiro_session_dirs(home, session_id)
+        .into_iter()
+        .map(|dir| dir.join("messages.jsonl"))
+        .filter_map(|file| Some((file.metadata().ok()?.modified().ok()?, file)))
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, file)| file)
+}
+
 /// The folders of a session across the workspace buckets, under either spelling of its id.
 fn kiro_session_dirs(home: &Path, session_id: &str) -> Vec<PathBuf> {
     let plain_id = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
@@ -1169,6 +1184,25 @@ mod tests {
         assert!(!kiro_session_exists(&home, ""));
         assert!(!kiro_session_exists(&home, "../sessions"));
         assert!(!kiro_session_exists(&scratch("kiro-none"), "sess_6a2fda8e-84a4"));
+    }
+
+    #[test]
+    fn a_kiro_transcript_is_found_under_either_spelling_and_a_folder_without_one_is_not() {
+        let home = scratch("kiro-transcripts");
+        let bucket = home.join("sessions").join("a44897a43362370a");
+        std::fs::create_dir_all(bucket.join("sess_aaaa-1")).unwrap();
+        std::fs::create_dir_all(bucket.join("sess_bbbb-2")).unwrap();
+        std::fs::write(bucket.join("sess_bbbb-2/messages.jsonl"), "{}\n").unwrap();
+        assert_eq!(
+            kiro_transcript_in(&home, "sess_aaaa-1"),
+            None,
+            "a folder holds a turn only once it has the file"
+        );
+        let found = Some(bucket.join("sess_bbbb-2/messages.jsonl"));
+        assert_eq!(kiro_transcript_in(&home, "sess_bbbb-2"), found);
+        assert_eq!(kiro_transcript_in(&home, "bbbb-2"), found);
+        assert_eq!(kiro_transcript_in(&home, "../sessions"), None);
+        assert_eq!(kiro_transcript_in(&scratch("kiro-no-transcripts"), "sess_bbbb-2"), None);
     }
 
     #[test]
