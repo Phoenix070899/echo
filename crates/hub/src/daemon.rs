@@ -1994,7 +1994,7 @@ impl Hub {
             Some("echo") => db::origin::ECHO,
             _ => db::origin::ORCHESTRATOR,
         };
-        db::insert_input(&self.db(), id, from, spec)?;
+        db::insert_task(&self.db(), id, from, spec)?;
         let worker = db::worker(&self.db(), id)?;
         if let Err(error) = self.launch(&worker, Launch::New { spec }) {
             db::settle(&self.db(), id, state::EXITED, &format!("could not start: {error:#}"))?;
@@ -2037,15 +2037,15 @@ impl Hub {
         if ![state::LOST, state::EXITED, state::ENDED].contains(&worker.state.as_str()) {
             bail!("w{id} is {}; only lost, exited, or ended Workers resume", worker.state);
         }
-        let spec = db::worker_spec(&self.db(), id)?;
         let worker_cli = match &self.test_agent {
             Some(_) => cli::Cli::Claude,
             None => self.pick_for(&worker)?.1,
         };
+        let (spec, message) = resume_message(&self.db(), id, worker_cli)?;
         db::set_state(&self.db(), id, state::STARTING)?;
         let worker = db::worker(&self.db(), id)?;
         // What the Worker is sent, so the chat can tell it from the human's words.
-        db::insert_input(&self.db(), id, db::origin::ECHO, &profile::resumed(worker_cli, &spec))?;
+        db::insert_input(&self.db(), id, db::origin::ECHO, &message)?;
         self.launch(&worker, Launch::Resume { spec: &spec })?;
         self.notify();
         Ok(json!({ "id": format!("w{id}") }))
@@ -2058,7 +2058,7 @@ impl Hub {
         if state::is_live(&worker.state) {
             bail!("w{id} is still on its Task; give it the next one after its Final Report");
         }
-        db::insert_input(&self.db(), id, from, spec)?;
+        db::insert_task(&self.db(), id, from, spec)?;
         let started = match self.live(id) {
             Ok(live) => {
                 self.hand_over(&live, &worker, spec)?;
@@ -3458,9 +3458,70 @@ impl Quiet {
     }
 }
 
+/// The Task a resumed Worker is on now (a later one from `worker next` or a verifier's feedback
+/// replaces its first, features/0079) and the first message its CLI's resume sends with it.
+fn resume_message(conn: &Connection, id: i64, cli: cli::Cli) -> Result<(String, String)> {
+    let task = db::current_task(conn, id)?;
+    let message = profile::resumed(cli, &task);
+    Ok((task, message))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_resumed_worker_is_sent_the_task_it_is_on_now() {
+        let conn = db::open(Path::new(":memory:")).unwrap();
+        let id = db::insert_worker(
+            &conn,
+            &db::NewWorker {
+                repo: "/r",
+                profile: "naruto",
+                title: "t",
+                spec: "Fix the login test.",
+                cwd: "/r",
+                branch: None,
+                session_id: "sid",
+                agent: None,
+                fanout: None,
+                cli: None,
+                model: None,
+            },
+        )
+        .unwrap();
+        let sent = |cli| resume_message(&conn, id, cli).unwrap();
+
+        // One Task, as before the change: its spec, with no Task input yet or with the first one.
+        assert_eq!(sent(cli::Cli::Kiro).0, "Fix the login test.");
+        assert!(sent(cli::Cli::Kiro).1.ends_with("Fix the login test."));
+        db::insert_task(&conn, id, db::origin::ORCHESTRATOR, "Fix the login test.").unwrap();
+        assert_eq!(
+            sent(cli::Cli::Kiro).1,
+            profile::resumed(cli::Cli::Kiro, "Fix the login test.")
+        );
+
+        // A next Task, then feedback, a chat line and an earlier resume: the latest Task wins.
+        db::insert_task(&conn, id, db::origin::ORCHESTRATOR, "Now add the logout test.").unwrap();
+        db::insert_input(&conn, id, db::origin::HUMAN, "how is it going?").unwrap();
+        db::insert_input(&conn, id, db::origin::ECHO, &sent(cli::Cli::Kiro).1).unwrap();
+        let (task, kiro) = sent(cli::Cli::Kiro);
+        assert_eq!(task, "Now add the logout test.");
+        assert!(
+            kiro.starts_with(profile::RESUMED) && kiro.ends_with("Now add the logout test."),
+            "{kiro}"
+        );
+        assert!(!kiro.contains("login"), "{kiro}");
+        db::insert_task(&conn, id, db::origin::ECHO, "w2 verified your change and it failed.").unwrap();
+        assert!(sent(cli::Cli::Kiro)
+            .1
+            .ends_with("w2 verified your change and it failed."));
+
+        // The first Task still stands in the row, and the other CLIs send what they always did.
+        assert_eq!(db::worker_spec(&conn, id).unwrap(), "Fix the login test.");
+        assert_eq!(sent(cli::Cli::Claude).1, profile::RESUMED);
+        assert_eq!(sent(cli::Cli::Codex).1, profile::RESUMED);
+    }
 
     #[test]
     fn a_screen_is_settled_only_when_unchanged_at_its_input_box_for_two_minutes_and_checked_rarely() {

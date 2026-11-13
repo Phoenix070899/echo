@@ -172,6 +172,10 @@ pub fn open(path: &Path) -> Result<Connection> {
            ended_at integer not null
          );",
     )?;
+    // Whether an input gave the Worker a Task, so a resume can tell its Task now from a chat line.
+    if !has_column(&conn, "worker_inputs", "task")? {
+        conn.execute_batch("alter table worker_inputs add column task integer not null default 0")?;
+    }
     if !has_column(&conn, "workers", "agent_id")? {
         conn.execute_batch("alter table workers add column agent_id integer")?;
     }
@@ -467,11 +471,37 @@ pub mod origin {
 }
 
 pub fn insert_input(conn: &Connection, worker: i64, origin: &str, text: &str) -> Result<()> {
+    insert_input_row(conn, worker, origin, text, false)
+}
+
+/// An input that gives the Worker a Task: its first, or a next one (`worker next`, a verifier's
+/// feedback). Not a line typed into its chat.
+pub fn insert_task(conn: &Connection, worker: i64, origin: &str, text: &str) -> Result<()> {
+    insert_input_row(conn, worker, origin, text, true)
+}
+
+fn insert_input_row(conn: &Connection, worker: i64, origin: &str, text: &str, task: bool) -> Result<()> {
     conn.execute(
-        "insert into worker_inputs (worker_id, origin, text, created_at) values (?1, ?2, ?3, ?4)",
-        params![worker, origin, text, now()],
+        "insert into worker_inputs (worker_id, origin, text, created_at, task) values (?1, ?2, ?3, ?4, ?5)",
+        params![worker, origin, text, now(), task],
     )?;
     Ok(())
+}
+
+/// The Task a Worker is on now: the latest input that gave it one (features/0079), or, for a
+/// Worker from before Tasks were marked, the Task it started with.
+pub fn current_task(conn: &Connection, worker: i64) -> Result<String> {
+    let latest = conn
+        .query_row(
+            "select text from worker_inputs where worker_id = ?1 and task = 1 order by id desc limit 1",
+            params![worker],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match latest {
+        Some(text) => Ok(text),
+        None => worker_spec(conn, worker),
+    }
 }
 
 /// A Worker's inputs, oldest first, as (origin, text).
@@ -914,6 +944,64 @@ mod tests {
         assert_eq!(take_undelivered(&conn, "/r", Some(b)).unwrap()[0].body, "from b");
         assert_eq!(take_undelivered(&conn, "/r", Some(a)).unwrap()[0].body, "from a");
         assert!(take_undelivered(&conn, "/r", None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_workers_task_now_is_its_latest_task_input_not_a_chat_line() {
+        let (conn, w) = fixture();
+        assert_eq!(
+            current_task(&conn, w.id).unwrap(),
+            "s",
+            "no Task input yet: the spec it started with"
+        );
+        insert_task(&conn, w.id, origin::ORCHESTRATOR, "first").unwrap();
+        assert_eq!(current_task(&conn, w.id).unwrap(), "first");
+        insert_task(&conn, w.id, origin::ECHO, "feedback").unwrap();
+        insert_task(&conn, w.id, origin::ORCHESTRATOR, "second").unwrap();
+        insert_input(&conn, w.id, origin::ORCHESTRATOR, "also check the docs").unwrap();
+        insert_input(&conn, w.id, origin::HUMAN, "how is it going?").unwrap();
+        insert_input(&conn, w.id, origin::ECHO, "RESUMED").unwrap();
+        assert_eq!(current_task(&conn, w.id).unwrap(), "second");
+        assert_eq!(
+            worker_spec(&conn, w.id).unwrap(),
+            "s",
+            "the spec it started with is kept"
+        );
+        let other = insert_test_worker(&conn);
+        assert_eq!(
+            current_task(&conn, other).unwrap(),
+            "s",
+            "another Worker's Tasks are not its own"
+        );
+    }
+
+    #[test]
+    fn a_database_from_before_marked_tasks_falls_back_to_the_spec() {
+        let dir = std::env::temp_dir().join(format!("hub-db-task-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.db");
+        let _ = std::fs::remove_file(&path);
+        let first = open(&path).unwrap();
+        let id = insert_test_worker(&first);
+        first
+            .execute_batch("alter table worker_inputs drop column task")
+            .unwrap();
+        first
+            .execute(
+                "insert into worker_inputs (worker_id, origin, text, created_at) values (?1, 'orchestrator', 'old', 0)",
+                [id],
+            )
+            .unwrap();
+        drop(first);
+        let conn = open(&path).unwrap();
+        assert_eq!(
+            current_task(&conn, id).unwrap(),
+            "s",
+            "old inputs are not known to be Tasks"
+        );
+        insert_task(&conn, id, origin::ORCHESTRATOR, "new").unwrap();
+        assert_eq!(current_task(&conn, id).unwrap(), "new");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
