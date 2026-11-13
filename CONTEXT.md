@@ -24,6 +24,10 @@ _Avoid_: solo mode, chat
 A reusable definition of a specialist: which agent CLI (`claude`, `codex` or `kiro`), model, tools, role, skills, and context it starts with. Echo ships some; the human's own and a repo's replace one of the same name.
 _Avoid_: subagent, agent type, persona
 
+**Team**:
+A named setup for an Orchestrator, its Workers and its rules: which CLI, model and effort the Orchestrator and its Workers run on, the Orchestrator's rules and renewal threshold, and extra instructions. It is a file at three levels (Echo's own, the human's, a repo's), picked when an Orchestrator starts, and read again each time that Orchestrator or one of its Workers starts or resumes. It is not a Profile (a Worker's role, its prompt and tools) and not a Hub Session; a Normal session and a Terminal have none.
+_Avoid_: preset, mode, profile
+
 **Worker**:
 A running instance of one Agent Profile, in its own terminal (and, when the Orchestrator decides, its own worktree), working on exactly one Task, closed when that Task ends.
 _Avoid_: subagent, agent, session
