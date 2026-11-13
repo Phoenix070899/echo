@@ -1,0 +1,10 @@
+# A Kiro Worker resumed before its first turn lost its Task
+
+Found: 2026-11-13
+Where: crates/hub/src/cli.rs (`kiro`, `kiro_session_has_history`), crates/hub/src/profile.rs (`resumed`), crates/hub/src/daemon.rs (`resume_worker`)
+Fixed in: the change that adds this file
+
+In the milestone 1 smoke run a Kiro Worker was resumed with `echoctl worker resume` and answered that its Task was not in the session. Reproduced on `claude-haiku-5.5`: a Worker closed 1.5 s after its start and then resumed printed "I don't have a record of the task, so I'll check the workspace state first", and asked to run `git status` and `which echoctl`.
+Cause: Kiro's `SessionStart` hook fires on the first prompt, so a Worker stopped before that has no session id recorded; the id in the database is the one the daemon made up, and Kiro knows nothing of it. `kiro-cli chat --resume-id <unknown id>` does not fail. It opens a plain session under that id, on Kiro's default agent (`vibe`) and model (`auto`), ignoring `--agent` and `--model`, with no Worker Contract and none of the Task. The only message was the resume text ("Your terminal was restarted. Continue your Task ..."), which names no Task. A session that was resumed on a good id was fine: the replayed history held the Task. The plain session also created a folder under the made-up id, so `has_session` read true for it from then on.
+Fix: `--resume-id` is passed only when the session has a `messages.jsonl` (its first turn); otherwise the agent starts afresh with the same agent file, model and message, and its hook records the new id. A Kiro Worker's resume message now also carries its Task from the database, after the lead line and cut at 4000 characters (features/0076), so a resumed session that lacks the history still has its instruction. Claude's and Codex's resume messages are unchanged.
+Lesson: a CLI's resume flag may accept an id it has never seen and start something else, so check that the session exists on disk before passing it, and send the instruction itself, not a pointer to it, in any message that might open a session without the history.

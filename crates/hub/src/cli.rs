@@ -337,18 +337,38 @@ fn kiro_home() -> PathBuf {
 /// Kiro keeps each session as `<home>/sessions/<workspace hash>/sess_<uuid>/`; a hook reports the
 /// id with its `sess_` prefix and `--resume-id` takes it with or without, so either spelling counts.
 fn kiro_session_exists(home: &Path, session_id: &str) -> bool {
+    !kiro_session_dirs(home, session_id).is_empty()
+}
+
+/// Whether the session has held a turn: its `messages.jsonl` appears with the first one. A session
+/// folder exists from the TUI's start, before any prompt, and holds no Task yet.
+fn kiro_session_has_history(home: &Path, session_id: &str) -> bool {
+    kiro_session_dirs(home, session_id)
+        .iter()
+        .any(|dir| dir.join("messages.jsonl").is_file())
+}
+
+/// The folders of a session across the workspace buckets, under either spelling of its id.
+fn kiro_session_dirs(home: &Path, session_id: &str) -> Vec<PathBuf> {
     let plain_id = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
     if session_id.is_empty() || !session_id.chars().all(plain_id) {
-        return false;
+        return Vec::new();
     }
     let bare = session_id.strip_prefix("sess_").unwrap_or(session_id);
     let names = [bare.to_string(), format!("sess_{bare}")];
     let Ok(buckets) = std::fs::read_dir(home.join("sessions")) else {
-        return false;
+        return Vec::new();
     };
-    buckets
-        .flatten()
-        .any(|bucket| names.iter().any(|name| bucket.path().join(name).is_dir()))
+    let mut dirs = Vec::new();
+    for bucket in buckets.flatten() {
+        dirs.extend(
+            names
+                .iter()
+                .map(|name| bucket.path().join(name))
+                .filter(|dir| dir.is_dir()),
+        );
+    }
+    dirs
 }
 
 /// FNV-1a, 64 bit: the same text hashes the same on every run and build, which `DefaultHasher`
@@ -612,7 +632,10 @@ fn kiro(home: &Path, start: &Start) -> Result<Vec<String>> {
         }
     }
     args.push("--trust-workspace".into());
-    if start.resume {
+    // `--resume-id` with an id Kiro holds no history for does not fail: it opens a plain session
+    // under that id, on Kiro's default agent and model, with none of the Task. So a session
+    // without history starts afresh as this agent, with the same message.
+    if start.resume && kiro_session_has_history(home, &start.session_id) {
         args.extend(["--resume-id".into(), start.session_id.clone()]);
     }
     args.extend(start.extra.iter().cloned());
@@ -1406,6 +1429,7 @@ mod tests {
     #[test]
     fn a_kiro_resume_names_the_session_and_puts_the_humans_arguments_before_the_message() {
         let home = scratch("kiro-resume");
+        plant_kiro_session(&home, "sess_1", true);
         let start = Start {
             resume: true,
             first: Some("carry on".into()),
@@ -1427,6 +1451,44 @@ mod tests {
             ],
             "the human's --model wins"
         );
+    }
+
+    fn plant_kiro_session(home: &Path, dir: &str, with_history: bool) {
+        let session = home.join("sessions").join("a44897a43362370a").join(dir);
+        std::fs::create_dir_all(&session).unwrap();
+        if with_history {
+            std::fs::write(session.join("messages.jsonl"), "{}\n").unwrap();
+        }
+    }
+
+    #[test]
+    fn a_kiro_session_with_no_history_is_started_afresh_not_resumed() {
+        // `--resume-id` on an id Kiro holds nothing for opens a plain session on Kiro's default
+        // agent and model, with none of the Task (docs/bugs/0070).
+        let resumes = |home: &Path| {
+            let start = Start {
+                resume: true,
+                first: Some("carry on".into()),
+                ..kiro_worker()
+            };
+            let args = kiro(home, &start).unwrap();
+            assert_eq!(args.last().unwrap(), "carry on", "the message is sent either way");
+            assert!(args.contains(&"--agent".to_string()), "still this agent: {args:?}");
+            args.contains(&"--resume-id".to_string())
+        };
+        assert!(!resumes(&scratch("kiro-no-session")), "nothing on disk");
+        let folder_only = scratch("kiro-folder-only");
+        plant_kiro_session(&folder_only, "sess_1", false);
+        assert!(
+            !resumes(&folder_only),
+            "the folder exists from the TUI's start, before any turn"
+        );
+        let held = scratch("kiro-held");
+        plant_kiro_session(&held, "sess_1", true);
+        assert!(resumes(&held));
+        let bare = scratch("kiro-held-bare");
+        plant_kiro_session(&bare, "1", true);
+        assert!(resumes(&bare), "either spelling of the id");
     }
 
     #[test]

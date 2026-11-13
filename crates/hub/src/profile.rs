@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 
-use crate::cli::Start;
+use crate::cli::{Cli, Start};
 use crate::{lessons, paths};
 
 #[derive(Debug, Clone)]
@@ -302,11 +302,30 @@ pub fn system_prompt(hub: &Path, state: &Path, repo: &str, profile: &Profile) ->
 pub const RESUMED: &str = "Your terminal was restarted. Continue your Task from where you left off: \
                        check what is already done before repeating anything, then finish with echoctl done.";
 
-/// How a Worker's Claude session begins: a new session on its Task, a resumed one, or a resumed
-/// one on its next Task.
+/// The longest Task, in characters, that a Kiro resume message repeats.
+const KIRO_RESUME_TASK_LIMIT: usize = 4000;
+
+/// The first message of a resumed Worker session. Kiro's carries the Worker's Task after the
+/// usual lead line: a Kiro resume can land in a session that never saw the Task (features/0076),
+/// and a model with no instruction answers that it has none. Claude's and Codex's stay `RESUMED`.
+pub fn resumed(cli: Cli, spec: &str) -> String {
+    if cli != Cli::Kiro {
+        return RESUMED.to_string();
+    }
+    let task: String = spec.trim().chars().take(KIRO_RESUME_TASK_LIMIT).collect();
+    let cut = if spec.trim().chars().count() > KIRO_RESUME_TASK_LIMIT {
+        format!("\n[Task cut at {KIRO_RESUME_TASK_LIMIT} characters.]")
+    } else {
+        String::new()
+    };
+    format!("{RESUMED}\n\nYour Task:\n\n{task}{cut}")
+}
+
+/// How a Worker's Claude session begins: a new session on its Task, a resumed one (`spec` is its
+/// Task), or a resumed one on its next Task.
 pub enum Launch<'a> {
     New { spec: &'a str },
-    Resume,
+    Resume { spec: &'a str },
     Next { spec: &'a str },
 }
 
@@ -319,7 +338,7 @@ impl Profile {
     }
 }
 
-/// What a Worker starts with, whatever its CLI; `model` is the one already picked for it.
+/// What a Worker starts with, whatever its CLI; `picked` is the CLI and model already picked for it.
 pub fn start(
     hub: &Path,
     repo: &str,
@@ -327,12 +346,13 @@ pub fn start(
     title: &str,
     session_id: &str,
     launch: Launch,
-    model: Option<String>,
+    picked: (Cli, Option<String>),
 ) -> Result<Start> {
+    let (cli, model) = picked;
     let state = paths::state_dir();
     let (resume, first) = match launch {
         Launch::New { spec } => (false, spec.to_string()),
-        Launch::Resume => (true, RESUMED.to_string()),
+        Launch::Resume { spec } => (true, resumed(cli, spec)),
         Launch::Next { spec } => (true, spec.to_string()),
     };
     Ok(Start {
@@ -465,6 +485,43 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("known: lee, naruto"));
+    }
+
+    #[test]
+    fn a_kiro_resume_message_carries_the_task_and_the_others_stay_as_they_were() {
+        let spec = "Fix the login test.\nThe codeword is TANGERINE-7.";
+        let kiro = resumed(Cli::Kiro, spec);
+        assert!(kiro.starts_with(RESUMED), "{kiro}");
+        assert!(kiro.ends_with(spec), "{kiro}");
+        assert_eq!(resumed(Cli::Claude, spec), RESUMED);
+        assert_eq!(resumed(Cli::Codex, spec), RESUMED);
+    }
+
+    #[test]
+    fn a_kiro_resume_message_cuts_a_long_task_and_says_so() {
+        let spec = "é".repeat(KIRO_RESUME_TASK_LIMIT + 50);
+        let kiro = resumed(Cli::Kiro, &spec);
+        assert!(kiro.contains(&"é".repeat(KIRO_RESUME_TASK_LIMIT)));
+        assert!(!kiro.contains(&"é".repeat(KIRO_RESUME_TASK_LIMIT + 1)));
+        assert!(kiro.ends_with(&format!("[Task cut at {KIRO_RESUME_TASK_LIMIT} characters.]")));
+        let exact = "x".repeat(KIRO_RESUME_TASK_LIMIT);
+        assert!(!resumed(Cli::Kiro, &exact).contains("Task cut"));
+    }
+
+    #[test]
+    fn a_resumed_worker_starts_on_the_message_of_its_cli() {
+        let hub = crate::paths::hub_dir();
+        let profile = load(&hub, Path::new("/nonexistent"), None, "lee").unwrap();
+        let first = |cli: Cli, launch: Launch| {
+            let start = start(&hub, "/code/shop", &profile, "t", "s1", launch, (cli, None)).unwrap();
+            assert!(start.resume);
+            start.first.unwrap()
+        };
+        let spec = "Fix the login test.";
+        assert!(first(Cli::Kiro, Launch::Resume { spec }).ends_with(spec));
+        assert_eq!(first(Cli::Claude, Launch::Resume { spec }), RESUMED);
+        assert_eq!(first(Cli::Codex, Launch::Resume { spec }), RESUMED);
+        assert_eq!(first(Cli::Kiro, Launch::Next { spec: "next one" }), "next one");
     }
 
     #[test]

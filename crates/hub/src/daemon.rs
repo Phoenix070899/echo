@@ -1706,28 +1706,33 @@ impl Hub {
         }
     }
 
+    /// A Worker's Profile and the CLI and model picked for it.
+    fn pick_for(&self, worker: &Worker) -> Result<(profile::Profile, cli::Cli, Option<String>)> {
+        let repo = Path::new(&worker.repo);
+        let profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(repo), &worker.profile)?;
+        let picked = cli::Choice {
+            cli: worker.cli.clone(),
+            model: worker.model.clone(),
+        };
+        let (worker_cli, model) = cli::pick(&paths::state_dir(), Some(repo), Some(&profile.choice()), &[&picked])?;
+        Ok((profile, worker_cli, model))
+    }
+
     fn spawn_for(&self, worker: &Worker, launch: Launch) -> Result<Spawn> {
         let launch_kind = match launch {
             Launch::New { .. } => LaunchKind::New,
-            Launch::Resume | Launch::Next { .. } => LaunchKind::Resume,
+            Launch::Resume { .. } | Launch::Next { .. } => LaunchKind::Resume,
         };
         let (worker_cli, program, args) = match &self.test_agent {
             Some(agent) => {
                 let spec = match launch {
                     Launch::New { spec } | Launch::Next { spec } => spec.to_string(),
-                    Launch::Resume => "resume".to_string(),
+                    Launch::Resume { .. } => "resume".to_string(),
                 };
                 (cli::Cli::Claude, agent.clone(), vec![spec])
             }
             None => {
-                let repo = Path::new(&worker.repo);
-                let profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(repo), &worker.profile)?;
-                let picked = cli::Choice {
-                    cli: worker.cli.clone(),
-                    model: worker.model.clone(),
-                };
-                let (worker_cli, model) =
-                    cli::pick(&paths::state_dir(), Some(repo), Some(&profile.choice()), &[&picked])?;
+                let (profile, worker_cli, model) = self.pick_for(worker)?;
                 let start = profile::start(
                     &self.hub_dir,
                     &worker.repo,
@@ -1735,7 +1740,7 @@ impl Hub {
                     &worker.title,
                     &worker.session_id,
                     launch,
-                    model,
+                    (worker_cli, model),
                 )?;
                 let start = cli::Start {
                     cwd: Some(PathBuf::from(&worker.cwd)),
@@ -1953,10 +1958,16 @@ impl Hub {
         if ![state::LOST, state::EXITED, state::ENDED].contains(&worker.state.as_str()) {
             bail!("w{id} is {}; only lost, exited, or ended Workers resume", worker.state);
         }
+        let spec = db::worker_spec(&self.db(), id)?;
+        let worker_cli = match &self.test_agent {
+            Some(_) => cli::Cli::Claude,
+            None => self.pick_for(&worker)?.1,
+        };
         db::set_state(&self.db(), id, state::STARTING)?;
         let worker = db::worker(&self.db(), id)?;
-        db::insert_input(&self.db(), id, db::origin::ECHO, profile::RESUMED)?;
-        self.launch(&worker, Launch::Resume)?;
+        // What the Worker is sent, so the chat can tell it from the human's words.
+        db::insert_input(&self.db(), id, db::origin::ECHO, &profile::resumed(worker_cli, &spec))?;
+        self.launch(&worker, Launch::Resume { spec: &spec })?;
         self.notify();
         Ok(json!({ "id": format!("w{id}") }))
     }
