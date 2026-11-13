@@ -1,0 +1,8 @@
+{
+  "description": "Opus 5.5 plans at high effort; Workers run as their Profiles say.",
+  "orchestrator": {
+    "cli": "claude",
+    "model": "anthropic/claude-opus-5-5",
+    "effort": "high"
+  }
+}

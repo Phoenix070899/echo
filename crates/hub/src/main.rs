@@ -21,6 +21,7 @@ mod repo;
 mod screen;
 mod settings;
 mod stats;
+mod team;
 
 use std::io::Read;
 use std::path::PathBuf;

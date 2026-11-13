@@ -1,0 +1,25 @@
+{
+  "description": "Everything on Kiro: Sonnet 5.5 plans at medium effort, Haiku 5.5 works at low effort, naruto and sasuke on Sonnet 5.5.",
+  "orchestrator": {
+    "cli": "kiro",
+    "model": "claude-sonnet-5.5",
+    "effort": "medium"
+  },
+  "workers": {
+    "cli": "kiro",
+    "model": "claude-haiku-5.5",
+    "effort": "low",
+    "profiles": {
+      "naruto": {
+        "cli": "kiro",
+        "model": "claude-sonnet-5.5",
+        "effort": "high"
+      },
+      "sasuke": {
+        "cli": "kiro",
+        "model": "claude-sonnet-5.5",
+        "effort": "medium"
+      }
+    }
+  }
+}
