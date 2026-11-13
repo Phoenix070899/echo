@@ -86,8 +86,7 @@ impl Cli {
         match self {
             Cli::Claude => screen::look(screen),
             Cli::Codex => screen::codex_look(screen),
-            // Placeholder until the screen reader for Kiro lands.
-            Cli::Kiro => screen::Look::Idle,
+            Cli::Kiro => screen::kiro_look(screen),
         }
     }
 
@@ -96,7 +95,7 @@ impl Cli {
         match self {
             Cli::Claude => screen::prompt_lines(screen),
             Cli::Codex => screen::codex_prompt_lines(screen),
-            Cli::Kiro => String::new(),
+            Cli::Kiro => screen::kiro_prompt_lines(screen),
         }
     }
 
@@ -105,7 +104,7 @@ impl Cli {
         match self {
             Cli::Claude => screen::turn_ended(screen),
             Cli::Codex => screen::codex_turn_ended(screen),
-            Cli::Kiro => false,
+            Cli::Kiro => screen::kiro_turn_ended(screen),
         }
     }
 
@@ -117,6 +116,21 @@ impl Cli {
             Cli::Codex => &[b"\r"],
             // Its dialog starts on "Trust, continue"; `--trust-workspace` normally skips it.
             Cli::Kiro => &[b"\r"],
+        }
+    }
+
+    /// The keys that approve the permission prompt on screen, once.
+    pub fn approve_keys(self) -> &'static [&'static [u8]] {
+        // Every prompt starts its cursor on the approving row, Kiro's "Allow once" too.
+        &[b"\r"]
+    }
+
+    /// The keys that deny the permission prompt on screen, once.
+    pub fn deny_keys(self) -> &'static [&'static [u8]] {
+        match self {
+            Cli::Claude | Cli::Codex => &[b"\x1b"],
+            // Esc would cancel the whole turn; "Deny once" is the second row.
+            Cli::Kiro => &[b"\x1b[B", b"\r"],
         }
     }
 
@@ -1056,5 +1070,34 @@ mod tests {
             .to_string()
             .contains("pick another cli"));
         assert!(!home.join("agents").exists());
+    }
+
+    #[test]
+    fn each_cli_approves_and_denies_with_its_own_keys() {
+        for cli in [Cli::Claude, Cli::Codex, Cli::Kiro] {
+            assert_eq!(cli.approve_keys(), &[b"\r".as_slice()], "{cli:?}");
+        }
+        // Claude and Codex deny with Esc; for Kiro Esc cancels the whole turn, so it moves to "Deny once".
+        assert_eq!(Cli::Claude.deny_keys(), &[b"\x1b".as_slice()]);
+        assert_eq!(Cli::Codex.deny_keys(), &[b"\x1b".as_slice()]);
+        assert_eq!(Cli::Kiro.deny_keys(), &[b"\x1b[B".as_slice(), b"\r".as_slice()]);
+    }
+
+    #[test]
+    fn kiro_reads_its_own_screens() {
+        let permission = include_str!("../tests/fixtures/kiro/permission.txt");
+        let done = include_str!("../tests/fixtures/kiro/done.txt");
+        let trust = include_str!("../tests/fixtures/kiro/trust.txt");
+        assert_eq!(Cli::Kiro.look(permission), screen::Look::PermissionPrompt);
+        assert_eq!(Cli::Kiro.look(trust), screen::Look::TrustPrompt);
+        assert_eq!(Cli::Kiro.look(done), screen::Look::Idle);
+        assert_eq!(
+            Cli::Claude.look(permission),
+            screen::Look::Idle,
+            "Claude's reader ignores Kiro's prompt"
+        );
+        assert!(Cli::Kiro.prompt_lines(permission).contains("shell → touch y"));
+        assert!(Cli::Kiro.turn_ended(done));
+        assert_eq!(Cli::Kiro.trust_keys(), &[b"\r".as_slice()]);
     }
 }

@@ -1,4 +1,4 @@
-//! Reading a Worker's screen: what Claude Code's or Codex's TUI is showing right now.
+//! Reading a Worker's screen: what Claude Code's, Codex's or Kiro's TUI is showing right now.
 
 /// What a Worker's screen says about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +195,97 @@ pub fn codex_turn_ended(screen: &str) -> bool {
         && screen.lines().any(|line| line.trim_start().starts_with("› "))
 }
 
+/// Kiro's screen, read the same way. Its screen is not bottom-anchored, so the lines are found by
+/// content: the last `›` line is the input box, and `Kiro is working · 12s · Type to steer`
+/// there means a turn is running. It has no footer for background work, so this never says
+/// `Waiting`. A screen with no input box (a dialog, or Kiro not drawn yet) is `Working`: not at
+/// its input, and nothing Echo should type into.
+pub fn kiro_look(screen: &str) -> Look {
+    let lines = kiro_lines(screen);
+    if lines.is_empty() {
+        return Look::Idle;
+    }
+    let recent = lines.len().saturating_sub(RECENT);
+    let input = kiro_input(&lines);
+    let live = |at: usize| at >= recent && input.is_none_or(|box_at| at > box_at);
+    if let Some(at) = lines.iter().rposition(|line| line.contains("Trust, continue")) {
+        let asked = lines[..at]
+            .iter()
+            .rev()
+            .take(RECENT)
+            .any(|line| line.starts_with("Trust this workspace?"));
+        if live(at) && asked {
+            return Look::TrustPrompt;
+        }
+    }
+    if let Some(ask) = lines.iter().rposition(|line| line.ends_with("requires approval")) {
+        if live(ask) && lines[ask..].iter().any(|line| line.contains("Allow once")) {
+            return Look::PermissionPrompt;
+        }
+    }
+    let Some(at) = input.filter(|&at| at >= recent) else {
+        return Look::Working;
+    };
+    let draft = lines[at].trim_start_matches('›').trim_start();
+    if draft.starts_with("Kiro is working") || draft.starts_with("Initializing") {
+        return Look::Working;
+    }
+    // Text typed into the box while a turn runs replaces its status; the activity line above the rule stays.
+    let busy = kiro_footer_rule(&lines, at)
+        .and_then(|rule| rule.checked_sub(1))
+        .is_some_and(|above| lines[above] == "esc to cancel" || lines[above].ends_with("(esc to cancel)"));
+    if busy {
+        Look::Working
+    } else {
+        Look::Idle
+    }
+}
+
+/// Kiro's non-blank lines, trimmed.
+fn kiro_lines(screen: &str) -> Vec<&str> {
+    screen.lines().map(str::trim).filter(|line| !line.is_empty()).collect()
+}
+
+/// Kiro's input box: the last line that starts with `›`.
+fn kiro_input(lines: &[&str]) -> Option<usize> {
+    lines.iter().rposition(|line| line.starts_with('›'))
+}
+
+/// The horizontal rule above Kiro's status line and input box: the nearest one, a few lines up.
+fn kiro_footer_rule(lines: &[&str], input: usize) -> Option<usize> {
+    lines[..input]
+        .iter()
+        .rposition(|line| line.starts_with('─'))
+        .filter(|rule| input - rule <= 3)
+}
+
+/// Kiro's approval: its title line (`<what> requires approval`) and what it asks about
+/// (`shell → touch y`), up to the first option.
+pub fn kiro_prompt_lines(screen: &str) -> String {
+    let lines = kiro_lines(screen);
+    let Some(ask) = lines.iter().rposition(|line| line.ends_with("requires approval")) else {
+        return String::new();
+    };
+    let end = lines[ask..]
+        .iter()
+        .position(|line| line.contains("Allow once"))
+        .map_or(lines.len(), |at| ask + at);
+    lines[ask..end].join("\n")
+}
+
+/// A Kiro turn that finished at its input box: the `▸ Credits: turn 0.00 | Time: 4s` line
+/// sits right above the rule over the status line. A cancelled or failed turn prints no credits.
+pub fn kiro_turn_ended(screen: &str) -> bool {
+    if kiro_look(screen) != Look::Idle {
+        return false;
+    }
+    let lines = kiro_lines(screen);
+    kiro_input(&lines)
+        .and_then(|input| kiro_footer_rule(&lines, input))
+        .and_then(|rule| rule.checked_sub(1))
+        .is_some_and(|above| lines[above].starts_with("▸ Credits:"))
+}
+
 /// The last `count` non-blank lines, right-trimmed.
 pub fn tail(screen: &str, count: usize) -> String {
     let lines: Vec<&str> = screen
@@ -389,5 +480,190 @@ mod tests {
             Look::Idle,
             "Claude's reader does not take Codex's prompt for its own"
         );
+    }
+
+    /// Kiro CLI 3.2.1's screens, captured from a real session (docs/research/kiro-cli-spike.md).
+    const KIRO_IDLE: &str = include_str!("../tests/fixtures/kiro/idle.txt");
+    const KIRO_WORKING: &str = include_str!("../tests/fixtures/kiro/working.txt");
+    const KIRO_WORKING_SHELL: &str = include_str!("../tests/fixtures/kiro/working-shell.txt");
+    const KIRO_WORKING_TEXT: &str = include_str!("../tests/fixtures/kiro/working-text.txt");
+    const KIRO_DONE: &str = include_str!("../tests/fixtures/kiro/done.txt");
+    const KIRO_PERMISSION: &str = include_str!("../tests/fixtures/kiro/permission.txt");
+    const KIRO_PERMISSION_FSREAD: &str = include_str!("../tests/fixtures/kiro/permission-fsread.txt");
+    const KIRO_PERMISSION_FSWRITE: &str = include_str!("../tests/fixtures/kiro/permission-fswrite.txt");
+    const KIRO_PERMISSION_ALWAYS: &str = include_str!("../tests/fixtures/kiro/permission-always.txt");
+    const KIRO_ALLOWED_ONCE: &str = include_str!("../tests/fixtures/kiro/allowed-once.txt");
+    const KIRO_REJECTED: &str = include_str!("../tests/fixtures/kiro/rejected.txt");
+    const KIRO_DENIED_BY_RULE: &str = include_str!("../tests/fixtures/kiro/denied-by-rule.txt");
+    const KIRO_CANCELLED: &str = include_str!("../tests/fixtures/kiro/cancelled.txt");
+    const KIRO_CANCELLED_TOOL: &str = include_str!("../tests/fixtures/kiro/cancelled-tool.txt");
+    const KIRO_TRUST: &str = include_str!("../tests/fixtures/kiro/trust.txt");
+    const KIRO_WAITING: &str = include_str!("../tests/fixtures/kiro/waiting.txt");
+    const KIRO_USAGE: &str = include_str!("../tests/fixtures/kiro/usage.txt");
+    const KIRO_UNKNOWN_MODEL: &str = include_str!("../tests/fixtures/kiro/unknown-model.txt");
+    const KIRO_RESUMED: &str = include_str!("../tests/fixtures/kiro/resumed.txt");
+
+    /// Kiro's rule, status line and idle input box, as the bottom of every captured idle screen.
+    const KIRO_IDLE_BOTTOM: &str =
+        "────────\necho-spike-a · claude-haiku-5.5 · thinking · medium · ◔ 1%    /tmp/r · (main)\n\
+                                    ›  ask a question or describe a task ↵\n";
+
+    #[test]
+    fn reads_kiro_at_its_input_box() {
+        assert_eq!(kiro_look(KIRO_IDLE), Look::Idle);
+        assert_eq!(kiro_look(KIRO_DONE), Look::Idle);
+        assert_eq!(kiro_look(KIRO_ALLOWED_ONCE), Look::Idle);
+        assert_eq!(kiro_look(KIRO_UNKNOWN_MODEL), Look::Idle);
+        assert_eq!(kiro_look(KIRO_RESUMED), Look::Idle);
+        assert_eq!(kiro_look(""), Look::Idle);
+    }
+
+    #[test]
+    fn reads_kiro_working() {
+        assert_eq!(kiro_look(KIRO_WORKING), Look::Working);
+        assert_eq!(kiro_look(KIRO_WORKING_SHELL), Look::Working);
+        assert_eq!(kiro_look(KIRO_WORKING_TEXT), Look::Working);
+    }
+
+    #[test]
+    fn kiro_loading_is_not_ready_for_typing() {
+        let loading = KIRO_IDLE.replace(
+            "ask a question or describe a task ↵",
+            "Initializing · type to queue a message",
+        );
+        assert_eq!(kiro_look(&loading), Look::Working);
+    }
+
+    #[test]
+    fn reads_kiro_permission_prompts() {
+        assert_eq!(kiro_look(KIRO_PERMISSION), Look::PermissionPrompt);
+        assert_eq!(kiro_look(KIRO_PERMISSION_FSREAD), Look::PermissionPrompt);
+        assert_eq!(kiro_look(KIRO_PERMISSION_FSWRITE), Look::PermissionPrompt);
+    }
+
+    #[test]
+    fn reads_kiro_trust_dialog() {
+        assert_eq!(kiro_look(KIRO_TRUST), Look::TrustPrompt);
+    }
+
+    #[test]
+    fn kiro_never_waits_on_background_work() {
+        // Q8: a background command leaves the normal idle screen, with no footer for it.
+        assert_eq!(kiro_look(KIRO_WAITING), Look::Idle);
+    }
+
+    #[test]
+    fn a_cancelled_kiro_turn_is_idle() {
+        assert_eq!(kiro_look(KIRO_CANCELLED), Look::Idle);
+        assert_eq!(kiro_look(KIRO_CANCELLED_TOOL), Look::Idle);
+    }
+
+    #[test]
+    fn an_answered_or_blocked_kiro_prompt_is_idle() {
+        assert_eq!(kiro_look(KIRO_REJECTED), Look::Idle);
+        assert_eq!(kiro_look(KIRO_DENIED_BY_RULE), Look::Idle);
+    }
+
+    #[test]
+    fn kiro_dialogs_without_an_input_box_are_not_idle_or_decidable() {
+        // The "always" rule dialog and /usage have no approve-once row, so deciding them would misfire.
+        assert_eq!(kiro_look(KIRO_PERMISSION_ALWAYS), Look::Working);
+        assert_eq!(kiro_look(KIRO_USAGE), Look::Working);
+    }
+
+    #[test]
+    fn an_old_kiro_permission_prompt_in_the_transcript_is_not_live() {
+        let lines: Vec<&str> = KIRO_PERMISSION.lines().collect();
+        let from = lines
+            .iter()
+            .position(|line| line.ends_with("requires approval"))
+            .unwrap();
+        let quoted = lines[from..].join("\n");
+        let screen = format!("{quoted}\n• Shell touch y\n▸ Credits: turn 0.00 | Time: 4s\n{KIRO_IDLE_BOTTOM}");
+        assert_eq!(kiro_look(&screen), Look::Idle);
+        // Far above the bottom, with no input box on screen at all, it is still not live.
+        let mut far = String::from(quoted.as_str());
+        for n in 0..14 {
+            far += &format!("\n  line {n}");
+        }
+        assert_eq!(kiro_look(&far), Look::Working);
+    }
+
+    #[test]
+    fn a_kiro_trust_dialog_quoted_in_the_transcript_is_not_live() {
+        let screen = format!("• The dialog reads Trust this workspace? then ❯ Trust, continue\n{KIRO_IDLE_BOTTOM}");
+        assert_eq!(kiro_look(&screen), Look::Idle);
+        let lines: Vec<&str> = KIRO_TRUST.lines().collect();
+        let from = lines
+            .iter()
+            .position(|line| line.contains("Trust this workspace?"))
+            .unwrap();
+        let quoted = lines[from..].join("\n");
+        assert_eq!(kiro_look(&quoted), Look::TrustPrompt);
+        assert_eq!(kiro_look(&format!("{quoted}\n{KIRO_IDLE_BOTTOM}")), Look::Idle);
+    }
+
+    #[test]
+    fn a_working_line_quoted_in_the_kiro_transcript_is_not_working() {
+        let screen = format!(
+            "• The box reads:\n› Kiro is working · 1s · Type to steer · Ctrl+S to queue\n\
+             • Thinking... (esc to cancel)\n▸ Credits: turn 0.00 | Time: 4s\n{KIRO_IDLE_BOTTOM}"
+        );
+        assert_eq!(kiro_look(&screen), Look::Idle);
+    }
+
+    #[test]
+    fn kiro_text_typed_while_it_works_is_still_working() {
+        let steering = KIRO_WORKING.replace(
+            "Kiro is working · 1s · Type to steer · Ctrl+S to queue",
+            "try it another way",
+        );
+        assert!(steering.contains("› try it another way") || steering.contains("›  try it another way"));
+        assert_eq!(kiro_look(&steering), Look::Working);
+        let tool = KIRO_WORKING_SHELL.replace("Kiro is working · 6s · Type to steer · Ctrl+S to queue", "stop it");
+        assert_eq!(kiro_look(&tool), Look::Working);
+        // A draft typed at an idle box is not a running turn.
+        let draft = KIRO_DONE.replace("ask a question or describe a task ↵", "fix the build");
+        assert_eq!(kiro_look(&draft), Look::Idle);
+    }
+
+    #[test]
+    fn kiro_prompt_lines_are_the_title_and_what_it_asks_about() {
+        assert_eq!(
+            kiro_prompt_lines(KIRO_PERMISSION),
+            "Create empty file named y requires approval\nshell → touch y"
+        );
+        assert_eq!(
+            kiro_prompt_lines(KIRO_PERMISSION_FSREAD),
+            "Create empty file named y requires approval\nfs_read → ."
+        );
+        assert_eq!(
+            kiro_prompt_lines(KIRO_PERMISSION_FSWRITE),
+            "Write File requires approval\nfs_write → /private/tmp/kirospike-outside/x.txt"
+        );
+        assert_eq!(kiro_prompt_lines(KIRO_IDLE), "");
+    }
+
+    #[test]
+    fn a_kiro_turn_ended_at_the_input_box() {
+        assert!(kiro_turn_ended(KIRO_DONE));
+        assert!(kiro_turn_ended(KIRO_ALLOWED_ONCE));
+        assert!(kiro_turn_ended(KIRO_DENIED_BY_RULE));
+        assert!(!kiro_turn_ended(KIRO_WORKING));
+        assert!(!kiro_turn_ended(KIRO_WORKING_TEXT));
+        assert!(!kiro_turn_ended(KIRO_PERMISSION));
+        assert!(!kiro_turn_ended(KIRO_IDLE), "nothing has run yet");
+        assert!(!kiro_turn_ended(KIRO_RESUMED), "the last turn there was cancelled");
+        assert!(!kiro_turn_ended(KIRO_CANCELLED));
+        assert!(!kiro_turn_ended(KIRO_CANCELLED_TOOL));
+        assert!(!kiro_turn_ended(KIRO_UNKNOWN_MODEL), "a failed turn prints no credits");
+        assert!(!kiro_turn_ended(""));
+    }
+
+    #[test]
+    fn credits_quoted_in_the_kiro_transcript_do_not_end_a_turn() {
+        let screen =
+            format!("• Last turn:\n▸ Credits: turn 0.00 | Time: 4s\n• I am still reading.\n{KIRO_IDLE_BOTTOM}");
+        assert!(!kiro_turn_ended(&screen));
     }
 }

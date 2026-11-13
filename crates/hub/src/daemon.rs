@@ -236,7 +236,9 @@ fn side_dir(path: &str) -> Result<PathBuf> {
     if !path.is_absolute() {
         bail!("{} is not an absolute path", path.display());
     }
-    let dir = path.canonicalize().with_context(|| format!("{} does not exist", path.display()))?;
+    let dir = path
+        .canonicalize()
+        .with_context(|| format!("{} does not exist", path.display()))?;
     if !dir.is_dir() {
         bail!("{} is not a folder", dir.display());
     }
@@ -601,7 +603,13 @@ impl Hub {
     /// busy mark while a command streams. Never starts one.
     fn side_status(&self, p: &Value) -> Result<Value> {
         let key = side_dir(str_param(p, "path")?)?.display().to_string();
-        let live = self.side_shells.lock().unwrap().get(&key).filter(|l| l.is_alive()).cloned();
+        let live = self
+            .side_shells
+            .lock()
+            .unwrap()
+            .get(&key)
+            .filter(|l| l.is_alive())
+            .cloned();
         let lines = p.get("lines").and_then(Value::as_u64).unwrap_or(0) as usize;
         Ok(match live {
             Some(live) => {
@@ -2883,9 +2891,9 @@ impl Hub {
         }
         let prompt = live.cli.prompt_lines(&screen);
         if approve {
-            live.write(b"\r")?;
+            press(&live, live.cli.approve_keys())?;
         } else {
-            live.write(b"\x1b")?;
+            press(&live, live.cli.deny_keys())?;
             std::thread::sleep(Duration::from_millis(500));
             let note = p
                 .get("note")
@@ -2916,9 +2924,9 @@ impl Hub {
             bail!("no permission prompt is waiting on agent {id}");
         }
         if approve {
-            live.write(b"\r")?;
+            press(&live, live.cli.approve_keys())?;
         } else {
-            live.write(b"\x1b")?;
+            press(&live, live.cli.deny_keys())?;
             if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
                 std::thread::sleep(Duration::from_millis(500));
                 live.write(note.as_bytes())?;
@@ -3525,6 +3533,17 @@ fn refuse_over_dialog(live: &Live) -> Result<()> {
         Look::TrustPrompt => bail!("w{} still shows its folder-trust dialog; try again in a moment", live.id),
         _ => Ok(()),
     }
+}
+
+/// Presses keys one after another, a moment apart so a dialog has moved before the next arrives.
+fn press(live: &Live, keys: &[&[u8]]) -> Result<()> {
+    for (n, key) in keys.iter().enumerate() {
+        if n > 0 {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        live.write(key)?;
+    }
+    Ok(())
 }
 
 /// Types text at the input box, then Enter on its own; several lines go as one paste, so the
