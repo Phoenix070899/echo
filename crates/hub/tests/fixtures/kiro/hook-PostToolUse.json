@@ -1,0 +1,1 @@
+{"session_id":"sess_934e96d5-ec7e-4376-89d4-109bb8026636","hook_event_name":"PostToolUse","cwd":"/private/tmp/kirospike-repo","tool_name":"execute_bash","tool_input":{"command":"echo hello-hooks","description":"Print hello-hooks to stdout","cwd":null,"run_in_background":false,"timeout":null},"tool_response":"Output:\nhello-hooks\n\n\nExit Code: 0"}

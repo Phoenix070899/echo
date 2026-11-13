@@ -1,0 +1,45 @@
+
+          ⣀⣤⣤⣶⣶⣤⣤⣄⡀
+        ⢠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣄
+        ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡄
+       ⢸⣿⣿⣿⣿⣿⣿⠁⢹⣿⠁⢹⣿⣿⣧        Welcome to Kiro CLI V3
+       ⢸⣿⣿⣿⣿⣿⣿⣄⣼⣿⣄⣼⣿⣿⣿        Learn more: https://kiro.dev/docs/cli/v3/
+       ⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⢰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿        kiro-cli --v2   Launch the previous experience instead
+      ⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠃
+        ⠸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠁
+         ⠙⠛⠛⠛⠋⠁⠙⠛⠛⠉
+
+
+▸ What's new
+  Approve for me, cloud sessions, memory, local sandbox and specs.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Use the write tool (not shell) to create the file /tmp/kirospike-outside/x.txt with the content hello.
+
+• Thought for 1s...
+    ╰ The user explicitly specified a path outside the workspace, so writing there is fine—I'll use the file write tool to create it.
+↓ Write /tmp/kirospike-outside/x.txt
+    added 1 line in x.txt
+     1+  hello
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Create allow rule: /private/tmp/kirospike-outside/x.txt
+ fs_write → /private/tmp/kirospike-outside/x.txt
+
+ Scope:  [session]   workspace    user   (s to cycle scope)
+ ❯ Trust "/private/tmp/kirospike-outside/x.txt"    exact match · session
+   Allow a folder for this session…                /private/tmp/kirospike-outside · session
+   Trust entire tool (Write)                       session
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ esc to go back · ↑↓ to navigate · ↵ to select · s to cycle scope · Tab to edit
+
+
+
+
+
+
+
+
+
+
+

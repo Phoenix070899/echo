@@ -1,0 +1,45 @@
+      ⢰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿        kiro-cli --v2   Launch the previous experience instead
+      ⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠃
+        ⠸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠁
+         ⠙⠛⠛⠛⠋⠁⠙⠛⠛⠉
+
+
+▸ What's new
+  Approve for me, cloud sessions, memory, local sandbox and specs.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  What is the secret codeword? Reply with just the codeword.
+
+• PINEAPPLE-42
+
+▸ Credits: turn 0.01 • session 0.01 | Time: 4s
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Run exactly this shell command and show its output: echo hi
+
+• Shell echo hi
+    ╰ description=Print the word hi, run_in_background=false
+    ╰ hi
+
+• Output:
+
+  hi
+
+▸ Credits: turn 0.00 • session 0.02 | Time: 6s
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Run exactly this shell command: touch y
+
+↓ Shell touch y
+    ╰ description=Create empty file named y, cwd=/private/tmp/kirospike-repo, run_in_background=false
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Create empty file named y requires approval
+ shell → touch y
+
+ ❯ Allow once
+   Deny once
+   Create allow rule to approve future similar actions
+   Create deny rule to block future similar actions
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ esc to close · ↑↓ to navigate · ↵ to select · Tab to edit
+
+
+

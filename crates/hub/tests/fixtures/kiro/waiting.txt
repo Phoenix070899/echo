@@ -1,0 +1,45 @@
+
+          ⣀⣤⣤⣶⣶⣤⣤⣄⡀
+        ⢠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣄
+        ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡄
+       ⢸⣿⣿⣿⣿⣿⣿⠁⢹⣿⠁⢹⣿⣿⣧        Welcome to Kiro CLI V3
+       ⢸⣿⣿⣿⣿⣿⣿⣄⣼⣿⣄⣼⣿⣿⣿        Learn more: https://kiro.dev/docs/cli/v3/
+       ⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+      ⢰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿        kiro-cli --v2   Launch the previous experience instead
+      ⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠃
+        ⠸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠁
+         ⠙⠛⠛⠛⠋⠁⠙⠛⠛⠉
+
+
+▸ What's new
+  Approve for me, cloud sessions, memory, local sandbox and specs.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Call the shell tool with run_in_background=true and command: bash -c 'sleep 20; echo finished > /tmp/kirospike-repo/bg3.txt'. After it has started, end your
+  turn with just the word started. When the command finishes, tell me.
+
+• Thought for 1s...
+    ╰ I'll kick off the command in the background and let the user know it's started, since I can't monitor its completion across turns without checking back in
+      myself.
+• Shell bash -c 'sleep 20; echo finished > /tmp/kirospike-repo/bg3.txt' &
+    ╰ description=Run delayed background write to bg3.txt, run_in_background=true
+
+• started
+
+▸ Credits: turn 0.02 • session 0.02 | Time: 7s
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+echo-spike-c · claude-haiku-5.5 · thinking · medium · ◔ 2%                                                                  /private/tmp/kirospike-repo · (main)
+
+›  ask a question or describe a task ↵
+
+
+
+
+
+
+
+
+
+
+
+
