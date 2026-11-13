@@ -219,7 +219,10 @@ pub fn kiro_look(screen: &str) -> Look {
         }
     }
     if let Some(ask) = lines.iter().rposition(|line| line.ends_with("requires approval")) {
-        if live(ask) && lines[ask..].iter().any(|line| line.contains("Allow once")) {
+        // A long command wraps over many lines and pushes the title above the recent ones; the
+        // dialog's own key hint as the last line of the screen still says it is the live one.
+        let dialog = lines.last().is_some_and(|line| line.starts_with("esc to close")) && input.is_none_or(|b| ask > b);
+        if (live(ask) || dialog) && lines[ask..].iter().any(|line| line.contains("Allow once")) {
             return Look::PermissionPrompt;
         }
     }
@@ -587,6 +590,21 @@ mod tests {
             far += &format!("\n  line {n}");
         }
         assert_eq!(kiro_look(&far), Look::Working);
+    }
+
+    #[test]
+    fn a_kiro_permission_prompt_for_a_long_wrapped_command_is_live() {
+        // A command of 7 screen lines puts the title 14 lines above the bottom, past RECENT.
+        let long = (0..7)
+            .map(|n| format!(" segment{n:03} segment{n:03} segment{n:03}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let screen = KIRO_PERMISSION.replace(" shell → touch y", &format!(" shell → echo\n{long}"));
+        assert_eq!(kiro_look(&screen), Look::PermissionPrompt);
+        assert!(kiro_prompt_lines(&screen).contains("segment006"));
+        // The same lines quoted in the transcript, with the idle box below, are not live.
+        let quoted = format!("{}\n{KIRO_IDLE_BOTTOM}", screen.trim_end());
+        assert_eq!(kiro_look(&quoted), Look::Idle);
     }
 
     #[test]
