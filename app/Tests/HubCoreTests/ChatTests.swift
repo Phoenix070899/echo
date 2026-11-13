@@ -91,3 +91,19 @@ import Testing
     // No Files column: the ledger alone gives way.
     #expect(ColumnLayout.fit(total: 900, fixed: 36, ledger: 640, files: nil) == .init(ledger: 504, files: nil))
 }
+
+@Test func aKiroItemCarriesItsLevelAndDeniedFlagAndOthersCarryNone() {
+    var log = ChatLog()
+    log.apply(["session": "k1", "end": 9, "supported": true, "items": [
+        ["kind": "event", "id": "e1", "text": "Interrupted", "level": "interrupt"],
+        ["kind": "event", "id": "e2", "text": "Error: the turn failed.", "level": "error", "extra": 1],
+        ["kind": "event", "id": "e3", "text": "w12 sent its Final Report"],
+        ["kind": "tool", "id": "t1", "tool": "Bash", "summary": "rm x", "denied": true],
+        ["kind": "result", "id": "t1", "text": "Denied", "error": true],
+        ["kind": "tool", "id": "t2", "tool": "Read", "summary": "a.rs"],
+    ]])
+    #expect(log.supported)
+    #expect(log.items.map(\.level) == ["interrupt", "error", nil, nil, nil])
+    #expect(log.items[3].denied && log.items[3].failed && log.items[3].output == "Denied")
+    #expect(!log.items[4].denied)
+}

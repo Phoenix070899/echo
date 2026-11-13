@@ -488,6 +488,59 @@ func row(_ id: String, phase: String, quiet: Int, model: String? = nil, effort: 
     #expect(try socket.readLine() == Data("next".utf8))
 }
 
+private func usageReply(_ limits: String, error: String = "null") throws -> Usage {
+    let json = #"{"limits":[\#(limits)],"updatedAt":1792199000,"error":\#(error),"refreshing":false}"#
+    return try JSONDecoder().decode(Usage.self, from: Data(json.utf8))
+}
+
+private let claudeLimits = #"{"name":"Session","percent":48,"resets":"Oct 17 at 4:50pm"},{"name":"Week","percent":9,"resets":"Oct 23 at 11pm"}"#
+private let kiroLimit = #"{"name":"Kiro credits","percent":30,"resets":"Dec 1","detail":"603.62 of 2000"}"#
+
+@Test func aUsageReplyDecodesWithAndWithoutKirosCredits() throws {
+    let without = try usageReply(claudeLimits)
+    #expect(without.limits.map(\.name) == ["Session", "Week"])
+    #expect(without.limits.allSatisfy { $0.detail == nil })
+    #expect(without.shown.map(\.name) == ["Session", "Week"])
+
+    let with = try usageReply(claudeLimits + "," + kiroLimit)
+    #expect(with.shown.map(\.name) == ["Session", "Week", "Kiro credits"])
+    #expect(with.limits[2].detail == "603.62 of 2000")
+    #expect(with.limits[2].percent == 30)
+    #expect(with.limits[2].tooltip == "Kiro credits: 603.62 of 2000 credits, resets Dec 1")
+    #expect(with.limits[0].tooltip == "Session: 48% used, resets Oct 17 at 4:50pm")
+}
+
+@Test func aUsageReplyIgnoresFieldsItDoesNotKnow() throws {
+    let json = #"{"limits":[{"name":"Session","percent":1,"resets":null,"colour":"red"},{"name":"Kiro credits","percent":2,"resets":null,"detail":"1 of 50","plan":"Pro"}],"updatedAt":null,"error":null,"refreshing":true,"extra":{"a":1}}"#
+    let usage = try JSONDecoder().decode(Usage.self, from: Data(json.utf8))
+    #expect(usage.limits.count == 2)
+    #expect(usage.refreshing)
+    #expect(usage.limits[1].tooltip == "Kiro credits: 1 of 50 credits")
+}
+
+@Test func kirosEntryIsAppendedAfterClaudesTwoAndShowsWhenClaudeSentNone() throws {
+    let three = #"{"name":"Week (Opus)","percent":3,"resets":null}"#
+    let crowded = try usageReply(kiroLimit + "," + claudeLimits + "," + three)
+    #expect(crowded.shown.map(\.name) == ["Session", "Week", "Kiro credits"], "Kiro's entry is neither dropped nor first")
+    let alone = try usageReply(kiroLimit, error: #""claude -p /usage failed""#)
+    #expect(alone.shown.map(\.name) == ["Kiro credits"])
+    #expect(!alone.hasClaudeLimits, "Kiro's entry does not hide Claude's error")
+    #expect(try usageReply(claudeLimits, error: #""stale""#).hasClaudeLimits)
+    #expect(try usageReply("").shown.isEmpty)
+}
+
+@Test func kirosBillingDateReadsAsATimeLeftAndClaudesFormStillDoes() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "Asia/Saigon")!
+    let now = calendar.date(from: DateComponents(year: 2026, month: 11, day: 13, hour: 12))!
+    func left(_ resets: String?) -> String? {
+        Usage.Limit(name: "Kiro credits", percent: 30, resets: resets, detail: "603.62 of 2000").resetsIn(now: now, calendar: calendar)
+    }
+    #expect(left("Dec 1") == "17d 12h")
+    #expect(left("Nov 13 at 3:30pm") == "3h 30m")
+    #expect(left("Jan 1") == "48d 12h", "a date earlier in the year is next year's")
+}
+
 @Test func usageResetsReadAsATimeLeft() throws {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(identifier: "Asia/Saigon")!

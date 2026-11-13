@@ -60,7 +60,7 @@ struct ChatView: View {
     @ViewBuilder
     private var content: some View {
         if !feed.supported, let worker, !worker.isActive {
-            // A Codex or Kiro Worker keeps no transcript Echo reads; its report reads as before.
+            // A Codex Worker keeps no transcript Echo reads; its report reads as before.
             FinalReportView(worker: worker)
         } else if !feed.supported {
             ContentUnavailableView("No chat for this agent", systemImage: "terminal",
@@ -473,7 +473,7 @@ private struct ChatBottom: View {
         let typed = composer.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
         let files = composer.files
-        // Files go as their paths, as a drop into the terminal types them; Claude Code reads them.
+        // Files go as their paths, as a drop into the terminal types them; the agent reads them.
         let text = ([typed] + files.map { ChatAttachments.quoted($0.path) }).filter { !$0.isEmpty }.joined(separator: " ")
         // A command with a menu draws it in the terminal, so the terminal shows for it.
         let menu = (composer.commands ?? []).contains { $0.menu && (typed == "/" + $0.name || typed.hasPrefix("/" + $0.name + " ")) }
@@ -540,7 +540,7 @@ private struct ChatRowView: View {
             switch item.kind {
             case .user: UserBubble(text: item.text, fromOrchestrator: item.from == "orchestrator")
             case .reply: ReplyView(item: item, blocks: feed.blocks(item))
-            case .event: EventLine(text: item.text)
+            case .event: EventLine(text: item.text, level: item.level)
             case .divider: Divider(label: item.text)
             case .tool: ToolRow(item: item, feed: feed)
             }
@@ -642,28 +642,43 @@ private struct ReplyView: View {
     }
 }
 
-/// A background note, such as a task notification: one dim line.
+/// A background note, such as a task notification: one dim line. An interrupt reads a shade
+/// darker, and an error in the failure colour with its mark.
 private struct EventLine: View {
     let text: String
+    let level: String?
 
     var body: some View {
-        Text(text)
-            .font(Ledger.font(12.5))
-            .foregroundStyle(Ledger.ink3)
-            .lineLimit(2)
-            .truncationMode(.tail)
-            .help(text)
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            if level == "error" {
+                Image(systemName: "exclamationmark.circle")
+            }
+            Text(text)
+                .lineLimit(2)
+                .truncationMode(.tail)
+        }
+        .font(Ledger.font(12.5))
+        .foregroundStyle(color)
+        .help(text)
+    }
+
+    private var color: Color {
+        switch level {
+        case "error": return Ledger.failInk
+        case "interrupt": return Ledger.ink2
+        default: return Ledger.ink3
+        }
     }
 }
 
-/// Claude's mark for a tool call: a symbol by what the tool does.
+/// The mark for a tool call: a symbol by what the tool does, for Claude's tool names and Kiro's.
 private func toolIcon(_ name: String?) -> String {
     switch name {
     case "Bash", "BashOutput", "KillShell": return "terminal"
     case "Edit", "MultiEdit", "Write", "NotebookEdit": return "pencil"
     case "Read": return "doc.text"
-    case "Grep", "Glob": return "magnifyingglass"
-    case "WebFetch", "WebSearch": return "globe"
+    case "Grep", "Glob", "grep", "glob": return "magnifyingglass"
+    case "WebFetch", "WebSearch", "web_fetch", "web_search": return "globe"
     case "Task", "Agent": return "person.2"
     default: return "wrench.and.screwdriver"
     }
@@ -722,7 +737,7 @@ private struct ToolRow: View {
         let open = feed.open.contains(item.id)
         let column = VStack(alignment: .leading, spacing: 0) {
             Button { feed.toggle(item.id) } label: {
-                FoldLabel(icon: toolIcon(item.tool), open: open, failed: item.failed) {
+                FoldLabel(icon: toolIcon(item.tool), open: open, failed: item.failed, denied: item.denied) {
                     Text(item.tool ?? "Tool").fontWeight(.medium).foregroundStyle(Ledger.ink2)
                     Text(item.summary ?? "")
                         .font(Ledger.mono)
@@ -745,6 +760,8 @@ private struct FoldLabel<Content: View>: View {
     let icon: String
     let open: Bool
     let failed: Bool
+    /// A call that was refused reads "Denied" in place of the failure mark.
+    var denied = false
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -754,7 +771,9 @@ private struct FoldLabel<Content: View>: View {
                 .foregroundStyle(Ledger.ink3)
                 .frame(width: 16)
             content
-            if failed {
+            if denied {
+                Text("Denied").font(Ledger.font(12)).foregroundStyle(Ledger.failInk)
+            } else if failed {
                 Image(systemName: "exclamationmark.circle").foregroundStyle(Ledger.fail)
             }
             Spacer(minLength: 8)

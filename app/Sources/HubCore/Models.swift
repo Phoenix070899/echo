@@ -179,15 +179,38 @@ public struct Snapshot: Decodable, Equatable, Sendable {
     }
 }
 
-/// The Claude account's plan limits, as `claude -p /usage` prints them.
+/// The account limits the daemon reads: Claude's plan limits, as `claude -p /usage` prints them,
+/// and after them Kiro's credits when it knows them (features/0078).
 public struct Usage: Decodable, Equatable, Sendable {
     /// One limit, e.g. "Session" 48% resetting "Oct 17 at 4:50pm".
     public struct Limit: Decodable, Equatable, Sendable, Identifiable {
+        /// The name the daemon gives Kiro's credits entry.
+        public static let kiroName = "Kiro credits"
+
         public let name: String
         public let percent: Int
         public let resets: String?
+        /// Only Kiro's entry has it: the credits used and the plan's, "603.62 of 2000".
+        public let detail: String?
 
         public var id: String { name }
+
+        public init(name: String, percent: Int, resets: String?, detail: String? = nil) {
+            self.name = name
+            self.percent = percent
+            self.resets = resets
+            self.detail = detail
+        }
+
+        public var isKiro: Bool { name == Self.kiroName }
+
+        /// The limit's line in the usage tooltip: Claude's as "Session: 48% used, resets Oct 17 at
+        /// 4:50pm", Kiro's as "Kiro credits: 603.62 of 2000 credits, resets Dec 1".
+        public var tooltip: String {
+            let resetsText = resets.map { ", resets \($0)" } ?? ""
+            if let detail, !detail.isEmpty { return "\(name): \(detail) credits" + resetsText }
+            return "\(name): \(percent)% used" + resetsText
+        }
 
         /// Time left until `resets`, e.g. "3h 40m" or "4d 11h"; nil when it does not read as a date.
         /// `/usage` prints it in this Mac's time zone without a year, so a date already past is next year's.
@@ -197,7 +220,8 @@ public struct Usage: Decodable, Equatable, Sendable {
             parser.locale = Locale(identifier: "en_US_POSIX")
             parser.calendar = calendar
             parser.timeZone = calendar.timeZone
-            let formats = ["MMM d 'at' h:mma", "MMM d 'at' ha"]
+            // "Dec 1" is Kiro's billing date, with no time: the day's start.
+            let formats = ["MMM d 'at' h:mma", "MMM d 'at' ha", "MMM d"]
             guard let parsed = formats.lazy.compactMap({ format -> Date? in
                 parser.dateFormat = format
                 return parser.date(from: resets)
@@ -220,6 +244,22 @@ public struct Usage: Decodable, Equatable, Sendable {
     public let updatedAt: Int?
     public let error: String?
     public let refreshing: Bool
+
+    public init(limits: [Limit], updatedAt: Int? = nil, error: String? = nil, refreshing: Bool = false) {
+        self.limits = limits
+        self.updatedAt = updatedAt
+        self.error = error
+        self.refreshing = refreshing
+    }
+
+    /// Claude's limits as drawn: the first two, Session and Week.
+    public var claudeShown: [Limit] { Array(limits.filter { !$0.isKiro }.prefix(2)) }
+
+    /// Whether Claude sent any limit; its `error` shows only when it did not.
+    public var hasClaudeLimits: Bool { limits.contains { !$0.isKiro } }
+
+    /// What the bar draws: Claude's two, then Kiro's credits, which show even when Claude sent none.
+    public var shown: [Limit] { claudeShown + limits.filter(\.isKiro) }
 }
 
 /// A Worker's Dashboard state.

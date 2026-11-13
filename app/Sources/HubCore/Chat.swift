@@ -26,12 +26,16 @@ public struct ChatItem: Equatable, Identifiable, Sendable {
     public var new: String?
     public var output: String?
     public var failed = false
+    /// A tool call the human or a rule denied; its result already reads "Denied" and `failed`.
+    public var denied = false
+    /// What an `event` is, when it is more than a note: `interrupt` or `error`.
+    public var level: String?
     /// Who typed a `user` item into a Worker: `orchestrator`, or nil for the human.
     public var from: String?
 
     public init(id: String, kind: Kind, text: String = "", tool: String? = nil, summary: String? = nil,
                 detail: String? = nil, old: String? = nil, new: String? = nil, output: String? = nil, failed: Bool = false,
-                from: String? = nil) {
+                denied: Bool = false, level: String? = nil, from: String? = nil) {
         self.id = id
         self.kind = kind
         self.text = text
@@ -42,6 +46,8 @@ public struct ChatItem: Equatable, Identifiable, Sendable {
         self.new = new
         self.output = output
         self.failed = failed
+        self.denied = denied
+        self.level = level
         self.from = from
     }
 
@@ -110,7 +116,7 @@ public struct ChatLog: Equatable, Sendable {
     /// Where the next read continues in the transcript.
     public private(set) var end: Int = 0
     public private(set) var items: [ChatItem] = []
-    /// False for an agent whose CLI keeps no transcript Echo reads (Codex and Kiro, for now).
+    /// False for an agent whose CLI keeps no transcript Echo reads (Codex, for now).
     public private(set) var supported = true
     public private(set) var state = ChatState()
     /// Whether older messages are left to load, and where the oldest page loaded begins: an offset
@@ -195,7 +201,9 @@ public struct ChatLog: Equatable, Sendable {
             guard let kind = ChatItem.Kind(rawValue: raw["kind"] as? String ?? "") else { continue }
             var item = ChatItem(id: id, kind: kind, text: text, tool: raw["tool"] as? String,
                                 summary: raw["summary"] as? String, detail: raw["detail"] as? String,
-                                old: raw["old"] as? String, new: raw["new"] as? String, from: raw["from"] as? String)
+                                old: raw["old"] as? String, new: raw["new"] as? String,
+                                denied: raw["denied"] as? Bool ?? false, level: raw["level"] as? String,
+                                from: raw["from"] as? String)
             if kind == .tool {
                 at[id] = items.count
                 if older, let result = orphans.removeValue(forKey: id) {

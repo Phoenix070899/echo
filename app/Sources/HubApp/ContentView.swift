@@ -1334,7 +1334,6 @@ struct Hint: View {
 
 // MARK: - Usage
 
-/// The Claude account's plan limits, in the session bar. Click to re-read them.
 /// The top bar's Worker statistics: the context a Worker starts with, and a button that opens
 /// the week's report.
 struct StatsInline: View {
@@ -1434,6 +1433,8 @@ struct StatsReport: View {
     }
 }
 
+/// The account limits, in the session bar: Claude's Session and Week, then Kiro's credits when the
+/// daemon sends them (ui-ux/0097). Click to re-read them.
 struct UsageInline: View {
     @EnvironmentObject private var model: AppModel
     let usage: Usage?
@@ -1442,24 +1443,15 @@ struct UsageInline: View {
         Button { model.refreshUsage() } label: {
             HStack(spacing: 14) {
                 if usage == nil || usage?.refreshing == true { Spinner(size: 10) }
-                if let usage, !usage.limits.isEmpty {
-                    ForEach(usage.limits.prefix(2)) { limit in
-                        HStack(spacing: 4) {
-                            Text(limit.name).foregroundStyle(Ledger.ink2)
-                            Text("\(limit.percent)%")
-                                .fontWeight(.medium)
-                                .monospacedDigit()
-                                .foregroundStyle(limit.percent >= 90 ? Ledger.fail : Ledger.ink)
-                            // Counts down between snapshots, which repeat an unchanged `resets`.
-                            TimelineView(.everyMinute) { context in
-                                if let left = limit.resetsIn(now: context.date) {
-                                    Text(left).monospacedDigit().foregroundStyle(Ledger.ink3)
-                                }
-                            }
-                        }
+                if let usage {
+                    // Claude's error stands in for its limits only; Kiro's entry shows beside it.
+                    if !usage.hasClaudeLimits, usage.error != nil {
+                        Text(usage.shown.isEmpty ? "Usage unavailable" : "Claude usage unavailable")
+                            .foregroundStyle(Ledger.ink3)
                     }
-                } else if usage?.error != nil {
-                    Text("Usage unavailable").foregroundStyle(Ledger.ink3)
+                    ForEach(usage.shown) { limit in
+                        UsageItem(limit: limit)
+                    }
                 }
             }
             .opacity(usage?.refreshing == true ? 0.5 : 1)
@@ -1471,11 +1463,30 @@ struct UsageInline: View {
 
     private var helpText: String {
         guard let usage else { return "Reading Claude usage" }
-        if let error = usage.error, usage.limits.isEmpty { return error }
-        let lines = usage.limits.map { limit in
-            "\(limit.name): \(limit.percent)% used" + (limit.resets.map { ", resets \($0)" } ?? "")
+        if usage.shown.isEmpty { return usage.error ?? "Click to refresh." }
+        let error = usage.hasClaudeLimits ? [] : usage.error.map { [$0] } ?? []
+        return (error + usage.shown.map(\.tooltip) + ["Click to refresh."]).joined(separator: "\n")
+    }
+}
+
+/// One limit: its name, the share used, and the time left before it resets.
+private struct UsageItem: View {
+    let limit: Usage.Limit
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(limit.name).foregroundStyle(Ledger.ink2)
+            Text("\(limit.percent)%")
+                .fontWeight(.medium)
+                .monospacedDigit()
+                .foregroundStyle(limit.percent >= 90 ? Ledger.fail : Ledger.ink)
+            // Counts down between snapshots, which repeat an unchanged `resets`.
+            TimelineView(.everyMinute) { context in
+                if let left = limit.resetsIn(now: context.date) {
+                    Text(left).monospacedDigit().foregroundStyle(Ledger.ink3)
+                }
+            }
         }
-        return (lines + ["Click to refresh."]).joined(separator: "\n")
     }
 }
 
