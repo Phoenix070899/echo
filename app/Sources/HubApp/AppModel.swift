@@ -141,6 +141,8 @@ final class AppModel: ObservableObject {
     }
     /// Agent groups folded in the ledger.
     @Published var collapsed: Set<Int> = []
+    /// Repos folded in the ledger: their agents are hidden under the repo's line.
+    @Published var collapsedRepos: Set<String> = []
     @Published private(set) var connected = false
     /// True once the daemon could not be reached; the window says so until it is back.
     @Published private(set) var daemonDown = false
@@ -952,6 +954,12 @@ final class AppModel: ObservableObject {
         guard !tabs.isEmpty else { return }
         let index = selectedRepo.flatMap { tabs.firstIndex(of: $0) } ?? 0
         selectSession(tabs[(index + (forward ? 1 : tabs.count - 1)) % tabs.count])
+    }
+
+    func toggleRepoCollapsed(_ repo: String) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if collapsedRepos.contains(repo) { collapsedRepos.remove(repo) } else { collapsedRepos.insert(repo) }
+        }
     }
 
     func toggleCollapsed(_ agent: Int) {

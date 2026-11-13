@@ -298,6 +298,8 @@ struct RepoGroup: View {
     var body: some View {
         let snapshot = model.snapshot(session.repo)
         let groups = snapshot.groups
+        let needs = snapshot.needsYouCount
+        let folded = model.collapsedRepos.contains(session.repo)
         VStack(alignment: .leading, spacing: 2) {
             TreeRow(selected: false, indent: 0) {
                 model.selectSession(session.repo)
@@ -307,9 +309,23 @@ struct RepoGroup: View {
                     .font(Ledger.font(14, .semibold))
                     .foregroundStyle(Ledger.ink)
                     .fadedEnd()
+                // Folded, the agents' own counts are hidden, so the repo shows their total (ui-ux/0095).
+                if folded && needs > 0 { NeedsBadge(count: needs) }
+                if !groups.isEmpty {
+                    Button { model.toggleRepoCollapsed(session.repo) } label: {
+                        Image(systemName: "chevron.right")
+                            .font(Ledger.font(9, .semibold))
+                            .rotationEffect(.degrees(folded ? 0 : 90))
+                            .foregroundStyle(Ledger.ink3)
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(folded ? "Show \(session.name)'s agents" : "Fold \(session.name)'s agents")
+                }
             }
             .help("\(session.name): \(workers(model.activeCount(session.repo), "at work"))")
-            if !groups.isEmpty {
+            if !groups.isEmpty && !folded {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
                         AgentBranch(group: group, snapshot: snapshot, repo: session.repo, number: index + 1)
