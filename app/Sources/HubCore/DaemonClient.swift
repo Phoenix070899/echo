@@ -208,7 +208,6 @@ public struct DaemonClient: Sendable {
         return (result?["current"] as? String ?? "", try JSONDecoder().decode([RepoBranch].self, from: data))
     }
 
-    /// The Profiles Workers in `repo` can start as: Echo's own, the human's, and the repo's.
     /// The Teams a new Orchestrator can start with, by name; a repo adds its own.
     public func teams(repo: String?) throws -> [Team] {
         let result = try call("team.list", repo.map { ["repo": $0] } ?? [:]) as? [String: Any]
@@ -216,6 +215,22 @@ public struct DaemonClient: Sendable {
         return try JSONDecoder().decode([Team].self, from: data)
     }
 
+    /// Writes a Team; `params` are `TeamForm.saveParams`. The daemon's validation message comes
+    /// back as the error. Returns the name it was saved under.
+    @discardableResult
+    public func saveTeam(_ params: [String: Any]) throws -> String {
+        let result = try call("team.save", params) as? [String: Any]
+        return result?["name"] as? String ?? ""
+    }
+
+    /// Removes the human's or the repo's copy of a Team; the level below, if any, is in force again.
+    public func deleteTeam(name: String, level: String, repo: String?) throws {
+        var params: [String: Any] = ["name": name, "level": level]
+        if let repo { params["repo"] = repo }
+        _ = try call("team.delete", params)
+    }
+
+    /// The Profiles Workers in `repo` can start as: Echo's own, the human's, and the repo's.
     public func profiles(repo: String?) throws -> [WorkerProfile] {
         let result = try call("profiles.list", repo.map { ["repo": $0] } ?? [:]) as? [String: Any]
         let data = try JSONSerialization.data(withJSONObject: result?["profiles"] ?? [])

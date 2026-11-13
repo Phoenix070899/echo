@@ -5,13 +5,14 @@ import UniformTypeIdentifiers
 
 /// Settings, one section each: the window's look, the terminal theme (a preset, then any colour changed
 /// by hand), its background image, the font, the multiplexer agents run inside, what agents run
-/// with, their Profiles, and the Orchestrator's rules, and Echo Remote.
+/// with, their Profiles, and the Orchestrator's rules, the Teams, and Echo Remote.
 struct SettingsView: View {
     let section: SettingsSection
     @EnvironmentObject private var model: AppModel
     /// The Custom look being edited; it reaches the app only on Apply.
     @StateObject private var draft = LookDraft()
     @StateObject private var agents = AgentSettingsModel()
+    @StateObject private var teams = TeamSettingsModel()
 
     var body: some View {
         switch section {
@@ -198,6 +199,9 @@ struct SettingsView: View {
                 OrchestratorSettings(agents: agents)
             }
             .onAppear(perform: refreshAgents)
+            case .teams:
+            page { TeamsSettings(teams: teams) }
+            .onAppear(perform: refreshTeams)
             case .worktrees:
             page { WorktreeSettings() }
             case .memory:
@@ -211,6 +215,12 @@ struct SettingsView: View {
     private func refreshAgents() {
         agents.repo = model.selectedRepo
         agents.refresh()
+    }
+
+    /// Teams are the selected repo's, its own included.
+    private func refreshTeams() {
+        teams.repo = model.selectedRepo
+        teams.refresh()
     }
 
     /// One section's page: its groups, scrolling when taller than the window.
