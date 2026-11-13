@@ -3,6 +3,7 @@
 //! The items are the ones `chat` draws for Claude Code (`user`, `reply`, `tool`, `result`,
 //! `event`), so the app needs nothing Kiro-specific; paging by byte offset is `chat::read_with`.
 
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use serde_json::{json, Value};
@@ -13,8 +14,14 @@ use crate::chat::{self, cut, first_line, output, Page, TEXT_CHARS};
 /// `before` (the file's end when not given). Never loads more of the file than those items need.
 pub fn read(path: &Path, limit: usize, after: Option<u64>, before: Option<u64>) -> std::io::Result<Page> {
     let mut page = chat::read_with(path, limit, after, before, || {
-        let mut lines = Lines::default();
-        move |line: &str| lines.items(line)
+        let mut lines = Lines {
+            path: Some(path),
+            ..Lines::default()
+        };
+        move |at: u64, line: &str| {
+            lines.at = at;
+            lines.items(line)
+        }
     })?;
     // A page of fewer items than asked for reached the file's start. Kiro writes lines before the
     // first message (`session_start`, `agent_note`) that show nothing, so the page would start
@@ -38,14 +45,20 @@ pub fn typed_inputs(inputs: &[(String, String)]) -> Vec<(String, String)> {
     all
 }
 
-/// The parser of one range of lines. It remembers whether the current turn's error was shown, so
-/// the line that ends the turn adds a note only when Kiro gave no message for it.
+/// How far before a turn's last line the file is searched for the turn's error message.
+const LOOKBACK: u64 = 64 << 10;
+
+/// The parser of one range of lines. The line that ends a failed turn adds a note only when Kiro
+/// gave no message for it: the range's own lines say so, else the file before `at` (the line's
+/// offset in `path`), so where a page or a poll began does not change what shows.
 #[derive(Default)]
-struct Lines {
+struct Lines<'a> {
     error_shown: bool,
+    path: Option<&'a Path>,
+    at: u64,
 }
 
-impl Lines {
+impl Lines<'_> {
     /// The chat items of one `messages.jsonl` line, in order.
     ///
     /// - `user`: what was typed; reply: the model's text (its reasoning is not shown).
@@ -81,11 +94,51 @@ impl Lines {
             }
             Some("turn_end") => match payload["stopReason"].as_str() {
                 Some("cancelled") => vec![note(id, "Interrupted", "interrupt", at)],
-                Some("error") if !self.error_shown => vec![note(id, "Error: the turn failed.", "error", at)],
+                Some("error") if !self.error_shown && !self.has_message(payload) => {
+                    vec![note(id, "Error: the turn failed.", "error", at)]
+                }
                 _ => vec![],
             },
             _ => vec![],
         }
+    }
+}
+
+impl Lines<'_> {
+    /// Whether Kiro wrote a `displayError` for the execution that `turn_end` ends, on the lines
+    /// just before it (within `LOOKBACK`, and no earlier than the turn's start).
+    fn has_message(&self, turn_end: &Value) -> bool {
+        let Some(path) = self.path else { return false };
+        let execution = &turn_end["executionId"];
+        let from = self.at.saturating_sub(LOOKBACK);
+        let Ok(mut file) = std::fs::File::open(path) else {
+            return false;
+        };
+        let mut bytes = Vec::new();
+        let read = file
+            .seek(SeekFrom::Start(from))
+            .and_then(|_| (&mut file).take(self.at - from).read_to_end(&mut bytes));
+        if read.is_err() {
+            return false;
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        // The first line may be cut by `from`; it fails to parse and is skipped.
+        for line in text.lines().rev() {
+            let Ok(entry) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let payload = &entry["payload"];
+            match payload["type"].as_str() {
+                Some("turn_start") | Some("turn_end") => return false,
+                Some("session_metadata") if payload["key"] == "displayError" => {
+                    if payload["executionId"] == *execution {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
     }
 }
 
@@ -433,6 +486,94 @@ mod tests {
         std::fs::write(&path, format!("{text}{more}\n")).unwrap();
         let next = read(&path, 100, Some(first.end), None).unwrap();
         assert_eq!(texts(&next), ["thanks"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The error notes of a page.
+    fn errors(page: &Page) -> Vec<String> {
+        page.items
+            .iter()
+            .filter(|item| item["level"] == "error")
+            .map(|item| item["text"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// The byte offset after the first `n` lines of `text`.
+    fn after_lines(text: &str, n: usize) -> usize {
+        text.split_inclusive('\n').take(n).map(str::len).sum()
+    }
+
+    const KIRO_MESSAGE: &str = "Error: The selected model is not available. Please select a different model and try again. (Request ID: 996c…)";
+
+    #[test]
+    fn a_failed_turn_read_whole_shows_the_message_once() {
+        let (dir, path) = planted("error-whole", fixture("error"));
+        let page = read(&path, 100, None, None).unwrap();
+        assert_eq!(errors(&page), [KIRO_MESSAGE]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_turn_split_across_two_polls_shows_the_message_once() {
+        let text = fixture("error");
+        let (dir, path) = planted("error-after", &text[..after_lines(text, 6)]);
+        // The first poll ends on the `displayError` line; the line that ends the turn lands later.
+        let first = read(&path, 100, None, None).unwrap();
+        assert_eq!(errors(&first), [KIRO_MESSAGE]);
+        std::fs::write(&path, text).unwrap();
+        let next = read(&path, 100, Some(first.end), None).unwrap();
+        assert_eq!(errors(&next), Vec::<String>::new());
+        // A poll that starts on the line that ends the turn gives the same.
+        let last = read(&path, 100, Some(after_lines(text, 8) as u64), None).unwrap();
+        assert_eq!(errors(&last), Vec::<String>::new());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_turn_read_from_the_tail_shows_the_message_not_a_generic_line() {
+        // The first window of a tail read starts between the message and the turn's end.
+        let padding = |bytes: usize| {
+            format!(
+                "{}\n",
+                json!({"id": "", "payload": {"type": "agent_note", "content": "x".repeat(bytes)}})
+            )
+        };
+        let lines: Vec<&str> = fixture("error").lines().collect();
+        let head = lines[..6].join("\n") + "\n";
+        let middle = padding(4000);
+        let end = lines[6..].join("\n") + "\n";
+        let window = 2usize << 20;
+        let before_end = head.len() + middle.len() / 2;
+        let mut text = head + &middle + &end;
+        let fill = (before_end + window).saturating_sub(text.len());
+        text += &padding(fill - padding(0).len());
+        assert_eq!(text.len() - window, before_end);
+        let (dir, path) = planted("error-tail", &text);
+        let tail = read(&path, 1, None, None).unwrap();
+        assert_eq!(errors(&tail), [KIRO_MESSAGE]);
+        let whole = read(&path, 100, None, None).unwrap();
+        assert_eq!(errors(&whole), [KIRO_MESSAGE]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_turn_with_no_message_shows_one_generic_line_wherever_it_is_read_from() {
+        let text = fixture("error");
+        let without: String = text
+            .lines()
+            .filter(|line| !line.contains("displayError"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let (dir, path) = planted("error-bare", &without);
+        let whole = read(&path, 100, None, None).unwrap();
+        let end = read(&path, 100, Some(after_lines(&without, 7) as u64), None).unwrap();
+        assert_eq!(
+            (errors(&whole), errors(&end)),
+            (
+                vec!["Error: the turn failed.".to_string()],
+                vec!["Error: the turn failed.".to_string()]
+            )
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

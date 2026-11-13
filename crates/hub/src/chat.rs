@@ -229,12 +229,13 @@ pub struct Page {
 /// Every item after byte `after`; else up to `limit` items ending at byte `before` (the file's end
 /// when not given). Only whole lines count, so a line being written waits for the next read.
 pub fn read(path: &Path, limit: usize, after: Option<u64>, before: Option<u64>) -> std::io::Result<Page> {
-    read_with(path, limit, after, before, || items)
+    read_with(path, limit, after, before, || |_, line: &str| items(line))
 }
 
 /// `read` for a transcript whose lines `fresh` makes a parser for: one per range read, so a parser
-/// may remember what it saw on the lines before (a Kiro turn's error), never across two reads.
-pub(crate) fn read_with<P: FnMut(&str) -> Vec<Value>>(
+/// may remember what it saw on the lines before (a Kiro turn's error), never across two reads. The
+/// parser is given each line's byte offset, to look at the file before it where memory is not enough.
+pub(crate) fn read_with<P: FnMut(u64, &str) -> Vec<Value>>(
     path: &Path,
     limit: usize,
     after: Option<u64>,
@@ -276,7 +277,7 @@ fn parse_range(
     file: &mut std::fs::File,
     start: u64,
     stop: u64,
-    mut parse: impl FnMut(&str) -> Vec<Value>,
+    mut parse: impl FnMut(u64, &str) -> Vec<Value>,
 ) -> std::io::Result<(Vec<(u64, Value)>, u64)> {
     file.seek(SeekFrom::Start(start))?;
     let mut bytes = Vec::new();
@@ -296,7 +297,7 @@ fn parse_range(
     for line in bytes[from..whole].split(|&b| b == b'\n') {
         let offset = start + at as u64;
         at += line.len() + 1;
-        for mut item in parse(&String::from_utf8_lossy(line)) {
+        for mut item in parse(offset, &String::from_utf8_lossy(line)) {
             // A line without a uuid is named by where it sits, so ids stay unique.
             let id = item["id"].as_str().unwrap_or("").to_string();
             if id.is_empty() || id.starts_with('.') {
