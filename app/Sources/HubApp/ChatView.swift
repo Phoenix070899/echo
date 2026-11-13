@@ -577,11 +577,7 @@ private struct UserBubble: View {
                 if fromOrchestrator {
                     Text("From Orchestrator").font(Ledger.font(12, .medium)).foregroundStyle(Ledger.ink3)
                 }
-                Text(text)
-                    .font(Ledger.font(15))
-                    .foregroundStyle(Ledger.ink)
-                    .lineSpacing(5)
-                    .textSelection(.enabled)
+                ChatText(source: .plain(text), size: 15, leading: 5)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 16)
@@ -609,14 +605,9 @@ private struct FinalReportCard: View {
                         if let title = section.title {
                             Text(title).font(Ledger.font(13, .semibold)).foregroundStyle(Ledger.ink2)
                         }
-                        let blocks = parseMarkdown(section.body)
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                                MarkdownBlockView(block: block, leading: 6, codeSize: 13)
-                                    .padding(.top, index == 0 ? 0 : MarkdownBlockView.gap(blocks[index - 1], block))
-                            }
-                        }
-                        .foregroundStyle(section.title == "State" && worker.isTrouble ? Ledger.fail : Ledger.ink)
+                        let tone = section.title == "State" && worker.isTrouble ? Ledger.fail : Ledger.ink
+                        ChatMarkdown(blocks: parseMarkdown(section.body), size: 14, color: tone)
+                            .foregroundStyle(tone)
                     }
                 }
             } else {
@@ -639,15 +630,7 @@ private struct ReplyView: View {
     let blocks: [MarkdownBlock]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                MarkdownBlockView(block: block, leading: 6, codeSize: 13)
-                    .padding(.top, index == 0 ? 0 : MarkdownBlockView.gap(blocks[index - 1], block))
-            }
-        }
-        .font(Ledger.font(15))
-        .foregroundStyle(Ledger.ink)
-        .textSelection(.enabled)
+        ChatMarkdown(blocks: blocks)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, item.needsHuman ? 14 : 0)
