@@ -281,6 +281,45 @@ struct WorkerMark: View {
     }
 }
 
+/// The amber target: something waits on the human.
+struct NeedsRing: View {
+    var size: CGFloat = 14
+
+    var body: some View {
+        Circle().strokeBorder(Ledger.changed, lineWidth: 1.6)
+            .overlay(Circle().fill(Ledger.changed).frame(width: size * 0.36, height: size * 0.36))
+            .frame(width: size, height: size)
+            .accessibilityLabel("Needs you")
+    }
+}
+
+/// A Worker's mark at the right of its sidebar row (ui-ux/0092): a turning ring while it works (slower
+/// while it only waits on background work), an amber target when it needs the human, a filled tick
+/// when it is done, a plain grey tick when it ended at its input box, a red cross when it went wrong.
+struct WorkerGlyph: View {
+    let worker: WorkerRow
+    private let size: CGFloat = 14
+
+    var body: some View {
+        Group {
+            if worker.isActive && worker.state == .needsYou {
+                NeedsRing(size: size)
+            } else if worker.isActive {
+                Spinner(color: worker.markColor, size: size - 1, period: worker.state == .waiting ? 2.4 : 1)
+            } else if worker.phase == "ended" {
+                Image(systemName: "checkmark").font(Ledger.font(10, .semibold)).foregroundStyle(Ledger.ink3)
+            } else if worker.isTrouble {
+                Image(systemName: "xmark.circle.fill").font(Ledger.font(size)).foregroundStyle(Ledger.fail)
+            } else {
+                Image(systemName: "checkmark.circle.fill").font(Ledger.font(size)).foregroundStyle(Ledger.done)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityElement()
+        .accessibilityLabel(worker.phaseLabel)
+    }
+}
+
 /// A line saying something is being read or started, with a spinner before it.
 struct Pending: View {
     let text: String

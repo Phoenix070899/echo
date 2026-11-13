@@ -297,7 +297,6 @@ struct RepoGroup: View {
 
     var body: some View {
         let snapshot = model.snapshot(session.repo)
-        let needs = snapshot.needsYouCount
         let groups = snapshot.groups
         VStack(alignment: .leading, spacing: 2) {
             TreeRow(selected: false, indent: 0) {
@@ -308,7 +307,6 @@ struct RepoGroup: View {
                     .font(Ledger.font(14, .semibold))
                     .foregroundStyle(Ledger.ink)
                     .fadedEnd()
-                if needs > 0 { NeedsBadge(count: needs) }
             }
             .help("\(session.name): \(workers(model.activeCount(session.repo), "at work"))")
             if !groups.isEmpty {
@@ -617,7 +615,7 @@ struct AgentBranch: View {
         let workers = visibleWorkers(group, in: snapshot, selected: selectedWorker)
         let folded = model.collapsed.contains(agent.id)
         VStack(alignment: .leading, spacing: 2) {
-            AgentLine(group: group, repo: repo, number: number, folded: folded, hasChildren: !workers.isEmpty || !group.needs.isEmpty,
+            AgentLine(group: group, repo: repo, number: number, folded: folded, hasChildren: !workers.isEmpty,
                       running: workers.filter(\.isActive).count)
             if !folded {
                 if let confirmation = model.confirmations[agent.id] {
@@ -627,13 +625,6 @@ struct AgentBranch: View {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(workers) { worker in
                         LedgerRow(worker: worker, repo: repo)
-                    }
-                    // What waits on the human keeps its buttons; the Worker's line above only shows an amber mark.
-                    ForEach(group.needs) { need in
-                        NeedItem(need: need, repo: repo)
-                            .padding(.leading, 56)
-                            .padding(.trailing, 12)
-                            .padding(.vertical, 3)
                     }
                 }
             }
@@ -668,7 +659,6 @@ struct AgentLine: View {
             if folded && running > 0 {
                 Text("\(running)").font(Ledger.font(12)).monospacedDigit().foregroundStyle(Ledger.ink3)
             }
-            if !group.needs.isEmpty && folded { NeedsBadge(count: group.needs.count) }
             if !agent.live {
                 Circle().strokeBorder(Ledger.ink3, lineWidth: 1).frame(width: 7, height: 7)
                     .accessibilityLabel("Stopped")
@@ -684,6 +674,10 @@ struct AgentLine: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(folded ? "Show \(agent.displayName)'s Workers" : "Fold \(agent.displayName)'s Workers")
+            }
+            // How many of this agent's Workers (or it itself) wait on the human (ui-ux/0094).
+            if !group.needs.isEmpty {
+                NeedsBadge(count: group.needs.count).help("\(group.needs.count) waiting on you")
             }
         }
         .onHover { hovering.on = $0 }
@@ -1262,10 +1256,20 @@ struct LedgerRow: View {
         TreeRow(selected: selected, indent: 2) {
             model.select(.worker(repo: repo, id: worker.id))
         } label: {
-            WorkerMark(worker: worker).frame(width: 12)
             Text(worker.title)
-                .foregroundStyle(selected ? Ledger.ink : Ledger.ink2)
+                .fontWeight(worker.state == .needsYou && worker.isActive ? .medium : .regular)
+                .foregroundStyle(selected || worker.state == .needsYou && worker.isActive ? Ledger.ink : Ledger.ink2)
                 .fadedEnd()
+            // How long since it last reported, then its state; the minute ticks without a new snapshot.
+            TimelineView(.everyMinute) { context in
+                let quiet = worker.quietFor(at: context.date)
+                Text(quiet < 60 ? "now" : formatAge(quiet))
+                    .font(Ledger.font(12))
+                    .monospacedDigit()
+                    .foregroundStyle(Ledger.ink3)
+                    .lineLimit(1)
+            }
+            WorkerGlyph(worker: worker)
         }
         .prewarmsTerminal(model.terminalTarget(repo, worker))
         .help([worker.id, worker.profile, worker.title, worker.branch, worker.phaseLabel,
