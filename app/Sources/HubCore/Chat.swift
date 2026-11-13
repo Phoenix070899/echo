@@ -110,7 +110,7 @@ public struct ChatLog: Equatable, Sendable {
     /// Where the next read continues in the transcript.
     public private(set) var end: Int = 0
     public private(set) var items: [ChatItem] = []
-    /// False for an agent whose CLI keeps no transcript Echo reads (Codex, for now).
+    /// False for an agent whose CLI keeps no transcript Echo reads (Codex and Kiro, for now).
     public private(set) var supported = true
     public private(set) var state = ChatState()
     /// Whether older messages are left to load, and where the oldest page loaded begins: an offset

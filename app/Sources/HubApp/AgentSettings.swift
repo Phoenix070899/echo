@@ -117,7 +117,7 @@ struct AgentsSettings: View {
             }
             TextField("Model", text: $agents.model, prompt: Text("the CLI's own default"))
                 .onSubmit { agents.set("model", agents.model.trimmingCharacters(in: .whitespaces)) }
-            Text("Every agent's default. A repo's .echo/settings.json and a Profile's own CLI and model come first. Name models as provider/model, like openai/gpt-5.6-terra.")
+            Text("Every agent's default. A repo's .echo/settings.json and a Profile's own CLI and model come first. Name models as provider/model, like openai/gpt-5.6-terra; Kiro takes its own ids, like claude-sonnet-5.5.")
                 .font(Ledger.font(11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

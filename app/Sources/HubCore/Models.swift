@@ -597,7 +597,14 @@ public struct RepoSettings: Decodable, Equatable, Sendable {
 }
 
 /// The CLIs Echo can run agents in.
-public let agentCLIs = ["claude", "codex"]
+public let agentCLIs = ["claude", "codex", "kiro"]
+
+/// A model id as a line or a button names it: "claude-opus-5-5" and "claude-opus-5.5" read "opus";
+/// any other id stays as it is.
+public func shortModelName(_ model: String) -> String {
+    let parts = model.split(separator: "-")
+    return parts.count >= 2 && parts[0] == "claude" ? String(parts[1]) : model
+}
 
 /// The human's settings for agents, from `settings.get`: the default CLI and model, and how
 /// Orchestrators work.

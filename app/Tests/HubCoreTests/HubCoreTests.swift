@@ -737,3 +737,17 @@ func row(_ id: String, phase: String, quiet: Int, model: String? = nil, effort: 
     #expect(tokenCount(stats.startContext) == "109k")
     #expect(tokenCount(850) == "850")
 }
+
+@Test func settingsOfferEveryCLIThatRuns() {
+    #expect(agentCLIs == ["claude", "codex", "kiro"])
+}
+
+@Test func aModelIdReadsAsItsFamily() {
+    #expect(shortModelName("claude-opus-5-5") == "opus")
+    #expect(shortModelName("claude-sonnet-5-5") == "sonnet")
+    #expect(shortModelName("claude-opus-5.5") == "opus", "Kiro names models with a dot")
+    #expect(shortModelName("claude-sonnet-5.5") == "sonnet")
+    #expect(shortModelName("claude-haiku-5.5") == "haiku")
+    #expect(shortModelName("openai/gpt-5.6-terra") == "openai/gpt-5.6-terra")
+    #expect(shortModelName("claude") == "claude")
+}

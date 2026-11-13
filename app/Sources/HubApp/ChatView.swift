@@ -60,7 +60,7 @@ struct ChatView: View {
     @ViewBuilder
     private var content: some View {
         if !feed.supported, let worker, !worker.isActive {
-            // A Codex Worker keeps no transcript Echo reads; its report reads as before.
+            // A Codex or Kiro Worker keeps no transcript Echo reads; its report reads as before.
             FinalReportView(worker: worker)
         } else if !feed.supported {
             ContentUnavailableView("No chat for this agent", systemImage: "terminal",
@@ -295,7 +295,7 @@ private struct ChatBottom: View {
 
     /// Typing into a Worker is an Intervention (CONTEXT.md); the box says so.
     private var placeholder: String {
-        guard case .worker = target else { return "Reply to Claude…" }
+        guard case .worker = target else { return "Reply…" }
         return "Intervention: \(target.label) does what you ask and tells the Orchestrator"
     }
 

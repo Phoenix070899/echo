@@ -715,11 +715,8 @@ struct AgentLine: View {
                agent.model.map(AgentLine.short)].compactMap { $0 }.joined(separator: ", "))
     }
 
-    /// "claude-opus-5-5" reads "opus".
-    static func short(_ model: String) -> String {
-        let parts = model.split(separator: "-")
-        return parts.count >= 2 && parts[0] == "claude" ? String(parts[1]) : model
-    }
+    /// "claude-opus-5-5" and Kiro's "claude-opus-5.5" read "opus".
+    static func short(_ model: String) -> String { shortModelName(model) }
 }
 
 // MARK: - The terminal side
@@ -1411,7 +1408,7 @@ struct StatsReport: View {
                     .foregroundStyle(Ledger.ink2)
                 }
             }
-            Text("From Claude Code transcripts; Codex Workers are not counted. Token cost weighs a cache read 0.1, a write 1.25 to 2, and output 5 against fresh input.")
+            Text("From Claude Code transcripts; Codex and Kiro Workers are not counted. Token cost weighs a cache read 0.1, a write 1.25 to 2, and output 5 against fresh input.")
                 .font(Ledger.font(11.5))
                 .foregroundStyle(Ledger.ink3)
                 .fixedSize(horizontal: false, vertical: true)
