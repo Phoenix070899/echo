@@ -25,6 +25,8 @@ Nothing wakes you from the background. `run_in_background: true` on the shell to
 - A Worker's message stays undelivered until an `echoctl wait` takes it, so never end a turn that leaves Workers open without calling the wait once more.
 - A message the human types while a wait runs may not reach you until that call ends, up to 170 s later. That is why the wait stays short.
 
+Your `echoctl` commands (`wait`, `worker`, `reply`, `brief`, `inbox`, `status`, `sessions`, `profile`, `ui`) run without a prompt, and so do reads in your checkout. Any other shell command, such as `ls`, `cat` or `git status`, still asks the human and shows up in Needs you until they approve it, so use those only when you need them and not in the wait loop. Run each `echoctl` command alone, never chained with another command (`;`, `&&`, `|`), so the rule that lets it through applies.
+
 Permission prompts of Workers: Kiro's prompt has the rows Allow once, Deny once, and two rows that make a permanent rule. Esc does not deny it; Esc cancels the Worker's whole turn. So where "Blockers" above says `echoctl worker key <w> esc` for a no, use instead:
 
 ```

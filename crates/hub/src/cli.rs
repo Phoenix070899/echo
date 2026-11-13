@@ -142,6 +142,19 @@ impl Cli {
             Cli::Kiro => kiro(&kiro_home(), &with_kiro_notes(hub, start)?),
         }
     }
+
+    /// Fails when a Kiro Worker could not start for want of its notes (`hub/kiro-notes.md`), so
+    /// that is known before a worktree or a row is made for it. The others need no notes.
+    pub fn check_worker_notes(self, hub: &Path) -> Result<()> {
+        if self != Cli::Kiro {
+            return Ok(());
+        }
+        let worker = Start {
+            worker: true,
+            ..Start::default()
+        };
+        with_kiro_notes(hub, &worker).map(|_| ())
+    }
 }
 
 /// What an agent starts with, whatever its CLI.
@@ -440,36 +453,68 @@ const KIRO_DENIED_COMMANDS: &[&str] = &[
     "wget * | bash",
 ];
 
+/// The `echoctl` commands an Orchestrator runs (`orchestrator.md`, `kiro-notes.md`). `"cmd *"`
+/// matches the command with or without arguments, so each is one glob. They are named one by one
+/// and not as `echoctl *`: Kiro's spike did not show whether a glob also matches a chained
+/// command, so a rule must not cover more `echoctl` than the Orchestrator needs.
+const KIRO_ORCHESTRATOR_COMMANDS: &[&str] = &[
+    "echoctl wait *",
+    "echoctl worker *",
+    "echoctl reply *",
+    "echoctl brief *",
+    "echoctl inbox *",
+    "echoctl status *",
+    "echoctl sessions *",
+    "echoctl profile *",
+    "echoctl ui *",
+];
+
 /// What the agent may do without asking. A Worker works unwatched: it reads anywhere, writes in
 /// its checkout and the folders Echo gives it, and runs shell commands except the destructive
 /// ones (a shell rule matches the command text, never a folder, so the deny list is its guard;
 /// `fs_read` anywhere also stops the second prompt a shell command raises for its folder).
-/// Anyone else is only spared the prompts for the folders Echo gave it; the rest reaches the human.
+/// An Orchestrator is spared the prompts for its own `echoctl` calls, which it makes every few
+/// minutes while it waits and which would otherwise hold up its Workers' messages: those commands
+/// and their folder (its checkout, which is also the folder such a call runs in), under the same
+/// deny list. Anything else it runs still reaches the human. A Normal session is only spared the
+/// prompts for the folders Echo gave it.
 fn kiro_rules(start: &Start) -> Vec<KiroRule> {
     let folders =
         |roots: &[&Path]| -> Vec<String> { roots.iter().map(|root| root.join("**").display().to_string()).collect() };
+    let denied = || KiroRule {
+        capability: "shell",
+        globs: KIRO_DENIED_COMMANDS.iter().map(|c| c.to_string()).collect(),
+        effect: "deny",
+    };
     let mut roots: Vec<&Path> = start.cwd.iter().map(PathBuf::as_path).collect();
     roots.extend(start.dirs.iter().map(PathBuf::as_path));
     if !start.worker {
         let dirs: Vec<&Path> = start.dirs.iter().map(PathBuf::as_path).collect();
-        if dirs.is_empty() {
-            return Vec::new();
+        let mut rules = Vec::new();
+        let mut reads = dirs.clone();
+        let orchestrator = !start.prompt.is_empty();
+        if orchestrator {
+            reads.extend(start.cwd.as_deref());
         }
-        return vec![
-            KiroRule::allow("fs_read", folders(&dirs)),
-            KiroRule::allow("fs_write", folders(&dirs)),
-        ];
+        if !reads.is_empty() {
+            rules.push(KiroRule::allow("fs_read", folders(&reads)));
+        }
+        if !dirs.is_empty() {
+            rules.push(KiroRule::allow("fs_write", folders(&dirs)));
+        }
+        if orchestrator {
+            let commands = KIRO_ORCHESTRATOR_COMMANDS.iter().map(|c| c.to_string()).collect();
+            rules.push(KiroRule::allow("shell", commands));
+            rules.push(denied());
+        }
+        return rules;
     }
     let mut rules = vec![KiroRule::allow("fs_read", vec!["**".into()])];
     if !roots.is_empty() {
         rules.push(KiroRule::allow("fs_write", folders(&roots)));
     }
     rules.push(KiroRule::allow("shell", vec!["*".into(), "**".into()]));
-    rules.push(KiroRule {
-        capability: "shell",
-        globs: KIRO_DENIED_COMMANDS.iter().map(|c| c.to_string()).collect(),
-        effect: "deny",
-    });
+    rules.push(denied());
     rules
 }
 
@@ -893,7 +938,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_kiro_orchestrator_gets_an_agent_file_with_only_its_folders_and_the_session_hook() {
+    fn a_new_kiro_orchestrator_gets_an_agent_file_with_its_folders_its_echoctl_rules_and_the_session_hook() {
         let home = scratch("kiro-orchestrator");
         let start = Start {
             prompt: "You are the Orchestrator.".into(),
@@ -933,13 +978,15 @@ mod tests {
             "{file}"
         );
         assert!(file.contains(
-            "    - capability: fs_read\n      match: [\"/echo/**\", \"/state/memory/**\"]\n      effect: allow\n"
+            "    - capability: fs_read\n      match: [\"/echo/**\", \"/state/memory/**\", \"/work/repo/**\"]\n      effect: allow\n"
         ));
         assert!(file.contains("    - capability: fs_write\n      match: [\"/echo/**\", \"/state/memory/**\"]\n"));
         assert!(
-            !file.contains("shell") && !file.contains("deny") && !file.contains("trigger: Stop"),
+            file.contains("    - capability: shell\n      match: [\"echoctl wait *\"")
+                && file.contains("effect: deny\n"),
             "{file}"
         );
+        assert!(!file.contains("trigger: Stop"), "{file}");
         assert!(file
             .contains("trigger: SessionStart\n    action:\n      type: command\n      command: \"echoctl notify\"\n"));
         assert!(file.ends_with("---\n\nYou are the Orchestrator.\n"), "{file}");
@@ -1019,6 +1066,130 @@ mod tests {
             "{file}"
         );
         assert_eq!(args[4..], ["--trust-workspace"]);
+    }
+
+    fn kiro_orchestrator() -> Start {
+        Start {
+            prompt: "You are the Orchestrator.\n".into(),
+            dirs: vec![PathBuf::from("/echo"), PathBuf::from("/state/memory/")],
+            cwd: Some(PathBuf::from("/work/checkout")),
+            ..Start::default()
+        }
+    }
+
+    fn rule_lines(rules: &[KiroRule]) -> Vec<String> {
+        rules
+            .iter()
+            .map(|rule| format!("{} {} {}", rule.effect, rule.capability, rule.globs.join(" | ")))
+            .collect()
+    }
+
+    #[test]
+    fn a_kiro_orchestrator_runs_echoctl_and_reads_its_checkout_without_a_prompt() {
+        let rules = rule_lines(&kiro_rules(&kiro_orchestrator()));
+        assert_eq!(rules.len(), 4, "{rules:?}");
+        assert_eq!(
+            rules[0], "allow fs_read /echo/** | /state/memory/** | /work/checkout/**",
+            "the checkout is where its shell calls run: without it each call prompts a second time"
+        );
+        assert_eq!(rules[1], "allow fs_write /echo/** | /state/memory/**");
+        let shell = &rules[2];
+        for command in [
+            "wait", "worker", "reply", "brief", "inbox", "status", "sessions", "profile", "ui",
+        ] {
+            assert!(shell.contains(&format!("echoctl {command} *")), "{command}: {shell}");
+        }
+        assert!(shell.starts_with("allow shell "), "{shell}");
+        assert!(
+            !shell
+                .split(" | ")
+                .any(|glob| glob.starts_with('*') || glob == "echoctl *"),
+            "no bare glob: it may also match a chained command: {shell}"
+        );
+        assert!(
+            !shell.contains("echoctl notify") && !shell.contains("echoctl done") && !shell.contains("echoctl ask"),
+            "the Worker's commands are not the Orchestrator's: {shell}"
+        );
+        assert!(rules[3].starts_with("deny shell rm -rf * | rm -fr * | git reset --hard* | sudo * |"));
+        let worker = rule_lines(&kiro_rules(&kiro_worker()));
+        assert_eq!(rules[3], *worker.last().unwrap(), "the Worker's deny list, unchanged");
+    }
+
+    #[test]
+    fn a_kiro_orchestrator_without_a_checkout_or_folders_still_runs_echoctl() {
+        let bare = Start {
+            cwd: None,
+            dirs: Vec::new(),
+            ..kiro_orchestrator()
+        };
+        let rules = rule_lines(&kiro_rules(&bare));
+        assert_eq!(rules.len(), 2, "no fs_read or fs_write for no folder: {rules:?}");
+        assert!(rules[0].starts_with("allow shell echoctl wait *"), "{rules:?}");
+        assert!(rules[1].starts_with("deny shell "), "{rules:?}");
+        let no_dirs = Start {
+            dirs: Vec::new(),
+            ..kiro_orchestrator()
+        };
+        let rules = rule_lines(&kiro_rules(&no_dirs));
+        assert_eq!(rules[0], "allow fs_read /work/checkout/**");
+        assert!(rules.iter().all(|rule| !rule.contains("fs_write")), "{rules:?}");
+    }
+
+    #[test]
+    fn a_normal_kiro_session_and_a_worker_keep_the_rules_they_had() {
+        let normal = Start {
+            cwd: Some(PathBuf::from("/work/checkout")),
+            dirs: vec![PathBuf::from("/echo"), PathBuf::from("/state/memory/")],
+            ..Start::default()
+        };
+        assert_eq!(
+            rule_lines(&kiro_rules(&normal)),
+            [
+                "allow fs_read /echo/** | /state/memory/**",
+                "allow fs_write /echo/** | /state/memory/**"
+            ],
+            "no checkout read, no shell rule"
+        );
+        assert!(kiro_rules(&Start::default()).is_empty());
+        assert_eq!(
+            rule_lines(&kiro_rules(&kiro_worker())),
+            [
+                "allow fs_read **",
+                "allow fs_write /work/checkout/** | /echo/** | /state/memory/**",
+                "allow shell * | **",
+                "deny shell rm -rf * | rm -fr * | git reset --hard* | sudo * | curl * | sh | curl * | bash | wget * | sh | wget * | bash"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_kiro_orchestrator_file_carries_the_echoctl_rules() {
+        let home = scratch("kiro-orch-rules");
+        let args = kiro(&home, &kiro_orchestrator()).unwrap();
+        let file = agent_file(&home, &args);
+        assert!(file.contains("description: Echo orchestrator\n"), "{file}");
+        assert!(file.contains(
+            "    - capability: shell\n      match: [\"echoctl wait *\", \"echoctl worker *\", \"echoctl reply *\""
+        ));
+        assert!(file.contains("    - capability: shell\n      match: [\"rm -rf *\""));
+        assert!(file.contains("effect: deny\n"));
+    }
+
+    #[test]
+    fn only_a_kiro_worker_needs_its_notes_before_it_is_made() {
+        let missing = scratch("notes-check-missing");
+        let err = Cli::Kiro.check_worker_notes(&missing).unwrap_err().to_string();
+        assert!(err.contains("kiro-notes.md"), "{err}");
+        assert!(Cli::Claude.check_worker_notes(&missing).is_ok());
+        assert!(Cli::Codex.check_worker_notes(&missing).is_ok());
+        let hub = hub_with_notes("notes-check-ok", NOTES);
+        assert!(Cli::Kiro.check_worker_notes(&hub).is_ok());
+        let orchestrator_only = hub_with_notes("notes-check-no-worker", "## Orchestrator\nx\n");
+        let err = Cli::Kiro
+            .check_worker_notes(&orchestrator_only)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("## Worker"), "{err}");
     }
 
     #[test]

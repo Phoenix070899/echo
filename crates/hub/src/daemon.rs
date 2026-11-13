@@ -1814,8 +1814,10 @@ impl Hub {
             cli: picked("cli").map(String::from),
             model: picked("model").map(String::from),
         };
-        // A CLI or model that cannot run fails here, before a worktree is made for it.
-        cli::pick(&paths::state_dir(), Some(&repo_root), &[&profile.choice(), &runs])?;
+        // A CLI or model that cannot run, or a Kiro Worker without its notes, fails here, before a
+        // worktree is made for it.
+        let (worker_cli, _) = cli::pick(&paths::state_dir(), Some(&repo_root), &[&profile.choice(), &runs])?;
+        worker_cli.check_worker_notes(&self.hub_dir)?;
         let spec = str_param(p, "spec")?;
         let title = match p.get("title").and_then(Value::as_str) {
             Some(title) if !title.trim().is_empty() => title.to_string(),
