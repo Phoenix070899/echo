@@ -818,10 +818,10 @@ final class AppModel: ObservableObject {
 
     /// Starts a new agent in a repo and selects it. An empty name is taken from the first request;
     /// a `request` is that first request, sent as the agent starts.
-    func open(repo path: String, kind: Agent.Kind, name: String, model: String, request: String? = nil) {
+    func open(repo path: String, kind: Agent.Kind, name: String, model: String, team: String? = nil, request: String? = nil) {
         background { client in
             try Self.ensureDaemon(client)
-            return try client.openAgent(repo: path, kind: kind, name: name, model: model, request: request)
+            return try client.openAgent(repo: path, kind: kind, name: name, model: model, team: team, request: request)
         } then: { opened in
             self.select(.agent(repo: opened.repo, id: opened.agent))
             self.refreshSessions()
@@ -836,14 +836,15 @@ final class AppModel: ObservableObject {
 
     /// Starts a new agent on a branch (`branch`, or `newBranch` from `base`); `done` gets nil once
     /// it runs and is selected, else why it could not start, for the dialog to show.
-    func open(repo path: String, kind: Agent.Kind, name: String, model: String, request: String?,
+    /// An Orchestrator takes a `team`; its model then comes from the Team.
+    func open(repo path: String, kind: Agent.Kind, name: String, model: String, team: String? = nil, request: String?,
               branch: String?, newBranch: String?, base: String?, then done: @escaping @MainActor (String?) -> Void) {
         let client = client
         Thread.detachNewThread {
             let result = Result {
                 try Self.ensureDaemon(client)
-                return try client.openAgent(repo: path, kind: kind, name: name, model: model, request: request,
-                                            branch: branch, newBranch: newBranch, base: base)
+                return try client.openAgent(repo: path, kind: kind, name: name, model: model, team: team,
+                                            request: request, branch: branch, newBranch: newBranch, base: base)
             }
             DispatchQueue.main.async {
                 switch result {
@@ -856,6 +857,12 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// The Teams a new Orchestrator can start with; a repo's own come with it. A daemon that does
+    /// not know Teams leaves the list as it was.
+    func loadTeams(repo: String?, then done: @escaping @MainActor ([Team]) -> Void) {
+        background(quiet: true) { client in try client.teams(repo: repo) } then: { done($0) }
     }
 
     func loadBranches(_ repo: String, then done: @escaping @MainActor ((current: String, branches: [RepoBranch])) -> Void) {

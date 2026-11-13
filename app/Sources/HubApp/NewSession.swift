@@ -82,6 +82,7 @@ struct NewSessionModal: View {
                 }
 
                 // Name and model share a row, keeping the dialog short enough for small windows.
+                // An Orchestrator takes its model from its Team, so the Team has the model's place.
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text("Name")
                         .font(Ledger.font(12.5, .semibold))
@@ -91,16 +92,31 @@ struct NewSessionModal: View {
                         .textFieldStyle(.plain)
                         .ledgerField()
                         .focused($nameFocused)
-                    Picker("Model", selection: $form.model) {
-                        ForEach(AppModel.models, id: \.self) { name in
-                            Text(name.isEmpty ? "Default model" : name).tag(name)
+                    if form.kind == .orchestrator {
+                        TeamPicker(form: form)
+                    } else {
+                        Picker("Model", selection: $form.model) {
+                            ForEach(AppModel.models, id: \.self) { name in
+                                Text(name.isEmpty ? "Default model" : name).tag(name)
+                            }
                         }
+                        .labelsHidden()
+                        .fixedSize()
                     }
-                    .labelsHidden()
-                    .fixedSize()
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 16)
+
+                if form.kind == .orchestrator, let line = form.teamLine {
+                    Text(line)
+                        .font(Ledger.font(12.5))
+                        .foregroundStyle(Ledger.ink2)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 24 + 54)
+                        .padding(.trailing, 24)
+                        .padding(.top, 6)
+                }
 
                 if let note = joinNote {
                     Text(note)
@@ -142,10 +158,14 @@ struct NewSessionModal: View {
             form.kind = request?.kind ?? .orchestrator
             if form.picked == nil { form.picked = request?.repo ?? model.selectedRepo ?? repos.first }
             loadBranches()
+            loadTeams()
             // Without a repo there is no Create from; start at the name.
             if form.picked == nil { DispatchQueue.main.async { nameFocused = true } }
         }
-        .onChange(of: form.picked) { loadBranches() }
+        .onChange(of: form.picked) {
+            loadBranches()
+            loadTeams()
+        }
         // Closed while the issue is read: nothing starts.
         .onDisappear { form.reading?.cancel() }
         .onExitCommand(perform: close)
@@ -156,6 +176,16 @@ struct NewSessionModal: View {
         case .name(let text)?: text
         case .issue?: "optional; the issue names it"
         default: "optional"
+        }
+    }
+
+    /// The Teams of the picked repo; the one shown stays when the new list has it.
+    private func loadTeams() {
+        let repo = form.picked
+        model.loadTeams(repo: repo) { listed in
+            guard form.picked == repo else { return }
+            form.teams = listed
+            form.team = TeamChoice.pick(from: listed, current: form.team, remembered: TeamChoice.remembered())
         }
     }
 
@@ -207,9 +237,10 @@ struct NewSessionModal: View {
     private func start() {
         guard let picked = form.picked, !form.starting else { return }
         let name = form.name.trimmingCharacters(in: .whitespaces)
+        if let team = form.teamToOpen { TeamChoice.remember(team) }
         switch form.choice {
         case nil:
-            model.open(repo: picked, kind: form.kind, name: name, model: form.model)
+            model.open(repo: picked, kind: form.kind, name: name, model: form.model, team: form.teamToOpen)
             close()
         case .branch(let branch)?:
             launch(picked, name: name, branch: branch)
@@ -240,7 +271,7 @@ struct NewSessionModal: View {
     private func launch(_ repo: String, name: String, branch: String? = nil, newBranch: String? = nil, request: String? = nil) {
         form.starting = true
         form.problem = nil
-        model.open(repo: repo, kind: form.kind, name: name, model: form.model, request: request,
+        model.open(repo: repo, kind: form.kind, name: name, model: form.model, team: form.teamToOpen, request: request,
                    branch: branch, newBranch: newBranch, base: newBranch == nil ? nil : form.base) { problem in
             form.starting = false
             if let problem { form.problem = problem } else { close() }
@@ -256,6 +287,9 @@ final class NewSessionForm: ObservableObject {
     @Published var kind: Agent.Kind = .orchestrator
     @Published var name = ""
     @Published var model = ""
+    /// The Teams to pick from, and the one picked; nil until the daemon has listed them.
+    @Published var teams: [Team] = []
+    @Published var team: String?
     @Published var picked: String?
     /// Create from: which tab, and what is typed or picked there.
     @Published var tab: CreateFromTab = .smart
@@ -282,8 +316,41 @@ final class NewSessionForm: ObservableObject {
         case .name: return text.isEmpty ? nil : .name(text)
         }
     }
+    /// The Team the new agent starts with: an Orchestrator's pick, nothing for a Normal session.
+    var teamToOpen: String? { kind == .orchestrator ? team : nil }
+
+    /// Under the picker: the picked Team's summary, then why any other Team cannot be picked.
+    var teamLine: String? {
+        let lines = [teams.first { $0.name == team }?.summary]
+            + teams.compactMap { team in team.problem.map { "\(team.name) cannot be used: \($0)" } }
+        let text = lines.compactMap { $0 }.joined(separator: " ")
+        return text.isEmpty ? nil : text
+    }
+
     /// Folders chosen with the open panel this time, listed first.
     @Published var chosen: [String] = []
+}
+
+/// The Team of a new Orchestrator, as a compact menu in the model's place. A Team with a problem
+/// is listed, dimmed, and cannot be picked.
+struct TeamPicker: View {
+    @ObservedObject var form: NewSessionForm
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Team")
+                .font(Ledger.font(12.5, .semibold))
+                .foregroundStyle(Ledger.ink2)
+            Picker("Team", selection: $form.team) {
+                ForEach(form.teams) { team in
+                    Text(team.name).tag(Optional(team.name)).disabled(!team.usable)
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+            .disabled(form.teams.isEmpty)
+        }
+    }
 }
 
 /// A small caption above a field in a modal.

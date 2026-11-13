@@ -711,7 +711,7 @@ struct AgentLine: View {
         }
         .help([agent.name == nil ? "Named after your first request" : agent.displayName,
                number <= 9 ? "⌘\(number)" : nil,
-               agent.isOrchestrator ? "Orchestrator" : nil, agent.branch,
+               agent.isOrchestrator ? "Orchestrator" : nil, agent.team.map { "Team \($0)" }, agent.branch,
                agent.model.map(AgentLine.short)].compactMap { $0 }.joined(separator: ", "))
     }
 
@@ -826,11 +826,13 @@ struct AgentPanel: View {
 
     private var meta: String {
         let name = URL(fileURLWithPath: repo).lastPathComponent
-        let model = agent.model ?? "default model"
+        // An Orchestrator on a Team takes its model from it, so "default model" would mislead.
+        let model = agent.model ?? (agent.team == nil ? "default model" : nil)
         let place = (agent.head ?? agent.branch).map { "\(name) on \($0)" } ?? name
         if agent.isTerminal { return "Shell in \(place)" }
         if !agent.live { return "\(agent.isOrchestrator ? "Stopped" : "Exited"), a shell in \(place)" }
-        return "\(agent.kindName) in \(place), \(model)"
+        return ["\(agent.kindName) in \(place)", model, agent.team.map { "Team \($0)" }]
+            .compactMap { $0 }.joined(separator: ", ")
     }
 
     private var stoppedHelp: String {

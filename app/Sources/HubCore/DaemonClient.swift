@@ -109,16 +109,11 @@ public struct DaemonClient: Sendable {
     /// Starts a new agent. `branch` puts it on an existing branch; `newBranch` on a new branch
     /// from `base`, in its own worktree; neither, in the repo's checkout.
     public func openAgent(repo: String, kind: Agent.Kind, name: String? = nil, model: String? = nil,
-                          request: String? = nil, branch: String? = nil, newBranch: String? = nil,
-                          base: String? = nil) throws -> (repo: String, agent: Int)
+                          team: String? = nil, request: String? = nil, branch: String? = nil,
+                          newBranch: String? = nil, base: String? = nil) throws -> (repo: String, agent: Int)
     {
-        var params: [String: Any] = ["repo": repo, "kind": kind.rawValue]
-        if let branch { params["branch"] = branch }
-        if let newBranch { params["new_branch"] = newBranch }
-        if let base, !base.isEmpty { params["base"] = base }
-        if let name, !name.isEmpty { params["name"] = name }
-        if let model, !model.isEmpty { params["model"] = model }
-        if let request, !request.isEmpty { params["request"] = request }
+        let params = openAgentParams(repo: repo, kind: kind, name: name, model: model, team: team,
+                                     request: request, branch: branch, newBranch: newBranch, base: base)
         let result = try call("agent.open", params) as? [String: Any]
         guard let agent = result?["agent"] as? Int else { throw HubError.badResponse }
         return (result?["repo"] as? String ?? repo, agent)
@@ -214,6 +209,13 @@ public struct DaemonClient: Sendable {
     }
 
     /// The Profiles Workers in `repo` can start as: Echo's own, the human's, and the repo's.
+    /// The Teams a new Orchestrator can start with, by name; a repo adds its own.
+    public func teams(repo: String?) throws -> [Team] {
+        let result = try call("team.list", repo.map { ["repo": $0] } ?? [:]) as? [String: Any]
+        let data = try JSONSerialization.data(withJSONObject: result?["teams"] ?? [])
+        return try JSONDecoder().decode([Team].self, from: data)
+    }
+
     public func profiles(repo: String?) throws -> [WorkerProfile] {
         let result = try call("profiles.list", repo.map { ["repo": $0] } ?? [:]) as? [String: Any]
         let data = try JSONSerialization.data(withJSONObject: result?["profiles"] ?? [])

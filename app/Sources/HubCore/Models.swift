@@ -19,6 +19,8 @@ public struct Agent: Decodable, Equatable, Identifiable, Sendable {
     /// What the human called it, or what their first request was about; nil until then.
     public let name: String?
     public let model: String?
+    /// The Team an Orchestrator was started with, by name; nil for any other agent.
+    public let team: String?
     public let live: Bool
     /// The branch it works on, when the human picked or made one for it.
     public let branch: String?
@@ -27,12 +29,13 @@ public struct Agent: Decodable, Equatable, Identifiable, Sendable {
     /// The branch checked out where it works, now; nil when HEAD is detached.
     public let head: String?
 
-    public init(id: Int, kind: Kind, name: String? = nil, model: String? = nil, live: Bool = false,
-                branch: String? = nil, cwd: String? = nil, head: String? = nil) {
+    public init(id: Int, kind: Kind, name: String? = nil, model: String? = nil, team: String? = nil,
+                live: Bool = false, branch: String? = nil, cwd: String? = nil, head: String? = nil) {
         self.id = id
         self.kind = kind
         self.name = name
         self.model = model
+        self.team = team
         self.live = live
         self.branch = branch
         self.cwd = cwd
