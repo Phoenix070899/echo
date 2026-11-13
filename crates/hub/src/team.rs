@@ -3,7 +3,7 @@
 //! same-named one before it, whole: Echo's own (`teams/` in the echo repo), the human's (`teams/`
 //! in the daemon's state), then the repo's (`.echo/teams/`, shared through its git).
 
-// Nothing starts a session with a Team yet; the daemon's Orchestrator and Worker starts will.
+// An Orchestrator starts with its Team; the Worker side of a Team (`workers`) is not read yet.
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
@@ -156,6 +156,15 @@ pub fn default_cli(state: &Path, repo: Option<&Path>) -> Cli {
     repo.and_then(|repo| from(&repo.join(".echo")))
         .or_else(|| from(state))
         .unwrap_or(Cli::Claude)
+}
+
+/// The context size at which an idle Orchestrator is renewed: its Team's `rotateAt` (0 is off)
+/// where it has one, else the human's `orchestratorRotateAt`.
+pub fn rotate_at(human: &serde_json::Map<String, serde_json::Value>, team: Option<&Team>) -> Option<u64> {
+    match team.and_then(|team| team.orchestrator.as_ref()?.rotate_at) {
+        Some(at) => Some(at).filter(|at| *at > 0),
+        None => settings::orchestrator_rotate_at(human),
+    }
 }
 
 /// Every Team name across the levels, sorted, each with its winning file.
@@ -398,6 +407,39 @@ mod tests {
 
     fn problem(name: &str, text: &str) -> String {
         validate(&named(name, text), Cli::Claude).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn a_teams_rotate_at_replaces_the_humans_and_zero_turns_renewal_off() {
+        let human = serde_json::json!({ "orchestratorRotateAt": 200_000 });
+        let human = human.as_object().unwrap();
+        let with = |text: &str| named("t", text);
+        assert_eq!(rotate_at(human, None), Some(200_000));
+        assert_eq!(rotate_at(human, Some(&with("{}"))), Some(200_000));
+        assert_eq!(
+            rotate_at(
+                human,
+                Some(&with(r#"{"orchestrator": {"model": "claude-sonnet-5-5"}}"#))
+            ),
+            Some(200_000),
+            "no rotateAt in the Team leaves the human's"
+        );
+        assert_eq!(
+            rotate_at(human, Some(&with(r#"{"orchestrator": {"rotateAt": 150000}}"#))),
+            Some(150_000),
+            "the Team's size is used as written, below the human's floor too"
+        );
+        assert_eq!(
+            rotate_at(human, Some(&with(r#"{"orchestrator": {"rotateAt": 0}}"#))),
+            None
+        );
+        assert_eq!(
+            rotate_at(
+                &serde_json::Map::new(),
+                Some(&with(r#"{"orchestrator": {"rotateAt": 20000}}"#))
+            ),
+            Some(20_000)
+        );
     }
 
     #[test]

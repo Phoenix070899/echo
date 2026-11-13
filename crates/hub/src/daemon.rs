@@ -32,6 +32,7 @@ use crate::repo;
 use crate::screen::{self, Look};
 use crate::settings;
 use crate::stats;
+use crate::team;
 
 /// How long a turn may take to start before `worker.start` gives up on it.
 const START_TIMEOUT: Duration = Duration::from_secs(90);
@@ -427,7 +428,7 @@ impl Hub {
                 let echo =
                     [launch::RESUMED, launch::RENEWED].map(|text| (db::origin::ECHO.to_string(), text.to_string()));
                 let earlier = db::agent_sessions(&self.db(), agent.id)?;
-                let cli = self.chat_cli(agent.cli.as_deref(), &agent.repo, None);
+                let cli = self.chat_cli(self.agent_stored_cli(&agent).as_deref(), &agent.repo, None);
                 (
                     agent.session_id,
                     cli,
@@ -744,7 +745,13 @@ impl Hub {
                 .map(String::from)
         };
         let id = match p.get("agent").and_then(Value::as_i64) {
-            Some(id) => id,
+            Some(id) => {
+                if let Some(name) = picked("team") {
+                    let agent = db::agent(&self.db(), id)?;
+                    self.check_team(&agent.kind, &agent.repo, &name)?;
+                }
+                id
+            }
             None => {
                 let root = repo::root(Path::new(str_param(p, "repo")?))?;
                 let repo = root.display().to_string();
@@ -752,6 +759,10 @@ impl Hub {
                     .get("kind")
                     .and_then(Value::as_str)
                     .unwrap_or(db::agent_kind::ORCHESTRATOR);
+                // A Team that cannot be used refuses the open before a worktree or an agent exists.
+                if let Some(name) = picked("team") {
+                    self.check_team(kind, &repo, &name)?;
+                }
                 // Where it works: a branch the human picked, a new branch in a new worktree, or
                 // (neither) the repo's own checkout. Made first, so a bad branch starts nothing.
                 let place = if let Some(branch) = picked("branch") {
@@ -792,6 +803,9 @@ impl Hub {
             cli::Cli::parse(&cli)?;
             db::set_agent_cli(&self.db(), id, &cli)?;
         }
+        if let Some(team) = picked("team") {
+            db::set_agent_team(&self.db(), id, &team)?;
+        }
         if let Some(name) = picked("name") {
             db::set_agent_name(&self.db(), id, &name)?;
         }
@@ -811,32 +825,9 @@ impl Hub {
         let repo = PathBuf::from(&agent.repo);
         let home = PathBuf::from(agent.home());
         let orchestrator = agent.kind == db::agent_kind::ORCHESTRATOR;
-        // An Orchestrator's own model setting sits over the repo's and the human's general one, and
-        // under what was picked for this agent; with none of them, it runs the built-in default.
-        let human = settings::read(&paths::state_dir()).unwrap_or_default();
-        let orchestrator_model = orchestrator.then(|| settings::orchestrator_model(&human)).flatten();
-        let (agent_cli, model) = cli::pick(
-            &paths::state_dir(),
-            Some(&repo),
-            None,
-            &[
-                &cli::Choice {
-                    cli: None,
-                    model: orchestrator_model.clone(),
-                },
-                &cli::Choice {
-                    cli: agent.cli.clone(),
-                    model: agent.model.clone(),
-                },
-            ],
-        )
-        .map_err(|error| match orchestrator_model {
-            // An Anthropic name set for Claude must not be passed to another cli unseen.
-            Some(_) => anyhow::anyhow!("{error:#} (an Orchestrator takes `orchestratorModel` from settings.json unless the agent has a model of its own)"),
-            None => error,
-        })?;
-        let model = model.or_else(|| default_orchestrator_model(orchestrator, agent_cli));
-        let effort = orchestrator.then(|| settings::orchestrator_effort(&human));
+        // Read at every start and resume, so an edited Team takes effect at the next one.
+        let team = self.agent_team(&agent)?;
+        let (agent_cli, model, effort) = agent_pick(&paths::state_dir(), &repo, &agent, team.as_ref())?;
         let resume = agent_cli.has_session(&agent.session_id);
         // What the human asked for up front, like an issue to work on; a resumed session has its own.
         let request = picked("request").filter(|_| !resume);
@@ -864,6 +855,7 @@ impl Hub {
                         &repo,
                         agent.cwd.as_deref().zip(agent.branch.as_deref()),
                         session,
+                        team.as_ref(),
                     )?
                 } else {
                     launch::normal_start(&self.hub_dir, &agent, session)
@@ -899,14 +891,49 @@ impl Hub {
         Ok(view(true, resume))
     }
 
+    /// A Team an agent may start with: only an Orchestrator has one, and it must exist and validate.
+    fn check_team(&self, kind: &str, repo: &str, name: &str) -> Result<()> {
+        if kind != db::agent_kind::ORCHESTRATOR {
+            bail!("a Team is for an Orchestrator; a Normal session and a Terminal have none");
+        }
+        self.load_team(repo, name).map(drop)
+    }
+
+    fn load_team(&self, repo: &str, name: &str) -> Result<team::Team> {
+        team::load(&self.hub_dir, &paths::state_dir(), Some(Path::new(repo)), name)
+            .with_context(|| format!("the Team {name:?}"))
+    }
+
+    /// The Team an agent starts with, read now; none for an agent with no Team.
+    fn agent_team(&self, agent: &db::Agent) -> Result<Option<team::Team>> {
+        agent
+            .team
+            .as_deref()
+            .map(|name| self.load_team(&agent.repo, name))
+            .transpose()
+    }
+
+    /// The CLI an agent is known by before it runs: its own, else its Team's.
+    fn agent_stored_cli(&self, agent: &db::Agent) -> Option<String> {
+        agent.cli.clone().or_else(|| {
+            self.agent_team(agent)
+                .ok()
+                .flatten()?
+                .orchestrator
+                .and_then(|setup| setup.cli)
+        })
+    }
+
     /// Renews an idle Orchestrator whose context passed the human's `orchestratorRotateAt`
     /// (features/0061). Nothing happens unless that setting is on, the session has made enough
     /// requests to be worth it, and no Worker, message, or question is waiting on it.
     fn renew_if_due(self: &Arc<Self>, id: i64) -> Result<bool> {
-        let Some(at) = settings::orchestrator_rotate_at(&settings::read(&paths::state_dir())?) else {
+        let agent = db::agent(&self.db(), id)?;
+        // A Team that cannot be read now leaves the human's size; renewing then reports the Team.
+        let team = self.agent_team(&agent).ok().flatten();
+        let Some(at) = team::rotate_at(&settings::read(&paths::state_dir())?, team.as_ref()) else {
             return Ok(false);
         };
-        let agent = db::agent(&self.db(), id)?;
         if db::agent_has_work(&self.db(), &agent.repo, id)? {
             return Ok(false);
         }
@@ -928,6 +955,8 @@ impl Hub {
         if agent.kind != db::agent_kind::ORCHESTRATOR {
             bail!("only an Orchestrator's session is renewed");
         }
+        // Before the session is ended: a Team that cannot start must not leave it stopped.
+        self.agent_team(&agent)?;
         db::end_agent_session(&self.db(), id, &agent.session_id)?;
         db::set_agent_session(&self.db(), id, &uuid::Uuid::new_v4().to_string())?;
         self.stop_agent(id);
@@ -988,6 +1017,7 @@ impl Hub {
             "kind": agent.kind,
             "name": agent.name,
             "model": agent.model,
+            "team": agent.team,
             // A Terminal is always ready: attaching starts its shell.
             "live": self.agent_is_live(agent.id) || agent.kind == db::agent_kind::TERMINAL,
             "branch": agent.branch,
@@ -1104,7 +1134,7 @@ impl Hub {
                 }),
                 'a' => db::agent(&self.db(), id).ok().map(|agent| {
                     let choice = cli::Choice {
-                        cli: agent.cli.clone(),
+                        cli: self.agent_stored_cli(&agent),
                         model: agent.model.clone(),
                     };
                     let agent_cli = cli::recovered(&state, Some(Path::new(&agent.repo)), None, &[&choice]);
@@ -1273,7 +1303,7 @@ impl Hub {
                             .clone()
                             .map(PathBuf::from)
                             .unwrap_or_else(|| PathBuf::from(&agent.repo));
-                        let cli = self.chat_cli(agent.cli.as_deref(), &agent.repo, None);
+                        let cli = self.chat_cli(self.agent_stored_cli(&agent).as_deref(), &agent.repo, None);
                         (agent.session_id, cwd, cli)
                     }
                 };
@@ -2890,7 +2920,7 @@ impl Hub {
             "orchestrator" => {
                 let repo = repo::root(Path::new(str_param(p, "repo")?))?.display().to_string();
                 let mut open = json!({ "repo": repo, "kind": db::agent_kind::ORCHESTRATOR });
-                for key in ["branch", "new_branch", "base", "name", "request"] {
+                for key in ["branch", "new_branch", "base", "name", "request", "team"] {
                     if let Some(value) = p.get(key).filter(|v| !v.is_null()) {
                         open[key] = value.clone();
                     }
@@ -3409,6 +3439,55 @@ fn is_agent_var(key: &str) -> bool {
         || key.starts_with("KIRO_KAS_")
 }
 
+/// The CLI, model and effort an agent starts with. An Orchestrator's order, from the highest: what
+/// was picked for the agent, its Team's `orchestrator` (features/0081), the human's
+/// `orchestratorModel` and `orchestratorEffort`, then the repo's and the human's general settings
+/// (features/0053 and 0036). A Normal session takes the settings and what was picked alone.
+fn agent_pick(
+    state: &Path,
+    repo: &Path,
+    agent: &db::Agent,
+    team: Option<&team::Team>,
+) -> Result<(cli::Cli, Option<String>, Option<String>)> {
+    let orchestrator = agent.kind == db::agent_kind::ORCHESTRATOR;
+    let human = settings::read(state).unwrap_or_default();
+    let orchestrator_model = orchestrator.then(|| settings::orchestrator_model(&human)).flatten();
+    let setup = team
+        .filter(|_| orchestrator)
+        .and_then(|team| team.orchestrator.as_ref());
+    let (agent_cli, model) = cli::pick(
+        state,
+        Some(repo),
+        None,
+        &[
+            &cli::Choice {
+                cli: None,
+                model: orchestrator_model.clone(),
+            },
+            &cli::Choice {
+                cli: setup.and_then(|setup| setup.cli.clone()),
+                model: setup.and_then(|setup| setup.model.clone()),
+            },
+            &cli::Choice {
+                cli: agent.cli.clone(),
+                model: agent.model.clone(),
+            },
+        ],
+    )
+    .map_err(|error| match orchestrator_model {
+        // An Anthropic name set for Claude must not be passed to another cli unseen.
+        Some(_) => anyhow::anyhow!("{error:#} (an Orchestrator takes `orchestratorModel` from settings.json unless the agent or its Team has a model of its own)"),
+        None => error,
+    })?;
+    let model = model.or_else(|| default_orchestrator_model(orchestrator, agent_cli));
+    let effort = orchestrator.then(|| {
+        setup
+            .and_then(|setup| setup.effort.clone())
+            .unwrap_or_else(|| settings::orchestrator_effort(&human))
+    });
+    Ok((agent_cli, model, effort))
+}
+
 /// What an Orchestrator runs when nothing names a model: claude's built-in default. Another cli
 /// has no Anthropic name to start from, so it runs its own default until `orchestratorModel` or
 /// the agent names one of its models.
@@ -3495,6 +3574,149 @@ fn resume_message(conn: &Connection, id: i64, cli: cli::Cli) -> Result<(String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("hub-daemon-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn agent_of(kind: &str, cli: Option<&str>, model: Option<&str>) -> db::Agent {
+        db::Agent {
+            id: 1,
+            repo: "/r".into(),
+            kind: kind.into(),
+            name: None,
+            model: model.map(String::from),
+            cli: cli.map(String::from),
+            session_id: "s".into(),
+            created_at: 0,
+            cwd: None,
+            branch: None,
+            team: None,
+        }
+    }
+
+    fn team_of(text: &str) -> team::Team {
+        team::parse(text).unwrap()
+    }
+
+    fn pick(state: &Path, agent: &db::Agent, team: Option<&team::Team>) -> (cli::Cli, Option<String>, Option<String>) {
+        agent_pick(state, &state.join("repo"), agent, team).unwrap()
+    }
+
+    #[test]
+    fn an_orchestrator_without_a_team_runs_as_before() {
+        let state = scratch("noteam");
+        let orchestrator = agent_of(db::agent_kind::ORCHESTRATOR, None, None);
+        assert_eq!(
+            pick(&state, &orchestrator, None),
+            (
+                cli::Cli::Claude,
+                Some(settings::ORCHESTRATOR_MODEL.to_string()),
+                Some("high".to_string())
+            )
+        );
+        std::fs::write(
+            state.join("settings.json"),
+            r#"{"orchestratorModel": "anthropic/claude-sonnet-5-5", "orchestratorEffort": "low"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            pick(&state, &orchestrator, None),
+            (
+                cli::Cli::Claude,
+                Some("anthropic/claude-sonnet-5-5".to_string()),
+                Some("low".to_string())
+            )
+        );
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_teams_orchestrator_sits_over_the_settings_and_under_what_was_picked() {
+        let state = scratch("team-order");
+        std::fs::write(
+            state.join("settings.json"),
+            r#"{"model": "anthropic/claude-haiku-5-5", "orchestratorModel": "anthropic/claude-opus-5-5", "orchestratorEffort": "low"}"#,
+        )
+        .unwrap();
+        let team = team_of(r#"{"orchestrator": {"cli": "kiro", "model": "claude-sonnet-5.5", "effort": "medium"}}"#);
+        let plain = agent_of(db::agent_kind::ORCHESTRATOR, None, None);
+        assert_eq!(
+            pick(&state, &plain, Some(&team)),
+            (
+                cli::Cli::Kiro,
+                Some("claude-sonnet-5.5".to_string()),
+                Some("medium".to_string())
+            ),
+            "the Team beats orchestratorModel, orchestratorEffort and the general model"
+        );
+        let picked = agent_of(
+            db::agent_kind::ORCHESTRATOR,
+            Some("claude"),
+            Some("anthropic/claude-haiku-5-5"),
+        );
+        assert_eq!(
+            pick(&state, &picked, Some(&team)),
+            (
+                cli::Cli::Claude,
+                Some("anthropic/claude-haiku-5-5".to_string()),
+                Some("medium".to_string())
+            ),
+            "what was picked for the agent wins; the Team's effort still applies"
+        );
+        let only_effort = team_of(r#"{"orchestrator": {"effort": "max"}}"#);
+        assert_eq!(
+            pick(&state, &plain, Some(&only_effort)),
+            (
+                cli::Cli::Claude,
+                Some("anthropic/claude-opus-5-5".to_string()),
+                Some("max".to_string())
+            ),
+            "a field the Team leaves out falls to the level below"
+        );
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_normal_session_ignores_a_team_it_somehow_holds() {
+        let state = scratch("normal-team");
+        let team = team_of(r#"{"orchestrator": {"model": "anthropic/claude-sonnet-5-5", "effort": "max"}}"#);
+        let normal = agent_of(db::agent_kind::CLAUDE, None, None);
+        assert_eq!(pick(&state, &normal, Some(&team)), (cli::Cli::Claude, None, None));
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn an_edited_team_changes_the_next_start() {
+        let hub = scratch("edit-hub");
+        let state = scratch("edit-state");
+        let file = state.join("teams/mine.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let orchestrator = agent_of(db::agent_kind::ORCHESTRATOR, None, None);
+        let start = || {
+            let team = team::load(&hub, &state, None, "mine").unwrap();
+            pick(&state, &orchestrator, Some(&team))
+        };
+        std::fs::write(
+            &file,
+            r#"{"orchestrator": {"model": "anthropic/claude-sonnet-5-5", "effort": "low"}}"#,
+        )
+        .unwrap();
+        assert_eq!(start().1.as_deref(), Some("anthropic/claude-sonnet-5-5"));
+        std::fs::write(
+            &file,
+            r#"{"orchestrator": {"model": "anthropic/claude-haiku-5-5", "effort": "high"}}"#,
+        )
+        .unwrap();
+        let (_, model, effort) = start();
+        assert_eq!(model.as_deref(), Some("anthropic/claude-haiku-5-5"));
+        assert_eq!(effort.as_deref(), Some("high"));
+        let _ = std::fs::remove_dir_all(&hub);
+        let _ = std::fs::remove_dir_all(&state);
+    }
 
     #[test]
     fn a_resumed_worker_is_sent_the_task_it_is_on_now() {

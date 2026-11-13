@@ -133,6 +133,15 @@ impl Rules {
         }
     }
 
+    /// These rules with a Team's present keys replacing theirs; its absent keys leave them as they are.
+    pub fn with_team(mut self, team: &crate::team::RulesSetup) -> Rules {
+        self.max_workers = team.max_workers.unwrap_or(self.max_workers);
+        self.plan_approval = team.plan_approval.unwrap_or(self.plan_approval);
+        self.review = team.review.unwrap_or(self.review);
+        self.merge_without_asking = team.merge_without_asking.unwrap_or(self.merge_without_asking);
+        self
+    }
+
     pub fn view(&self) -> Value {
         json!({ "maxWorkers": self.max_workers, "planApproval": self.plan_approval, "review": self.review,
                 "mergeWithoutAsking": self.merge_without_asking })

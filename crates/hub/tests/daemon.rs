@@ -2929,3 +2929,128 @@ fn a_checkouts_side_shell_runs_commands_outlives_the_daemon_and_stops() {
     let refused = hub.call("terminal.write", serde_json::json!({ "side": "relative", "text": "x" }));
     assert_eq!(refused["ok"], false, "{refused}");
 }
+
+fn agents_of(hub: &Hub) -> Vec<serde_json::Value> {
+    hub.call("sessions.list", serde_json::json!({}))["result"]["sessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|session| session["agents"].as_array().cloned().unwrap_or_default())
+        .collect()
+}
+
+fn put_team(hub: &Hub, name: &str, text: &str) {
+    let dir = hub.state.join("teams");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("{name}.json")), text).unwrap();
+}
+
+#[test]
+fn an_orchestrator_keeps_its_team_and_reads_it_again_at_every_start() {
+    let hub = Hub::new("team-keep");
+    hub.ok(&["status"]);
+    put_team(
+        &hub,
+        "mine",
+        r#"{"orchestrator": {"model": "anthropic/claude-sonnet-5-5"}}"#,
+    );
+    let opened = hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "orchestrator", "team": "mine" }),
+    );
+    assert_eq!(opened["ok"], true, "{opened}");
+    let agent = serde_json::json!({ "agent": opened["result"]["agent"] });
+    assert_eq!(agents_of(&hub)[0]["team"], "mine");
+
+    // Edited to something that cannot run, it refuses the next start and leaves the agent as it was.
+    hub.call("agent.close", agent.clone());
+    hub.eventually("the agent to stop", || agents_of(&hub)[0]["live"] == false);
+    put_team(&hub, "mine", r#"{"orchestrator": {"model": "openai/gpt-5"}}"#);
+    let refused = hub.call("agent.open", agent.clone());
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert!(refused["error"].as_str().unwrap().contains("mine"), "{refused}");
+    assert_eq!(agents_of(&hub)[0]["live"], false);
+
+    // Mended, the same agent starts again, and a renewal reads it too.
+    put_team(&hub, "mine", r#"{"orchestrator": {"effort": "low"}}"#);
+    let resumed = hub.call("agent.open", agent.clone());
+    assert_eq!(resumed["result"]["started"], true, "{resumed}");
+    assert_eq!(agents_of(&hub)[0]["team"], "mine", "kept across starts");
+    put_team(&hub, "mine", r#"{"orchestrator": {"effort": "extreme"}}"#);
+    let renewed = hub.call("agent.renew", agent.clone());
+    assert_eq!(renewed["ok"], false, "{renewed}");
+    assert_eq!(
+        agents_of(&hub)[0]["live"],
+        true,
+        "a Team that cannot start leaves the session running"
+    );
+}
+
+#[test]
+fn a_team_that_cannot_be_used_is_refused_before_anything_is_made() {
+    let hub = Hub::new("team-refused");
+    hub.ok(&["status"]);
+    let before = git(&hub.repo, &["worktree", "list"]);
+    put_team(
+        &hub,
+        "broken",
+        r#"{"orchestrator": {"cli": "kiro", "model": "anthropic/claude-opus-5-5"}}"#,
+    );
+    for team in ["nope", "broken", "Bad Name"] {
+        let opened = hub.call(
+            "agent.open",
+            serde_json::json!({
+                "repo": hub.repo_key(), "kind": "orchestrator", "team": team,
+                "new_branch": "feat/team", "base": "main"
+            }),
+        );
+        assert_eq!(opened["ok"], false, "{team}: {opened}");
+        assert!(agents_of(&hub).is_empty(), "{team}: no agent row");
+        assert_eq!(git(&hub.repo, &["worktree", "list"]), before, "{team}: no worktree");
+        assert!(
+            git(&hub.repo, &["branch", "--list", "feat/team"]).is_empty(),
+            "{team}: no branch"
+        );
+    }
+    let unknown = hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "orchestrator", "team": "nope" }),
+    );
+    assert!(unknown["error"].as_str().unwrap().contains("unknown team"), "{unknown}");
+}
+
+#[test]
+fn only_an_orchestrator_takes_a_team() {
+    let hub = Hub::new("team-kinds");
+    hub.ok(&["status"]);
+    for kind in ["claude", "terminal"] {
+        let opened = hub.call(
+            "agent.open",
+            serde_json::json!({ "repo": hub.repo_key(), "kind": kind, "team": "claude-opus" }),
+        );
+        assert_eq!(opened["ok"], false, "{opened}");
+        assert!(opened["error"].as_str().unwrap().contains("Orchestrator"), "{opened}");
+    }
+    assert!(agents_of(&hub).is_empty());
+    // A Normal session already open is refused the same way when a Team is given later.
+    let normal = hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "claude", "name": "echo me" }),
+    );
+    let given = hub.call(
+        "agent.open",
+        serde_json::json!({ "agent": normal["result"]["agent"], "team": "claude-opus" }),
+    );
+    assert_eq!(given["ok"], false, "{given}");
+    assert_eq!(agents_of(&hub)[0]["team"], serde_json::Value::Null);
+}
+
+#[test]
+fn echoctl_ui_orchestrator_passes_its_team() {
+    let hub = Hub::new("team-ui");
+    hub.ok(&["status"]);
+    hub.ok(&["ui", "orchestrator", "--team", "claude-opus"]);
+    assert_eq!(agents_of(&hub)[0]["team"], "claude-opus");
+    let refused = hub.fails(&["ui", "orchestrator", "--team", "nope"]);
+    assert!(refused.contains("unknown team"), "{refused}");
+}

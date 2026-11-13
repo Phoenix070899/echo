@@ -226,6 +226,9 @@ enum UiCommand {
         /// Its first request.
         #[arg(long)]
         request: Option<String>,
+        /// The Team it starts and resumes with (a name from `echoctl team list`).
+        #[arg(long)]
+        team: Option<String>,
     },
 }
 
@@ -476,9 +479,10 @@ fn ui(command: UiCommand) -> Result<()> {
             base,
             name,
             request,
+            team,
         } => json!({
             "action": "orchestrator", "repo": repo()?, "branch": branch, "new_branch": new_branch,
-            "base": base, "name": name, "request": request,
+            "base": base, "name": name, "request": request, "team": team,
         }),
     };
     let mut params = params;

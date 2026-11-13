@@ -185,6 +185,10 @@ pub fn open(path: &Path) -> Result<Connection> {
     if !has_column(&conn, "agents", "cwd")? {
         conn.execute_batch("alter table agents add column cwd text; alter table agents add column branch text")?;
     }
+    // The Team an Orchestrator starts and resumes with (features/0081).
+    if !has_column(&conn, "agents", "team")? {
+        conn.execute_batch("alter table agents add column team text")?;
+    }
     if !has_column(&conn, "workers", "fanout")? {
         conn.execute_batch("alter table workers add column fanout text")?;
     }
@@ -644,6 +648,8 @@ pub struct Agent {
     pub cwd: Option<String>,
     /// The branch it works on, when the human picked one.
     pub branch: Option<String>,
+    /// The Team an Orchestrator starts and resumes with; none runs by the settings alone.
+    pub team: Option<String>,
 }
 
 impl Agent {
@@ -654,7 +660,7 @@ impl Agent {
     }
 }
 
-const AGENT_COLUMNS: &str = "id, repo, kind, name, model, session_id, created_at, cwd, branch, cli";
+const AGENT_COLUMNS: &str = "id, repo, kind, name, model, session_id, created_at, cwd, branch, cli, team";
 
 fn agent_row(row: &Row) -> rusqlite::Result<Agent> {
     Ok(Agent {
@@ -668,6 +674,7 @@ fn agent_row(row: &Row) -> rusqlite::Result<Agent> {
         cwd: row.get(7)?,
         branch: row.get(8)?,
         cli: row.get(9)?,
+        team: row.get(10)?,
     })
 }
 
@@ -745,6 +752,11 @@ pub fn set_agent_session(conn: &Connection, id: i64, session: &str) -> Result<()
 
 pub fn set_agent_cli(conn: &Connection, id: i64, cli: &str) -> Result<()> {
     conn.execute("update agents set cli = ?2 where id = ?1", params![id, cli])?;
+    Ok(())
+}
+
+pub fn set_agent_team(conn: &Connection, id: i64, team: &str) -> Result<()> {
+    conn.execute("update agents set team = ?2 where id = ?1", params![id, team])?;
     Ok(())
 }
 
@@ -1001,6 +1013,27 @@ mod tests {
         );
         insert_task(&conn, id, origin::ORCHESTRATOR, "new").unwrap();
         assert_eq!(current_task(&conn, id).unwrap(), "new");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_database_from_before_teams_gains_the_column_and_keeps_its_agents() {
+        let dir = std::env::temp_dir().join(format!("hub-db-team-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.db");
+        let _ = std::fs::remove_file(&path);
+        let first = open(&path).unwrap();
+        let id = insert_agent(&first, "/r", agent_kind::ORCHESTRATOR, Some("old"), None).unwrap();
+        first.execute_batch("alter table agents drop column team").unwrap();
+        assert!(!has_column(&first, "agents", "team").unwrap());
+        drop(first);
+        let conn = open(&path).unwrap();
+        assert!(has_column(&conn, "agents", "team").unwrap());
+        assert_eq!(agent(&conn, id).unwrap().team, None, "an old agent has no Team");
+        set_agent_team(&conn, id, "claude-lean").unwrap();
+        drop(conn);
+        let conn = open(&path).unwrap(); // a second open migrates nothing twice
+        assert_eq!(agent(&conn, id).unwrap().team.as_deref(), Some("claude-lean"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
