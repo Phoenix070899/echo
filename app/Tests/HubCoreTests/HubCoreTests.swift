@@ -742,6 +742,26 @@ func row(_ id: String, phase: String, quiet: Int, model: String? = nil, effort: 
     #expect(agentCLIs == ["claude", "codex", "kiro"])
 }
 
+private let orchestratorReply = #""orchestrator":{"maxWorkers":4,"planApproval":true,"review":false,"mergeWithoutAsking":false}"#
+
+@Test func settingsReplyCarriesForceCliWhenSet() throws {
+    let on = #"{"cli":"kiro","model":"claude-haiku-5.5","forceCli":true,"# + orchestratorReply + "}"
+    let settings = try JSONDecoder().decode(AgentSettings.self, from: Data(on.utf8))
+    #expect(settings.cli == "kiro")
+    #expect(settings.forceCli == true)
+    let off = #"{"cli":"kiro","forceCli":false,"# + orchestratorReply + "}"
+    #expect(try JSONDecoder().decode(AgentSettings.self, from: Data(off.utf8)).forceCli == false)
+}
+
+@Test func settingsReplyWithoutForceCliIsOff() throws {
+    let missing = #"{"cli":"claude","# + orchestratorReply + "}"
+    let settings = try JSONDecoder().decode(AgentSettings.self, from: Data(missing.utf8))
+    #expect(settings.forceCli == nil)
+    #expect((settings.forceCli ?? false) == false)
+    let null = #"{"cli":null,"model":null,"forceCli":null,"# + orchestratorReply + "}"
+    #expect(try JSONDecoder().decode(AgentSettings.self, from: Data(null.utf8)).forceCli == nil)
+}
+
 @Test func aModelIdReadsAsItsFamily() {
     #expect(shortModelName("claude-opus-5-5") == "opus")
     #expect(shortModelName("claude-sonnet-5-5") == "sonnet")

@@ -606,11 +606,13 @@ public func shortModelName(_ model: String) -> String {
     return parts.count >= 2 && parts[0] == "claude" ? String(parts[1]) : model
 }
 
-/// The human's settings for agents, from `settings.get`: the default CLI and model, and how
-/// Orchestrators work.
+/// The human's settings for agents, from `settings.get`: the default CLI and model, whether they
+/// are forced on every agent, and how Orchestrators work.
 public struct AgentSettings: Decodable, Equatable, Sendable {
     public var cli: String?
     public var model: String?
+    /// The CLI and model above apply to every agent over a Profile's own; absent or null is off.
+    public var forceCli: Bool?
     public var orchestrator: OrchestratorRules
 
     public struct OrchestratorRules: Codable, Equatable, Sendable {
