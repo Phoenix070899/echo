@@ -747,6 +747,7 @@ impl Hub {
         let (agent_cli, model) = cli::pick(
             &paths::state_dir(),
             Some(&repo),
+            None,
             &[
                 &cli::Choice {
                     cli: None,
@@ -1018,12 +1019,10 @@ impl Hub {
                         cli: worker.cli.clone(),
                         model: worker.model.clone(),
                     };
-                    let levels: Vec<cli::Choice> = profile::load(&self.hub_dir, &state, Some(repo), &worker.profile)
-                        .into_iter()
-                        .map(|profile| profile.choice())
-                        .chain([picked])
-                        .collect();
-                    let worker_cli = cli::recovered(&state, Some(repo), &levels.iter().collect::<Vec<_>>());
+                    let profile = profile::load(&self.hub_dir, &state, Some(repo), &worker.profile)
+                        .ok()
+                        .map(|profile| profile.choice());
+                    let worker_cli = cli::recovered(&state, Some(repo), profile.as_ref(), &[&picked]);
                     Live::adopt(&key, id, worker_cli, self.worker_exit()).map(|live| {
                         live.map(|live| {
                             self.live.lock().unwrap().insert(id, Arc::clone(&live));
@@ -1037,7 +1036,7 @@ impl Hub {
                         cli: agent.cli.clone(),
                         model: agent.model.clone(),
                     };
-                    let agent_cli = cli::recovered(&state, Some(Path::new(&agent.repo)), &[&choice]);
+                    let agent_cli = cli::recovered(&state, Some(Path::new(&agent.repo)), None, &[&choice]);
                     Live::adopt(&key, id, agent_cli, self.agent_exit()).map(|live| {
                         live.map(|live| {
                             self.agents.lock().unwrap().insert(id, Arc::clone(&live));
@@ -1367,7 +1366,7 @@ impl Hub {
                             continue;
                         }
                     };
-                    let (cli, model, problem) = match cli::pick(&state, repo.as_deref(), &[&p.choice()]) {
+                    let (cli, model, problem) = match cli::pick(&state, repo.as_deref(), Some(&p.choice()), &[]) {
                         Ok((cli, model)) => (cli.name().to_string(), model, None),
                         Err(e) => (
                             p.cli.clone().unwrap_or_else(|| "claude".into()),
@@ -1491,12 +1490,14 @@ impl Hub {
             }
             "settings.get" => {
                 let all = settings::read(&paths::state_dir())?;
-                Ok(json!({ "cli": all.get("cli"), "model": all.get("model"),
+                Ok(
+                    json!({ "cli": all.get("cli"), "model": all.get("model"), "forceCli": all.get("forceCli"),
                            "orchestratorModel": all.get("orchestratorModel"),
                            "orchestratorEffort": all.get("orchestratorEffort"),
                            "orchestratorLessons": settings::orchestrator_lessons(&all),
                            "orchestratorRotateAt": settings::orchestrator_rotate_at(&all),
-                           "orchestrator": settings::Rules::from(&all).view() }))
+                           "orchestrator": settings::Rules::from(&all).view() }),
+                )
             }
             "settings.set" => {
                 let patch = param(p, "settings")?
@@ -1505,6 +1506,7 @@ impl Hub {
                 let allowed = [
                     "cli",
                     "model",
+                    "forceCli",
                     "orchestratorModel",
                     "orchestratorEffort",
                     "orchestratorLessons",
@@ -1520,6 +1522,11 @@ impl Hub {
                 if let Some(name) = patch.get("cli").and_then(Value::as_str).filter(|v| !v.is_empty()) {
                     cli::Cli::parse(name)?;
                 }
+                if let Some(force) = patch.get("forceCli") {
+                    if !(force.is_boolean() || force.is_null() || force.as_str() == Some("")) {
+                        bail!("forceCli must be true or false");
+                    }
+                }
                 if let Some(effort) = patch
                     .get("orchestratorEffort")
                     .and_then(Value::as_str)
@@ -1530,12 +1537,14 @@ impl Hub {
                     }
                 }
                 let all = settings::update(&paths::state_dir(), patch)?;
-                Ok(json!({ "cli": all.get("cli"), "model": all.get("model"),
+                Ok(
+                    json!({ "cli": all.get("cli"), "model": all.get("model"), "forceCli": all.get("forceCli"),
                            "orchestratorModel": all.get("orchestratorModel"),
                            "orchestratorEffort": all.get("orchestratorEffort"),
                            "orchestratorLessons": settings::orchestrator_lessons(&all),
                            "orchestratorRotateAt": settings::orchestrator_rotate_at(&all),
-                           "orchestrator": settings::Rules::from(&all).view() }))
+                           "orchestrator": settings::Rules::from(&all).view() }),
+                )
             }
             "worker.pick" => self.pick_worker(id_param(p, "id")?),
             "send" => {
@@ -1717,7 +1726,8 @@ impl Hub {
                     cli: worker.cli.clone(),
                     model: worker.model.clone(),
                 };
-                let (worker_cli, model) = cli::pick(&paths::state_dir(), Some(repo), &[&profile.choice(), &picked])?;
+                let (worker_cli, model) =
+                    cli::pick(&paths::state_dir(), Some(repo), Some(&profile.choice()), &[&picked])?;
                 let start = profile::start(
                     &self.hub_dir,
                     &worker.repo,
@@ -1816,7 +1826,7 @@ impl Hub {
         };
         // A CLI or model that cannot run, or a Kiro Worker without its notes, fails here, before a
         // worktree is made for it.
-        let (worker_cli, _) = cli::pick(&paths::state_dir(), Some(&repo_root), &[&profile.choice(), &runs])?;
+        let (worker_cli, _) = cli::pick(&paths::state_dir(), Some(&repo_root), Some(&profile.choice()), &[&runs])?;
         worker_cli.check_worker_notes(&self.hub_dir)?;
         let spec = str_param(p, "spec")?;
         let title = match p.get("title").and_then(Value::as_str) {

@@ -1066,6 +1066,45 @@ fn a_profile_set_to_kiro_lists_with_its_model_and_gemini_is_still_refused() {
 }
 
 #[test]
+fn forcecli_lists_every_profile_on_the_chosen_cli_and_refuses_a_non_boolean() {
+    let hub = Hub::new("forcecli");
+    hub.ok(&["sessions"]);
+    let listed = hub.ok(&["profile", "list"]);
+    let naruto = listed.lines().find(|l| l.starts_with("naruto ")).unwrap();
+    assert!(naruto.contains("claude"), "{naruto}");
+    let set = hub.call(
+        "settings.set",
+        serde_json::json!({ "settings": { "cli": "kiro", "forceCli": true } }),
+    );
+    assert!(set["error"].is_null(), "{set}");
+    assert_eq!(set["result"]["forceCli"], true, "{set}");
+    let got = hub.call("settings.get", serde_json::json!({}));
+    assert_eq!(got["result"]["forceCli"], true, "{got}");
+    let listed = hub.ok(&["profile", "list"]);
+    let naruto = listed.lines().find(|l| l.starts_with("naruto ")).unwrap();
+    assert!(naruto.contains("kiro default"), "{naruto}");
+    assert!(!naruto.contains("claude-"), "{naruto}");
+    let refused = hub.call("settings.set", serde_json::json!({ "settings": { "forceCli": "yes" } }));
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("forceCli must be true or false"),
+        "{refused}"
+    );
+    let got = hub.call("settings.get", serde_json::json!({}));
+    assert_eq!(
+        got["result"]["forceCli"], true,
+        "a refused value changes nothing: {got}"
+    );
+    let off = hub.call("settings.set", serde_json::json!({ "settings": { "forceCli": false } }));
+    assert_eq!(off["result"]["forceCli"], false, "{off}");
+    let listed = hub.ok(&["profile", "list"]);
+    let naruto = listed.lines().find(|l| l.starts_with("naruto ")).unwrap();
+    assert!(naruto.contains("claude"), "{naruto}");
+}
+
+#[test]
 fn settings_take_kiro_for_the_cli_and_for_both_models() {
     let hub = Hub::new("settingskiro");
     hub.ok(&["sessions"]);

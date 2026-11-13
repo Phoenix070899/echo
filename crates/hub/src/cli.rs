@@ -640,7 +640,10 @@ pub struct Choice {
 impl Choice {
     /// `settings.json` in a folder: `{"cli": "claude", "model": "anthropic/claude-sonnet-5-5"}`.
     pub fn read(dir: &Path) -> Result<Choice> {
-        let value = crate::settings::read(dir)?;
+        Ok(Choice::from_settings(&crate::settings::read(dir)?))
+    }
+
+    fn from_settings(value: &serde_json::Map<String, serde_json::Value>) -> Choice {
         let field = |key: &str| {
             value
                 .get(key)
@@ -648,10 +651,40 @@ impl Choice {
                 .map(String::from)
                 .filter(|v| !v.is_empty())
         };
-        Ok(Choice {
+        Choice {
             cli: field("cli"),
             model: field("model"),
-        })
+        }
+    }
+}
+
+/// What the files name: the state's `settings.json`, then the repo's `.echo/settings.json` over
+/// it. `force` is `forceCli`, the repo's over the state's.
+struct Files {
+    levels: Vec<Choice>,
+    force: bool,
+}
+
+impl Files {
+    fn read(state: &Path, repo: Option<&Path>) -> Result<Files> {
+        let mut files = Files {
+            levels: Vec::new(),
+            force: false,
+        };
+        let repo_echo = repo.map(|repo| repo.join(".echo"));
+        for dir in std::iter::once(state).chain(repo_echo.as_deref()) {
+            let value = crate::settings::read(dir)?;
+            files.levels.push(Choice::from_settings(&value));
+            if let Some(force) = crate::settings::force_cli(&value, dir)? {
+                files.force = force;
+            }
+        }
+        Ok(files)
+    }
+
+    /// Whether a Profile's own cli and model are put aside: `forceCli` is on and a file names a cli.
+    fn overrides_profile(&self) -> bool {
+        self.force && self.levels.iter().any(|level| level.cli.is_some())
     }
 }
 
@@ -660,26 +693,42 @@ impl Choice {
 /// fits, or a `settings.json` that cannot be read, must not turn a Kiro agent into a Claude one,
 /// whose reader would not know its prompts. Only a CLI no level names, or one Echo no longer
 /// knows, is claude.
-pub fn recovered(state: &Path, repo: Option<&Path>, levels: &[&Choice]) -> Cli {
-    let read = |dir: &Path| Choice::read(dir).ok().and_then(|choice| choice.cli);
-    let name = levels
+pub fn recovered(state: &Path, repo: Option<&Path>, profile: Option<&Choice>, picked: &[&Choice]) -> Cli {
+    let read = |dir: &Path| {
+        let value = crate::settings::read(dir).unwrap_or_default();
+        let force = crate::settings::force_cli(&value, dir).ok().flatten();
+        (Choice::from_settings(&value).cli, force)
+    };
+    let (state_cli, state_force) = read(state);
+    let (repo_cli, repo_force) = repo.map(|repo| read(&repo.join(".echo"))).unwrap_or_default();
+    let file_cli = repo_cli.or(state_cli);
+    let forced = repo_force.or(state_force).unwrap_or(false) && file_cli.is_some();
+    let profile_cli = profile.filter(|_| !forced).and_then(|choice| choice.cli.clone());
+    let name = picked
         .iter()
         .rev()
         .find_map(|choice| choice.cli.clone())
-        .or_else(|| repo.and_then(|repo| read(&repo.join(".echo"))))
-        .or_else(|| read(state));
+        .or(profile_cli)
+        .or(file_cli);
     name.and_then(|name| Cli::parse(&name).ok()).unwrap_or(Cli::Claude)
 }
 
-/// The CLI and model an agent runs with: the choice made at its start, else its Profile's, else
-/// the repo's (`.echo/settings.json`), else the human's (`settings.json` in the state), else
-/// claude with its own default model.
-pub fn pick(state: &Path, repo: Option<&Path>, levels: &[&Choice]) -> Result<(Cli, Option<String>)> {
-    let mut all = vec![Choice::read(state)?];
-    if let Some(repo) = repo {
-        all.push(Choice::read(&repo.join(".echo"))?);
+/// The CLI and model an agent runs with: the choice made at its start (`picked`, the last one
+/// first), else its Profile's, else the repo's (`.echo/settings.json`), else the human's
+/// (`settings.json` in the state), else claude with its own default model. With `forceCli` on and
+/// a cli set in those files, the Profile's cli and model are left out (features/0075).
+pub fn pick(
+    state: &Path,
+    repo: Option<&Path>,
+    profile: Option<&Choice>,
+    picked: &[&Choice],
+) -> Result<(Cli, Option<String>)> {
+    let files = Files::read(state, repo)?;
+    let mut all = files.levels.clone();
+    if let Some(profile) = profile.filter(|_| !files.overrides_profile()) {
+        all.push(profile.clone());
     }
-    all.extend(levels.iter().map(|c| (*c).clone()));
+    all.extend(picked.iter().map(|c| (*c).clone()));
     let cli = all.iter().rev().find_map(|c| c.cli.clone());
     let model = all.iter().rev().find_map(|c| c.model.clone());
     let cli = Cli::parse(cli.as_deref().unwrap_or("claude"))?;
@@ -723,7 +772,7 @@ mod tests {
     fn each_level_overrides_the_one_before() {
         let state = scratch("state");
         let repo = scratch("repo");
-        assert_eq!(pick(&state, Some(&repo), &[]).unwrap(), (Cli::Claude, None));
+        assert_eq!(pick(&state, Some(&repo), None, &[]).unwrap(), (Cli::Claude, None));
         std::fs::write(
             state.join("settings.json"),
             r#"{"model": "anthropic/claude-haiku-5-5"}"#,
@@ -732,11 +781,11 @@ mod tests {
         std::fs::create_dir_all(repo.join(".echo")).unwrap();
         std::fs::write(repo.join(".echo/settings.json"), r#"{"model": "claude-sonnet-5-5"}"#).unwrap();
         assert_eq!(
-            pick(&state, None, &[]).unwrap().1.as_deref(),
+            pick(&state, None, None, &[]).unwrap().1.as_deref(),
             Some("anthropic/claude-haiku-5-5")
         );
         assert_eq!(
-            pick(&state, Some(&repo), &[]).unwrap().1.as_deref(),
+            pick(&state, Some(&repo), None, &[]).unwrap().1.as_deref(),
             Some("claude-sonnet-5-5")
         );
         let profile = Choice {
@@ -748,11 +797,14 @@ mod tests {
             model: Some("anthropic/claude-fable-5-1".into()),
         };
         assert_eq!(
-            pick(&state, Some(&repo), &[&profile]).unwrap().1.as_deref(),
+            pick(&state, Some(&repo), Some(&profile), &[]).unwrap().1.as_deref(),
             Some("claude-opus-5-5")
         );
         assert_eq!(
-            pick(&state, Some(&repo), &[&profile, &start]).unwrap().1.as_deref(),
+            pick(&state, Some(&repo), Some(&profile), &[&start])
+                .unwrap()
+                .1
+                .as_deref(),
             Some("anthropic/claude-fable-5-1")
         );
         let wrong = Choice {
@@ -760,9 +812,168 @@ mod tests {
             model: Some("openai/gpt-5".into()),
         };
         assert!(
-            pick(&state, Some(&repo), &[&wrong]).is_err(),
+            pick(&state, Some(&repo), None, &[&wrong]).is_err(),
             "a model the cli cannot run fails at start"
         );
+    }
+
+    fn choice(cli: Option<&str>, model: Option<&str>) -> Choice {
+        Choice {
+            cli: cli.map(String::from),
+            model: model.map(String::from),
+        }
+    }
+
+    fn write_settings(dir: &Path, text: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("settings.json"), text).unwrap();
+    }
+
+    #[test]
+    fn a_profiles_own_cli_wins_unless_forcecli_is_on() {
+        let state = scratch("force-off-state");
+        write_settings(&state, r#"{"cli": "kiro", "model": "claude-haiku-5.5"}"#);
+        let profile = choice(Some("claude"), Some("claude-opus-5-5"));
+        assert_eq!(
+            pick(&state, None, Some(&profile), &[]).unwrap(),
+            (Cli::Claude, Some("claude-opus-5-5".into()))
+        );
+        write_settings(
+            &state,
+            r#"{"cli": "kiro", "model": "claude-haiku-5.5", "forceCli": false}"#,
+        );
+        assert_eq!(
+            pick(&state, None, Some(&profile), &[]).unwrap().0,
+            Cli::Claude,
+            "forceCli false forces nothing"
+        );
+    }
+
+    #[test]
+    fn forcecli_puts_the_chosen_cli_and_model_over_a_profiles() {
+        let state = scratch("force-on-state");
+        write_settings(
+            &state,
+            r#"{"cli": "kiro", "model": "claude-haiku-5.5", "forceCli": true}"#,
+        );
+        let profile = choice(Some("claude"), Some("claude-opus-5-5"));
+        assert_eq!(
+            pick(&state, None, Some(&profile), &[]).unwrap(),
+            (Cli::Kiro, Some("claude-haiku-5.5".into()))
+        );
+        // A Profile that names only a model is put aside too.
+        let model_only = choice(None, Some("claude-opus-5-5"));
+        assert_eq!(
+            pick(&state, None, Some(&model_only), &[]).unwrap(),
+            (Cli::Kiro, Some("claude-haiku-5.5".into()))
+        );
+    }
+
+    #[test]
+    fn forcecli_with_a_cli_but_no_model_runs_the_clis_own_default() {
+        let state = scratch("force-cli-only");
+        write_settings(&state, r#"{"cli": "kiro", "forceCli": true}"#);
+        // Claude's model name would be refused by Kiro, so it must not come from the Profile.
+        let profile = choice(Some("claude"), Some("anthropic/claude-opus-5-5"));
+        assert_eq!(pick(&state, None, Some(&profile), &[]).unwrap(), (Cli::Kiro, None));
+    }
+
+    #[test]
+    fn forcecli_without_a_cli_forces_nothing() {
+        let state = scratch("force-no-cli");
+        write_settings(&state, r#"{"model": "claude-haiku-5-5", "forceCli": true}"#);
+        let profile = choice(Some("claude"), Some("claude-opus-5-5"));
+        assert_eq!(
+            pick(&state, None, Some(&profile), &[]).unwrap(),
+            (Cli::Claude, Some("claude-opus-5-5".into()))
+        );
+    }
+
+    #[test]
+    fn what_is_picked_for_one_agent_beats_forcecli() {
+        let state = scratch("force-picked");
+        write_settings(
+            &state,
+            r#"{"cli": "kiro", "model": "claude-haiku-5.5", "forceCli": true}"#,
+        );
+        let profile = choice(Some("claude"), Some("claude-opus-5-5"));
+        let picked = choice(Some("claude"), Some("claude-sonnet-5-5"));
+        assert_eq!(
+            pick(&state, None, Some(&profile), &[&picked]).unwrap(),
+            (Cli::Claude, Some("claude-sonnet-5-5".into()))
+        );
+        // A bad pair fails here, before a worktree is made.
+        let bad = choice(None, Some("anthropic/claude-opus-5-5"));
+        assert!(pick(&state, None, Some(&profile), &[&bad]).is_err());
+    }
+
+    #[test]
+    fn a_repos_forcecli_is_over_the_humans() {
+        let state = scratch("force-repo-state");
+        let repo = scratch("force-repo-repo");
+        let profile = choice(Some("claude"), Some("claude-opus-5-5"));
+        write_settings(&state, r#"{"cli": "kiro", "forceCli": true}"#);
+        write_settings(&repo.join(".echo"), r#"{"forceCli": false}"#);
+        assert_eq!(
+            pick(&state, Some(&repo), Some(&profile), &[]).unwrap().0,
+            Cli::Claude,
+            "the repo turns the human's force off"
+        );
+        write_settings(&state, r#"{"cli": "kiro"}"#);
+        write_settings(&repo.join(".echo"), r#"{"forceCli": true}"#);
+        assert_eq!(
+            pick(&state, Some(&repo), Some(&profile), &[]).unwrap(),
+            (Cli::Kiro, None),
+            "the repo turns it on over the human's cli"
+        );
+        write_settings(
+            &repo.join(".echo"),
+            r#"{"cli": "kiro", "model": "claude-sonnet-5.5", "forceCli": true}"#,
+        );
+        write_settings(
+            &state,
+            r#"{"cli": "claude", "model": "claude-haiku-5-5", "forceCli": true}"#,
+        );
+        assert_eq!(
+            pick(&state, Some(&repo), Some(&profile), &[]).unwrap(),
+            (Cli::Kiro, Some("claude-sonnet-5.5".into())),
+            "the repo's cli and model are over the human's"
+        );
+    }
+
+    #[test]
+    fn orchestrator_model_still_applies_under_forcecli() {
+        let state = scratch("force-orchestrator");
+        write_settings(
+            &state,
+            r#"{"cli": "kiro", "model": "claude-haiku-5.5", "forceCli": true}"#,
+        );
+        let orchestrator = choice(None, Some("claude-opus-5.5"));
+        let own = Choice::default();
+        assert_eq!(
+            pick(&state, None, None, &[&orchestrator, &own]).unwrap(),
+            (Cli::Kiro, Some("claude-opus-5.5".into()))
+        );
+    }
+
+    #[test]
+    fn forcecli_must_be_true_or_false_in_a_file() {
+        let state = scratch("force-not-bool");
+        write_settings(&state, r#"{"cli": "kiro", "forceCli": "yes"}"#);
+        let err = pick(&state, None, None, &[]).unwrap_err().to_string();
+        assert!(err.contains("forceCli must be true or false"), "{err}");
+    }
+
+    #[test]
+    fn a_recovered_agent_follows_forcecli_over_its_profile() {
+        let state = scratch("force-recover");
+        write_settings(&state, r#"{"cli": "kiro", "forceCli": true}"#);
+        let profile = choice(Some("claude"), None);
+        assert_eq!(recovered(&state, None, Some(&profile), &[]), Cli::Kiro);
+        let picked = choice(Some("claude"), None);
+        assert_eq!(recovered(&state, None, Some(&profile), &[&picked]), Cli::Claude);
+        write_settings(&state, r#"{"cli": "kiro"}"#);
+        assert_eq!(recovered(&state, None, Some(&profile), &[]), Cli::Claude);
     }
 
     #[test]
@@ -1434,31 +1645,31 @@ mod tests {
             cli: Some(name.into()),
             model: None,
         };
-        assert_eq!(recovered(&state, Some(&repo), &[&stored("kiro")]), Cli::Kiro);
-        assert_eq!(recovered(&state, Some(&repo), &[&stored("codex")]), Cli::Codex);
+        assert_eq!(recovered(&state, Some(&repo), None, &[&stored("kiro")]), Cli::Kiro);
+        assert_eq!(recovered(&state, Some(&repo), None, &[&stored("codex")]), Cli::Codex);
         // A model that Kiro refuses made `pick` fail, and the agent read as claude.
         let odd = Choice {
             cli: Some("kiro".into()),
             model: Some("anthropic/claude-opus-5-5".into()),
         };
-        assert!(pick(&state, Some(&repo), &[&odd]).is_err());
-        assert_eq!(recovered(&state, Some(&repo), &[&odd]), Cli::Kiro);
+        assert!(pick(&state, Some(&repo), None, &[&odd]).is_err());
+        assert_eq!(recovered(&state, Some(&repo), None, &[&odd]), Cli::Kiro);
         // The stored level wins over the files, and an unreadable file does not hide it.
         std::fs::write(state.join("settings.json"), r#"{"cli": "codex"}"#).unwrap();
-        assert_eq!(recovered(&state, Some(&repo), &[&stored("kiro")]), Cli::Kiro);
-        assert_eq!(recovered(&state, Some(&repo), &[&Choice::default()]), Cli::Codex);
+        assert_eq!(recovered(&state, Some(&repo), None, &[&stored("kiro")]), Cli::Kiro);
+        assert_eq!(recovered(&state, Some(&repo), None, &[&Choice::default()]), Cli::Codex);
         std::fs::create_dir_all(repo.join(".echo")).unwrap();
         std::fs::write(repo.join(".echo/settings.json"), r#"{"cli": "kiro"}"#).unwrap();
         assert_eq!(
-            recovered(&state, Some(&repo), &[]),
+            recovered(&state, Some(&repo), None, &[]),
             Cli::Kiro,
             "the repo's level is over the human's"
         );
         std::fs::write(state.join("settings.json"), "not json").unwrap();
-        assert_eq!(recovered(&state, None, &[&stored("kiro")]), Cli::Kiro);
+        assert_eq!(recovered(&state, None, None, &[&stored("kiro")]), Cli::Kiro);
         // Nothing names a cli, or one Echo does not run: claude, as before.
-        assert_eq!(recovered(&state, None, &[&Choice::default()]), Cli::Claude);
-        assert_eq!(recovered(&state, None, &[&stored("vim")]), Cli::Claude);
+        assert_eq!(recovered(&state, None, None, &[&Choice::default()]), Cli::Claude);
+        assert_eq!(recovered(&state, None, None, &[&stored("vim")]), Cli::Claude);
     }
 
     #[test]
@@ -1469,16 +1680,16 @@ mod tests {
             cli: None,
             model: Some(model.into()),
         };
-        let err = pick(&state, None, &[&level("anthropic/claude-opus-5-5")])
+        let err = pick(&state, None, None, &[&level("anthropic/claude-opus-5-5")])
             .unwrap_err()
             .to_string();
         assert!(err.contains("anthropic") && err.contains("pick another cli"), "{err}");
         assert_eq!(
-            pick(&state, None, &[&level("claude-opus-5.5")]).unwrap(),
+            pick(&state, None, None, &[&level("claude-opus-5.5")]).unwrap(),
             (Cli::Kiro, Some("claude-opus-5.5".into()))
         );
         assert_eq!(
-            pick(&state, None, &[]).unwrap(),
+            pick(&state, None, None, &[]).unwrap(),
             (Cli::Kiro, None),
             "Kiro's own default model"
         );

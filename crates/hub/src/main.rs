@@ -393,7 +393,7 @@ fn profile_command(command: ProfileCommand) -> Result<()> {
                 };
                 match &entry.profile {
                     Ok(p) => {
-                        let runs = match cli::pick(&state, repo.as_deref(), &[&p.choice()]) {
+                        let runs = match cli::pick(&state, repo.as_deref(), Some(&p.choice()), &[]) {
                             Ok((cli, Some(model))) => format!("{} {model}", cli.name()),
                             Ok((cli, None)) => format!("{} default", cli.name()),
                             Err(e) => format!("cannot run: {e}"),

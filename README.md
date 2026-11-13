@@ -67,6 +67,7 @@ echoctl profile new code-reviewer  a blank Profile to fill in
 
 A Profile's `cli` and `model` (`provider/model`) can be left out: they then come from the repo's `.echo/settings.json`, else `~/.echo/settings.json` (`{"cli": "claude", "model": "anthropic/claude-sonnet-5-5"}`), else claude's own default.
 `echoctl worker start --cli --model` overrides all of them for one Worker.
+With `"forceCli": true` beside a `cli` in `settings.json` (or a repo's `.echo/settings.json`), that `cli` and `model` come before a Profile's own for every agent, so one switch runs everything on, say, Kiro; a pick for one Worker still wins.
 The CLIs are `claude` (Anthropic models), `codex` (OpenAI models, as `openai/<model>`) and `kiro`.
 
 `kiro` runs `kiro-cli chat --v3`, so it needs `kiro-cli` installed and signed in; your Kiro credits pay for it.

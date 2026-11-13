@@ -33,6 +33,20 @@ pub fn update(dir: &Path, patch: &Map<String, Value>) -> Result<Map<String, Valu
     Ok(all)
 }
 
+/// `forceCli` in a settings file: on makes its `cli` and `model` win over a Profile's own. None
+/// when the file does not say; anything but true or false is an error, as it would silently force
+/// nothing.
+pub fn force_cli(settings: &Map<String, Value>, dir: &Path) -> Result<Option<bool>> {
+    match settings.get("forceCli") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(force)) => Ok(Some(*force)),
+        Some(_) => bail!(
+            "{}: forceCli must be true or false",
+            dir.join("settings.json").display()
+        ),
+    }
+}
+
 /// What an Orchestrator runs with when no setting names a model or effort for it.
 pub const ORCHESTRATOR_MODEL: &str = "anthropic/claude-opus-5-5";
 pub const ORCHESTRATOR_EFFORT: &str = "high";
