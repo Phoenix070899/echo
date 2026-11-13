@@ -92,6 +92,38 @@ A repo's `.echo/settings.json` can also prepare new worktrees: `"copy": [".env"]
 | `lee` | Command runner: tests, builds, git, scripts |
 | `ino` | Scribe: keeps your Preferences and each repo's Lessons tidy |
 
+## Teams
+
+A Team is a named setup for an Orchestrator, its Workers and its rules, picked when a session starts: a lean one for speed or for a provider whose usage is low, a thorough one for hard work.
+It is a JSON file `<name>.json` (lowercase letters, digits and `-`, up to 40 characters) in three places, a later one replacing a same-named file whole: Echo's own in [`teams/`](teams/) (`claude-opus`, `claude-lean`, `kiro-lean`), yours in `~/.echo/teams/`, and a repo's in its `.echo/teams/`, shared through git.
+Every field is optional, and a missing one means the level below:
+
+```json
+{
+  "description": "Sonnet plans, Haiku works, on Kiro",
+  "orchestrator": { "cli": "kiro", "model": "claude-sonnet-5.5", "effort": "medium", "rotateAt": 150000 },
+  "workers": {
+    "cli": "kiro", "model": "claude-haiku-5.5", "effort": "low",
+    "profiles": { "naruto": { "model": "claude-sonnet-5.5", "effort": "high" } }
+  },
+  "rules": { "maxWorkers": 3, "planApproval": true, "review": true, "mergeWithoutAsking": false },
+  "instructions": "Text added to the end of the Orchestrator's prompt, after the rules."
+}
+```
+
+```
+echoctl team list                          every Team here, with where it comes from and what it runs
+echoctl team show claude-lean              one Team's origin, file and every field it sets
+echoctl ui orchestrator --team kiro-lean   open an Orchestrator that starts and resumes with that Team
+```
+
+A Team differs from a Profile: a Profile is a Worker's role (its prompt and tools), while a Team says which models the Orchestrator and the Workers run on and under which rules.
+A Team's `workers` choices come before a Profile's own `cli`, `model` and `effort`, and `workers.profiles.<Profile>` before the rest of `workers`.
+A Team applies when an Orchestrator starts or resumes and when a Worker starts or resumes, so editing a Team's file changes a running session at its next start or resume.
+A Team a model or effort cannot run is refused when it is saved and again when it is used, before any worktree is made.
+Only Orchestrators take a Team: a Normal session and a Terminal have none.
+Echo's own Teams are read-only; saving one under the same name writes your copy, which then replaces it.
+
 ## The `echoctl` CLI
 
 ```
@@ -103,6 +135,7 @@ echoctl sessions             repos the daemon knows, each with its agents
 echoctl daemon | shutdown    run or stop the Hub Daemon (agents keep running; --force stops them too)
 echoctl stats [--days N]     what Workers spent tokens on and how much they read
 echoctl profile <action>     see and change the Agent Profiles Workers start as
+echoctl team <action>        see the Teams an Orchestrator can start with
 echoctl ui <action>          have Echo open a file, show an agent, a diff, or a Settings section, notify, or start an Orchestrator
                              (agents learn it from the echoctl:echo skill in skills/)
 

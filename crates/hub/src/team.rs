@@ -113,7 +113,6 @@ pub enum Origin {
     Repo,
 }
 
-#[allow(dead_code)] // used by the Team requests and `echoctl team` (T04)
 impl Origin {
     pub fn label(self) -> &'static str {
         match self {
@@ -146,7 +145,6 @@ pub fn dirs(hub: &Path, state: &Path, repo: Option<&Path>) -> Vec<(Origin, PathB
 }
 
 /// The folder a level's Teams are written to; Echo's own is never written.
-#[allow(dead_code)] // used by the Team requests and `echoctl team` (T04)
 pub fn level_dir(state: &Path, repo: Option<&Path>, origin: Origin) -> Result<PathBuf> {
     match (origin, repo) {
         (Origin::Shipped, _) => bail!("Echo's own Teams are not changed; duplicate one into yours"),
@@ -159,7 +157,6 @@ pub fn level_dir(state: &Path, repo: Option<&Path>, origin: Origin) -> Result<Pa
 /// One name's winning file: the Team it parses to, if it does, and what is wrong with it, if
 /// anything. A Team with a `problem` is listed but cannot be used.
 #[derive(Debug)]
-#[allow(dead_code)] // used by the Team requests and `echoctl team` (T04)
 pub struct Entry {
     pub name: String,
     pub origin: Origin,
@@ -254,7 +251,6 @@ pub fn load(hub: &Path, state: &Path, repo: Option<&Path>, name: &str) -> Result
 /// Writes `team` as `<name>.json` in `dir` (a level's folder, see `level_dir`), whole and atomically:
 /// the file is complete or the old one stays. The name and every field are checked first, so a Team
 /// that cannot run is never written; `fallback` is the CLI a field without its own runs on.
-#[allow(dead_code)] // used by the Team requests and `echoctl team` (T04)
 pub fn save(dir: &Path, team: &Team, fallback: Cli) -> Result<PathBuf> {
     if !valid_name(&team.name) {
         bail!("a Team name is 1 to 40 lowercase letters, digits, and -, like claude-lean");
@@ -275,7 +271,6 @@ pub fn save(dir: &Path, team: &Team, fallback: Cli) -> Result<PathBuf> {
 
 /// Deletes the Team's file at `origin`, so the one below it is in force again; Echo's own are
 /// never deleted.
-#[allow(dead_code)] // used by the Team requests and `echoctl team` (T04)
 pub fn delete(state: &Path, repo: Option<&Path>, origin: Origin, name: &str) -> Result<()> {
     if !valid_name(name) {
         bail!("{name:?} is not a Team name");
@@ -286,6 +281,91 @@ pub fn delete(state: &Path, repo: Option<&Path>, origin: Origin, name: &str) -> 
     }
     std::fs::remove_file(path)?;
     Ok(())
+}
+
+/// A Team in one line, for a list: what its Orchestrator and its Workers run with, as far as it
+/// says; what it leaves out comes from the level below.
+pub fn summary(team: &Team) -> String {
+    let part = |cli: &Option<String>, model: &Option<String>, effort: &Option<String>| {
+        let words: Vec<&str> = [cli, model, effort].into_iter().flatten().map(String::as_str).collect();
+        if words.is_empty() {
+            "as set elsewhere".to_string()
+        } else {
+            words.join(" ")
+        }
+    };
+    let orchestrator = team
+        .orchestrator
+        .as_ref()
+        .map(|o| part(&o.cli, &o.model, &o.effort))
+        .unwrap_or_else(|| "as set elsewhere".into());
+    let workers = team
+        .workers
+        .as_ref()
+        .map(|w| {
+            let own = part(&w.all.cli, &w.all.model, &w.all.effort);
+            match w.profiles.len() {
+                0 => own,
+                n => format!("{own}, {n} by Profile"),
+            }
+        })
+        .unwrap_or_else(|| "by their Profiles".into());
+    format!("orchestrator: {orchestrator}; workers: {workers}")
+}
+
+/// Every field a Team sets, one per line, for `echoctl team show`.
+pub fn details(team: &Team) -> String {
+    let mut lines = Vec::new();
+    if let Some(o) = &team.orchestrator {
+        pick_lines(&mut lines, "orchestrator", &o.cli, &o.model, &o.effort);
+        if let Some(at) = o.rotate_at {
+            lines.push(format!("orchestrator.rotateAt: {at}"));
+        }
+    }
+    if let Some(w) = &team.workers {
+        pick_lines(&mut lines, "workers", &w.all.cli, &w.all.model, &w.all.effort);
+        for (profile, c) in &w.profiles {
+            pick_lines(
+                &mut lines,
+                &format!("workers.profiles.{profile}"),
+                &c.cli,
+                &c.model,
+                &c.effort,
+            );
+        }
+    }
+    if let Some(r) = &team.rules {
+        if let Some(max) = r.max_workers {
+            lines.push(format!("rules.maxWorkers: {max}"));
+        }
+        for (key, value) in [
+            ("planApproval", r.plan_approval),
+            ("review", r.review),
+            ("mergeWithoutAsking", r.merge_without_asking),
+        ] {
+            if let Some(value) = value {
+                lines.push(format!("rules.{key}: {value}"));
+            }
+        }
+    }
+    if let Some(text) = &team.instructions {
+        lines.push(format!("instructions:\n{}", text.trim_end()));
+    }
+    lines.join("\n")
+}
+
+fn pick_lines(
+    lines: &mut Vec<String>,
+    label: &str,
+    cli: &Option<String>,
+    model: &Option<String>,
+    effort: &Option<String>,
+) {
+    for (key, value) in [("cli", cli), ("model", model), ("effort", effort)] {
+        if let Some(value) = value {
+            lines.push(format!("{label}.{key}: {value}"));
+        }
+    }
 }
 
 /// Team names are file names, and appear in commands and the New session sheet.

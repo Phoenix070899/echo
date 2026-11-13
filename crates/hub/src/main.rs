@@ -162,6 +162,10 @@ enum Command {
     /// of the same name.
     #[command(subcommand)]
     Profile(ProfileCommand),
+    /// Teams: a named setup for an Orchestrator, its Workers and its rules; Echo's own, yours, and
+    /// this repo's, each replacing a same-named one before it.
+    #[command(subcommand)]
+    Team(TeamCommand),
     /// Echo's multiplexer panes: runs the line in `HUB_MUX` (from the daemon's `mux.command`) in
     /// a login shell, in place of this process.
     #[command(hide = true)]
@@ -192,6 +196,14 @@ enum ProfileCommand {
         #[arg(long)]
         repo: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum TeamCommand {
+    /// Every Team an Orchestrator can start with here, with where it comes from.
+    List,
+    /// One Team: where it comes from and every field it sets.
+    Show { name: String },
 }
 
 #[derive(Subcommand)]
@@ -462,6 +474,49 @@ fn profile_command(command: ProfileCommand) -> Result<()> {
     Ok(())
 }
 
+fn team_command(command: TeamCommand) -> Result<()> {
+    let (hub, state, repo) = (paths::hub_dir(), paths::state_dir(), profile_repo());
+    let entries = team::list(&hub, &state, repo.as_deref());
+    let from = |entry: &team::Entry| match entry.replaces.last() {
+        Some(below) => format!("{} (replaces {})", entry.origin.label(), below.label()),
+        None => entry.origin.label().to_string(),
+    };
+    match command {
+        TeamCommand::List => {
+            let width = entries.iter().map(|e| e.name.len()).max().unwrap_or(0);
+            for entry in &entries {
+                let runs = match (&entry.problem, &entry.team) {
+                    (Some(problem), _) => format!("cannot be used: {problem}"),
+                    (None, Some(team)) => team::summary(team),
+                    (None, None) => String::new(),
+                };
+                println!("{:width$}  {:24}  {runs}", entry.name, from(entry));
+            }
+            println!("\nYours: {}", state.join("teams").display());
+            if let Some(repo) = &repo {
+                println!("This repo's: {}", repo.join(".echo").join("teams").display());
+            }
+        }
+        TeamCommand::Show { name } => {
+            let Some(entry) = entries.iter().find(|entry| entry.name == name) else {
+                let known: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+                bail!("unknown team {name:?}; known: {}", known.join(", "));
+            };
+            println!("{}  {}\n{}", entry.name, from(entry), entry.path.display());
+            if let Some(problem) = &entry.problem {
+                println!("\nCannot be used: {problem}");
+            }
+            if let Some(team) = &entry.team {
+                if let Some(description) = &team.description {
+                    println!("\n{description}");
+                }
+                println!("\n{}", team::details(team));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `echoctl ui`: who asks, so Echo can name it and a notification can open on it.
 fn ui(command: UiCommand) -> Result<()> {
     let from = match (std::env::var("HUB_WORKER"), agent_env()) {
@@ -619,6 +674,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Worker(command) => return worker(command),
         Command::Ui(command) => ui(command)?,
         Command::Profile(command) => profile_command(command)?,
+        Command::Team(command) => team_command(command)?,
         Command::Wait { timeout, json, repo } => {
             let result = proto::call(
                 "wait",

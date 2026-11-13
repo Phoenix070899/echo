@@ -1163,6 +1163,91 @@ fn settings_take_kiro_for_the_cli_and_for_both_models() {
 }
 
 #[test]
+fn a_team_is_saved_listed_started_with_and_deleted_over_the_socket() {
+    let hub = Hub::new("teamreq");
+    hub.ok(&["sessions"]);
+    let repo = hub.repo_key();
+    let listed = hub.call("team.list", serde_json::json!({ "repo": repo }));
+    let shipped: Vec<&str> = listed["result"]["teams"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(shipped, ["claude-lean", "claude-opus", "kiro-lean"], "{listed}");
+    let saved = hub.call(
+        "team.save",
+        serde_json::json!({
+            "repo": repo, "name": "quick", "level": "user",
+            "team": {
+                "description": "fast",
+                "orchestrator": { "model": "anthropic/claude-sonnet-5-5", "effort": "medium" },
+                "rules": { "maxWorkers": 2 },
+            },
+        }),
+    );
+    assert_eq!(saved["result"]["level"], "user", "{saved}");
+    assert_eq!(
+        saved["result"]["path"],
+        hub.state.join("teams/quick.json").display().to_string()
+    );
+    assert!(hub.state.join("teams/quick.json").exists());
+    let got = hub.call("team.get", serde_json::json!({ "repo": repo, "name": "quick" }));
+    assert_eq!(got["result"]["origin"], "user", "{got}");
+    assert_eq!(got["result"]["description"], "fast");
+    assert_eq!(got["result"]["rules"]["maxWorkers"], 2);
+    assert!(got["result"]["problem"].is_null());
+    let listed = hub.call("team.list", serde_json::json!({}));
+    assert!(
+        listed["result"]["teams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "quick" && t["origin"] == "user"),
+        "{listed}"
+    );
+    let opened = hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": repo, "kind": "orchestrator", "name": "teamed", "team": "quick" }),
+    );
+    assert!(opened["error"].is_null(), "{opened}");
+    let sessions = hub.call("sessions.list", serde_json::json!({}));
+    let agents = sessions["result"]["sessions"][0]["agents"].as_array().unwrap().clone();
+    assert!(
+        agents.iter().any(|a| a["name"] == "teamed" && a["team"] == "quick"),
+        "the agent keeps its Team: {sessions}"
+    );
+    let invalid = hub.call(
+        "team.save",
+        serde_json::json!({ "name": "broken", "team": { "rules": { "maxWorkers": 0 } } }),
+    );
+    assert!(
+        invalid["error"]
+            .as_str()
+            .unwrap()
+            .contains("rules.maxWorkers is 1 to 16"),
+        "{invalid}"
+    );
+    assert!(!hub.state.join("teams/broken.json").exists());
+    let refused = hub.call(
+        "team.delete",
+        serde_json::json!({ "name": "claude-opus", "level": "shipped" }),
+    );
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("Echo's own Teams are not changed"),
+        "{refused}"
+    );
+    let deleted = hub.call("team.delete", serde_json::json!({ "name": "quick", "level": "user" }));
+    assert_eq!(deleted["result"]["name"], "quick", "{deleted}");
+    assert!(!hub.state.join("teams/quick.json").exists());
+    let gone = hub.call("team.get", serde_json::json!({ "name": "quick" }));
+    assert!(gone["error"].as_str().unwrap().contains("unknown team"), "{gone}");
+}
+
+#[test]
 fn the_orchestrators_own_model_and_effort_are_settings() {
     let hub = Hub::new("orchsettings");
     hub.ok(&["sessions"]);

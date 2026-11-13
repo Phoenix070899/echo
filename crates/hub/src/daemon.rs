@@ -308,6 +308,68 @@ fn str_param<'a>(params: &'a Value, key: &str) -> Result<&'a str> {
         .with_context(|| format!("parameter {key} must be a string"))
 }
 
+/// The checkout a request names in `repo`, if it does.
+fn repo_param(params: &Value) -> Result<Option<PathBuf>> {
+    params
+        .get("repo")
+        .and_then(Value::as_str)
+        .filter(|repo| !repo.is_empty())
+        .map(|repo| repo::root(Path::new(repo)))
+        .transpose()
+}
+
+/// One Team as `team.list`, `team.get` and `team.save` show it: where it comes from and what is
+/// wrong with it, if anything, then its fields as the file holds them (none for a file that does
+/// not parse).
+fn team_json(entry: &team::Entry) -> Value {
+    let mut out = json!({
+        "name": entry.name,
+        "origin": entry.origin.label(),
+        "path": entry.path,
+        "replaces": entry.replaces.iter().map(|origin| origin.label()).collect::<Vec<_>>(),
+        "problem": entry.problem,
+    });
+    if let Some(Value::Object(fields)) = entry.team.as_ref().and_then(|team| serde_json::to_value(team).ok()) {
+        out.as_object_mut().unwrap().extend(fields);
+    }
+    out
+}
+
+/// `team.save`: writes the Team `name` from `team` (its fields as the file holds them) at `level`,
+/// `user` (the default) or `repo`. Echo's own Teams are never written: a save at `shipped`, or over
+/// a shipped name, lands in the user level, which then replaces the shipped one.
+fn team_save(hub: &Path, state: &Path, repo: Option<&Path>, p: &Value) -> Result<Value> {
+    let origin = match p.get("level").and_then(Value::as_str).unwrap_or("user") {
+        "shipped" => team::Origin::User,
+        level => team::Origin::parse(level)?,
+    };
+    let mut team: team::Team = serde_json::from_value(param(p, "team")?.clone())
+        .map_err(|e| anyhow::anyhow!("the team's fields are not a Team: {e}"))?;
+    team.name = str_param(p, "name")?.to_string();
+    let path = team::save(
+        &team::level_dir(state, repo, origin)?,
+        &team,
+        team::default_cli(state, repo),
+    )?;
+    let entry = team::list(hub, state, repo)
+        .into_iter()
+        .find(|entry| entry.name == team.name);
+    Ok(json!({
+        "name": team.name,
+        "level": origin.label(),
+        "path": path,
+        "team": entry.as_ref().map(team_json),
+    }))
+}
+
+/// `team.delete`: removes the user or repo copy of `name`, so the level below is in force again.
+fn team_delete(state: &Path, repo: Option<&Path>, p: &Value) -> Result<Value> {
+    let origin = team::Origin::parse(str_param(p, "level")?)?;
+    let name = str_param(p, "name")?;
+    team::delete(state, repo, origin, name)?;
+    Ok(json!({ "name": name, "level": origin.label() }))
+}
+
 fn id_param(params: &Value, key: &str) -> Result<i64> {
     param(params, key)?
         .as_i64()
@@ -1540,6 +1602,25 @@ impl Hub {
                 }
                 Ok(json!({ "profiles": profiles, "broken": broken }))
             }
+            "team.list" => {
+                let repo = repo_param(p)?;
+                let entries = team::list(&self.hub_dir, &paths::state_dir(), repo.as_deref());
+                Ok(json!({ "teams": entries.iter().map(team_json).collect::<Vec<_>>() }))
+            }
+            "team.get" => {
+                let repo = repo_param(p)?;
+                let name = str_param(p, "name")?;
+                let entries = team::list(&self.hub_dir, &paths::state_dir(), repo.as_deref());
+                match entries.iter().find(|entry| entry.name == name) {
+                    Some(entry) => Ok(team_json(entry)),
+                    None => bail!(
+                        "unknown team {name:?}; known: {}",
+                        entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>().join(", ")
+                    ),
+                }
+            }
+            "team.save" => team_save(&self.hub_dir, &paths::state_dir(), repo_param(p)?.as_deref(), p),
+            "team.delete" => team_delete(&paths::state_dir(), repo_param(p)?.as_deref(), p),
             "profile.copy" | "profile.new" | "profile.reset" | "profile.set" => {
                 let repo = p
                     .get("repo")
@@ -3756,6 +3837,109 @@ mod tests {
         let normal = agent_of(db::agent_kind::CLAUDE, None, None);
         assert_eq!(pick(&state, &normal, Some(&team)), (cli::Cli::Claude, None, None));
         let _ = std::fs::remove_dir_all(&state);
+    }
+
+    fn shipped_hub(name: &str) -> PathBuf {
+        let hub = scratch(name);
+        std::fs::create_dir_all(hub.join("teams")).unwrap();
+        std::fs::write(
+            hub.join("teams/claude-opus.json"),
+            r#"{"orchestrator": {"model": "anthropic/claude-opus-5-5"}}"#,
+        )
+        .unwrap();
+        hub
+    }
+
+    #[test]
+    fn saving_over_a_shipped_name_writes_the_user_copy_and_leaves_the_shipped_file() {
+        let hub = shipped_hub("save-hub");
+        let state = scratch("save-state");
+        let shipped = std::fs::read_to_string(hub.join("teams/claude-opus.json")).unwrap();
+        let fields = json!({ "orchestrator": { "model": "anthropic/claude-sonnet-5-5" } });
+        for level in [json!("user"), json!("shipped"), Value::Null] {
+            let _ = std::fs::remove_dir_all(state.join("teams"));
+            let params = json!({ "name": "claude-opus", "team": fields, "level": level });
+            let saved = team_save(&hub, &state, None, &params).unwrap();
+            assert_eq!(saved["level"], "user", "{level}: {saved}");
+            assert_eq!(
+                saved["path"],
+                state.join("teams/claude-opus.json").display().to_string()
+            );
+            assert_eq!(saved["team"]["origin"], "user");
+            assert_eq!(saved["team"]["replaces"], json!(["shipped"]));
+            assert_eq!(saved["team"]["orchestrator"]["model"], "anthropic/claude-sonnet-5-5");
+            assert_eq!(
+                std::fs::read_to_string(hub.join("teams/claude-opus.json")).unwrap(),
+                shipped,
+                "the shipped file is untouched"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&hub);
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_save_at_the_repo_level_needs_a_repo_and_an_invalid_team_writes_nothing() {
+        let hub = shipped_hub("repo-hub");
+        let state = scratch("repo-state");
+        let repo = scratch("repo-checkout");
+        let fields = json!({ "description": "mine" });
+        let at_repo = json!({ "name": "mine", "team": fields, "level": "repo" });
+        let refused = team_save(&hub, &state, None, &at_repo).unwrap_err().to_string();
+        assert!(refused.contains("needs a git checkout"), "{refused}");
+        let saved = team_save(&hub, &state, Some(&repo), &at_repo).unwrap();
+        assert_eq!(saved["level"], "repo");
+        assert!(repo.join(".echo/teams/mine.json").exists());
+        assert_eq!(saved["team"]["origin"], "repo");
+        let bad = json!({ "name": "bad", "team": { "rules": { "maxWorkers": 0 } } });
+        let refused = team_save(&hub, &state, None, &bad).unwrap_err().to_string();
+        assert!(refused.contains("rules.maxWorkers is 1 to 16"), "{refused}");
+        let bad_name = json!({ "name": "Not A Name", "team": {} });
+        assert!(team_save(&hub, &state, None, &bad_name).is_err());
+        assert!(!state.join("teams").exists(), "nothing was written");
+        let not_a_team = json!({ "name": "x", "team": { "rules": "strict" } });
+        let refused = team_save(&hub, &state, None, &not_a_team).unwrap_err().to_string();
+        assert!(refused.contains("not a Team"), "{refused}");
+        for dir in [&hub, &state, &repo] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn a_delete_removes_only_a_user_or_repo_copy() {
+        let hub = shipped_hub("delete-hub");
+        let state = scratch("delete-state");
+        let repo = scratch("delete-repo");
+        let save = |name: &str, level: &str, at: Option<&Path>| {
+            team_save(&hub, &state, at, &json!({ "name": name, "team": {}, "level": level })).unwrap();
+        };
+        let delete = |name: &str, level: &str, at: Option<&Path>| {
+            team_delete(&state, at, &json!({ "name": name, "level": level })).map_err(|e| e.to_string())
+        };
+        let refused = delete("claude-opus", "shipped", None).unwrap_err();
+        assert!(refused.contains("Echo's own Teams are not changed"), "{refused}");
+        assert!(hub.join("teams/claude-opus.json").exists());
+        let refused = delete("claude-opus", "user", None).unwrap_err();
+        assert!(refused.contains("has no user copy to delete"), "{refused}");
+        let refused = delete("mine", "repo", None).unwrap_err();
+        assert!(refused.contains("needs a git checkout"), "{refused}");
+        let refused = delete("mine", "team", None).unwrap_err();
+        assert!(refused.contains("a Team level is user or repo"), "{refused}");
+        let refused = delete("../x", "user", None).unwrap_err();
+        assert!(refused.contains("is not a Team name"), "{refused}");
+        let refused = team_delete(&state, None, &json!({ "name": "mine" }))
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("missing parameter level"), "{refused}");
+        save("mine", "user", None);
+        save("mine", "repo", Some(&repo));
+        assert_eq!(delete("mine", "repo", Some(&repo)).unwrap()["level"], "repo");
+        assert!(state.join("teams/mine.json").exists(), "the user copy stays");
+        assert_eq!(delete("mine", "user", Some(&repo)).unwrap()["name"], "mine");
+        assert!(team::list(&hub, &state, Some(&repo)).iter().all(|e| e.name != "mine"));
+        for dir in [&hub, &state, &repo] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     #[test]
