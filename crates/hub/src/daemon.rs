@@ -126,7 +126,7 @@ impl Usage {
         match outcome {
             kiro_usage::Outcome::Reading(entry) => self.kiro = Some(entry),
             kiro_usage::Outcome::Absent => self.kiro = None,
-            kiro_usage::Outcome::Failed(_) => {
+            kiro_usage::Outcome::Failed(_) | kiro_usage::Outcome::Skipped(_) => {
                 self.kiro_refreshed = Instant::now().checked_sub(USAGE_EVERY - USAGE_RETRY);
             }
         }
@@ -2962,13 +2962,13 @@ impl Hub {
         }
         let hub = Arc::clone(self);
         std::thread::spawn(move || {
-            let home = kiro_usage::scratch_home();
+            let parent = paths::state_dir();
             let mut outcome = kiro_usage::Outcome::Failed("not tried".into());
             for attempt in 0..USAGE_ATTEMPTS {
                 if attempt > 0 {
                     std::thread::sleep(Duration::from_secs(3));
                 }
-                outcome = kiro_usage::read(&program, home.as_deref());
+                outcome = kiro_usage::read(&program, &parent);
                 if !matches!(outcome, kiro_usage::Outcome::Failed(_)) {
                     break;
                 }
@@ -3614,6 +3614,21 @@ mod tests {
         let newer = json!({ "name": "Kiro credits", "percent": 31, "resets": "Dec 1", "detail": "620 of 2000" });
         usage.finish_kiro(Outcome::Reading(newer.clone()));
         assert_eq!(usage.view()["limits"], json!([session, newer]));
+
+        usage.kiro_refreshed = Some(Instant::now());
+        usage.finish_kiro(Outcome::Skipped("no scratch home".into()));
+        assert_eq!(
+            usage.view()["limits"],
+            json!([session, newer]),
+            "a skipped read keeps the last value"
+        );
+        assert!(usage.view()["error"].is_null());
+        assert!(
+            usage
+                .kiro_refreshed
+                .is_none_or(|at| at.elapsed() >= USAGE_EVERY - USAGE_RETRY),
+            "and the next try comes sooner than usual"
+        );
 
         usage.kiro_refreshed = Some(Instant::now());
         usage.finish_kiro(Outcome::Absent);

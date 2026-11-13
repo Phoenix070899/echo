@@ -11,8 +11,6 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
-use crate::paths;
-
 /// The name of the limit entry in the `usage` reply.
 pub const NAME: &str = "Kiro credits";
 
@@ -32,21 +30,37 @@ pub enum Outcome {
     Absent,
     /// Anything else: the last good reading stands. The text says why, for a person debugging.
     Failed(String),
+    /// The scratch `KIRO_HOME` could not be made, so no child was run: the last good reading stands.
+    /// It never falls back to the human's own Kiro home (decisions/features/0078).
+    Skipped(String),
 }
 
 /// A folder for the child's `KIRO_HOME`, so its log folders do not push the human's own out of
 /// `~/.kiro/logs` (Kiro keeps about the newest eleven). The login does not live there.
-pub fn scratch_home() -> Option<PathBuf> {
-    let home = paths::state_dir().join("kiro-home");
-    std::fs::create_dir_all(&home).ok().map(|_| home)
+pub fn scratch_home(parent: &Path) -> std::io::Result<PathBuf> {
+    let home = parent.join("kiro-home");
+    std::fs::create_dir_all(&home).map(|_| home)
 }
 
-/// Reads the credits with `program` (`kiro-cli`), if it is installed and signed in.
-pub fn read(program: &str, home: Option<&Path>) -> Outcome {
+/// Reads the credits with `program` (`kiro-cli`), if it is installed and signed in, in a scratch
+/// `KIRO_HOME` under `parent`. When that folder cannot be made, nothing is run: one line goes to
+/// stderr and the outcome is `Skipped`.
+pub fn read(program: &str, parent: &Path) -> Outcome {
+    match scratch_home(parent) {
+        Ok(home) => read_in(program, &home),
+        Err(error) => {
+            let why = format!("no scratch KIRO_HOME under {}: {error}", parent.display());
+            eprintln!("echo: Kiro credits not read, {why}");
+            Outcome::Skipped(why)
+        }
+    }
+}
+
+fn read_in(program: &str, home: &Path) -> Outcome {
     read_within(program, home, CALL_LIMIT)
 }
 
-fn read_within(program: &str, home: Option<&Path>, limit: Duration) -> Outcome {
+fn read_within(program: &str, home: &Path, limit: Duration) -> Outcome {
     match signed_in(program, home) {
         Ok(true) => {}
         Ok(false) => return Outcome::Absent,
@@ -58,17 +72,15 @@ fn read_within(program: &str, home: Option<&Path>, limit: Duration) -> Outcome {
     }
 }
 
-fn kiro_command(program: &str, home: Option<&Path>) -> Command {
+fn kiro_command(program: &str, home: &Path) -> Command {
     let mut command = Command::new(program);
-    if let Some(home) = home {
-        command.env("KIRO_HOME", home);
-    }
+    command.env("KIRO_HOME", home);
     command
 }
 
 /// `kiro-cli whoami` exits 0 when signed in and 1 when not; a program that is not there is
 /// "not signed in". Only the exit status is read: the output holds an email.
-fn signed_in(program: &str, home: Option<&Path>) -> Result<bool> {
+fn signed_in(program: &str, home: &Path) -> Result<bool> {
     let mut command = kiro_command(program, home);
     command
         .arg("whoami")
@@ -96,7 +108,7 @@ fn signed_in(program: &str, home: Option<&Path>) -> Result<bool> {
 }
 
 /// Spawns `kiro-cli acp`, asks for the usage, and never leaves the child running.
-fn ask(program: &str, home: Option<&Path>, limit: Duration) -> Result<Value> {
+fn ask(program: &str, home: &Path, limit: Duration) -> Result<Value> {
     let mut command = kiro_command(program, home);
     command
         .args(["acp", "--agent-engine", "v3", "--auth-method", "cli"])
@@ -216,8 +228,7 @@ fn credits(message: &Value) -> Result<Value> {
     };
     Ok(json!({
         "name": NAME,
-        // Floored, as Kiro's own `percentage` is (30 for 30.18), so 99.6 does not read as spent.
-        "percent": (used / cap * 100.0).floor() as i64,
+        "percent": (used * 100.0 / cap).round() as i64,
         "resets": data["billingCycleReset"].as_str().and_then(reset_text),
         "detail": format!("{} of {}", number(used), number(cap)),
     }))
@@ -326,16 +337,27 @@ mod tests {
     }
 
     #[test]
-    fn the_percent_is_floored() {
+    fn the_percent_is_rounded_to_the_nearest_whole_number() {
         let reading = |used: f64| {
             let line = format!(
                 r#"{{"result":{{"success":true,"data":{{"usageBreakdowns":[{{"resourceType":"CREDIT","used":{used},"limit":2000}}]}}}}}}"#
             );
             parsed(&line).unwrap()["percent"].as_i64().unwrap()
         };
-        assert_eq!(reading(1999.0), 99);
-        assert_eq!(reading(2000.0), 100);
-        assert_eq!(reading(0.0), 0);
+        for (used, percent) in [
+            (0.0, 0),
+            (9.0, 0),
+            (10.0, 1),
+            (580.0, 29),
+            (603.62, 30),
+            (340.98, 17),
+            (1989.0, 99),
+            (1990.0, 100),
+            (1999.0, 100),
+            (2000.0, 100),
+        ] {
+            assert_eq!(reading(used), percent, "{used} of 2000");
+        }
     }
 
     // The tests below run tests/fake-kiro-cli.sh, whose mode is the first line of `<home>/mode`.
@@ -358,11 +380,30 @@ mod tests {
     }
 
     #[test]
+    fn a_scratch_home_that_cannot_be_made_runs_no_child_and_is_not_the_humans_home() {
+        // The parent is a file, so `<parent>/kiro-home` cannot be created.
+        let parent = home("blocked", "ok").join("file");
+        std::fs::write(&parent, "x").unwrap();
+        // Without a KIRO_HOME the fake would answer `ok` (the child would run in the human's home).
+        let outcome = read(&fake(), &parent);
+        assert!(matches!(outcome, Outcome::Skipped(_)), "{outcome:?}");
+        let _ = std::fs::remove_dir_all(parent.parent().unwrap());
+    }
+
+    #[test]
+    fn the_scratch_home_is_made_under_the_parent() {
+        let parent = home("scratch", "ok");
+        assert_eq!(scratch_home(&parent).unwrap(), parent.join("kiro-home"));
+        assert!(parent.join("kiro-home").is_dir());
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
     fn the_fake_kiro_cli_gives_the_recorded_reading_and_leaves_nothing_running() {
         let home = home("ok", "ok");
         // The fake answers with a notification and another id first; both are skipped.
         assert_eq!(
-            read(&fake(), Some(&home)),
+            read_in(&fake(), &home),
             Outcome::Reading(
                 json!({ "name": "Kiro credits", "percent": 30, "resets": "Dec 1", "detail": "603.62 of 2000" })
             )
@@ -374,9 +415,9 @@ mod tests {
     #[test]
     fn a_signed_out_or_missing_kiro_cli_is_absent_not_failed() {
         let home = home("out", "signedout");
-        assert_eq!(read(&fake(), Some(&home)), Outcome::Absent);
+        assert_eq!(read_in(&fake(), &home), Outcome::Absent);
         assert!(!home.join("pid").exists(), "acp was never started");
-        assert_eq!(read("/tmp/hubku-no-such-kiro-cli", Some(&home)), Outcome::Absent);
+        assert_eq!(read_in("/tmp/hubku-no-such-kiro-cli", &home), Outcome::Absent);
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -384,7 +425,7 @@ mod tests {
     fn a_failed_reply_and_an_admin_plan_are_failures() {
         for mode in ["fail", "admin"] {
             let home = home(mode, mode);
-            assert!(matches!(read(&fake(), Some(&home)), Outcome::Failed(_)), "{mode}");
+            assert!(matches!(read_in(&fake(), &home), Outcome::Failed(_)), "{mode}");
             assert!(!alive(&home.join("pid")), "{mode}: the child is gone");
             let _ = std::fs::remove_dir_all(&home);
         }
@@ -394,7 +435,7 @@ mod tests {
     fn a_child_that_never_answers_is_killed_with_its_group_at_the_limit() {
         let home = home("hang", "hang");
         let started = Instant::now();
-        let outcome = read_within(&fake(), Some(&home), Duration::from_secs(1));
+        let outcome = read_within(&fake(), &home, Duration::from_secs(1));
         assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
         assert!(started.elapsed() < Duration::from_secs(10));
         let deadline = Instant::now() + Duration::from_secs(5);
