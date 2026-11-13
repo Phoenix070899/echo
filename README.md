@@ -77,7 +77,9 @@ With `{"cli": "kiro", "model": "claude-sonnet-5.5"}` in `settings.json`, also se
 Echo gives a Kiro agent its prompt, folders and hooks through a generated agent file, `~/.kiro/agents/echo-<hash>.md`; the name comes from the file's content, and the files are small and safe to delete.
 A Kiro Worker's allow and deny rules sit in that file; a Kiro Orchestrator may run `echoctl` commands without asking and is asked about everything else.
 Kiro Orchestrators wait for their Workers with a foreground `echoctl wait` they run again, since Kiro has no background command to wake them.
-For now Kiro has no chat tab, no usage bar, no stats and no Orchestrator renewal by context size; they show as unsupported or not counted.
+While `kiro-cli` is installed and signed in, the daemon's `usage` reply adds a "Kiro credits" entry beside Claude's limits (credits used of the plan, percent, billing-cycle reset), read every five minutes from a short-lived `kiro-cli acp` run that starts no session and spends nothing.
+It runs with its own `KIRO_HOME` under the state folder, so `~/.kiro/logs` is left alone; when a reading fails the last good one stays, and nothing shows when Kiro is missing or signed out.
+Kiro has no stats and no Orchestrator renewal by context size; they show as not counted.
 
 A repo's `.echo/settings.json` can also prepare new worktrees: `"copy": [".env"]` copies files git ignores from the main checkout, and `"setup": "pnpm install"` runs before the agent starts.
 

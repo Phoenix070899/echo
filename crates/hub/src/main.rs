@@ -8,6 +8,7 @@ mod daemon;
 mod db;
 mod holder;
 mod kiro_chat;
+mod kiro_usage;
 mod launch;
 mod lessons;
 mod paths;

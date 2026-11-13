@@ -1873,6 +1873,88 @@ fn account_usage_comes_from_claude_usage() {
     assert_eq!(usage["result"]["limits"][2]["name"], "Week (Fable)");
 }
 
+/// A daemon whose Kiro credits come from tests/fake-kiro-cli.sh. The fake's mode is the first line
+/// of `<state>/kiro-home/mode`, the scratch `KIRO_HOME` the daemon gives the child, so a test can
+/// change it between reads.
+fn hub_with_fake_kiro(name: &str, mode: &str) -> Hub {
+    let hub = Hub::new(name);
+    hub.set_kiro_mode(mode);
+    let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake-kiro-cli.sh");
+    assert!(hub
+        .run_with(&["status"], &[("HUB_TEST_KIRO", fake.to_str().unwrap())])
+        .status
+        .success());
+    hub
+}
+
+impl Hub {
+    fn set_kiro_mode(&self, mode: &str) {
+        let home = self.state.join("kiro-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("mode"), mode).unwrap();
+    }
+
+    fn kiro_reads(&self) -> usize {
+        std::fs::read_to_string(self.state.join("kiro-home/calls")).map_or(0, |calls| calls.lines().count())
+    }
+
+    fn usage_limits(&self) -> Vec<serde_json::Value> {
+        let usage = self.call("usage", serde_json::json!({}));
+        usage["result"]["limits"].as_array().cloned().unwrap_or_default()
+    }
+}
+
+#[test]
+fn the_usage_reply_carries_kiros_credits_after_claudes_limits() {
+    let hub = hub_with_fake_kiro("kiro-ok", "ok");
+    hub.call("usage.refresh", serde_json::json!({}));
+    hub.eventually("Claude's limits and Kiro's credits to load", || {
+        hub.usage_limits().len() == 4
+    });
+    let limits = hub.usage_limits();
+    assert_eq!(limits[0]["name"], "Session");
+    assert_eq!(limits[0]["percent"], 48);
+    assert_eq!(limits[2]["name"], "Week (Fable)");
+    assert_eq!(
+        limits[3],
+        serde_json::json!({ "name": "Kiro credits", "percent": 30, "resets": "Dec 1", "detail": "603.62 of 2000" })
+    );
+    let usage = hub.call("usage", serde_json::json!({}));
+    assert!(usage["result"]["error"].is_null());
+    assert!(
+        usage["result"]["updatedAt"].is_number(),
+        "Claude's own fields are as before"
+    );
+}
+
+#[test]
+fn a_failed_kiro_read_keeps_the_last_good_credits_and_claudes_limits() {
+    let hub = hub_with_fake_kiro("kiro-keep", "ok");
+    hub.call("usage.refresh", serde_json::json!({}));
+    hub.eventually("Kiro's credits to load", || hub.usage_limits().len() == 4);
+    let good = hub.usage_limits();
+
+    hub.set_kiro_mode("fail");
+    let reads = hub.kiro_reads();
+    hub.call("usage.refresh", serde_json::json!({}));
+    // A failed read is tried three times, three seconds apart.
+    hub.eventually("the failing reads to run", || hub.kiro_reads() >= reads + 3);
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(hub.usage_limits(), good);
+    assert!(hub.call("usage", serde_json::json!({}))["result"]["error"].is_null());
+}
+
+#[test]
+fn a_kiro_cli_that_is_signed_out_adds_nothing_and_sets_no_error() {
+    let hub = hub_with_fake_kiro("kiro-out", "signedout");
+    hub.call("usage.refresh", serde_json::json!({}));
+    hub.eventually("Claude's limits to load", || hub.usage_limits().len() == 3);
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(hub.usage_limits().len(), 3);
+    assert!(hub.call("usage", serde_json::json!({}))["result"]["error"].is_null());
+    assert_eq!(hub.kiro_reads(), 0, "no acp child was started");
+}
+
 #[test]
 fn a_usage_read_that_prints_no_limits_is_retried() {
     let hub = Hub::new("flaky");

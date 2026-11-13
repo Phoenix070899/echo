@@ -20,6 +20,7 @@ use crate::cli;
 use crate::db::{self, kind, state, Worker};
 use crate::holder;
 use crate::kiro_chat;
+use crate::kiro_usage;
 use crate::launch;
 use crate::lessons;
 use crate::paths;
@@ -75,6 +76,8 @@ pub struct Hub {
     hub_dir: PathBuf,
     /// Tests only: run this program with the spec instead of `claude`.
     test_agent: Option<String>,
+    /// What reads Kiro's credits for the usage bar; none in a test daemon unless `HUB_TEST_KIRO` names one.
+    kiro_usage: Option<String>,
     /// Echo Remote, the phone web app (ADR 0008).
     remote: Remote,
     /// What agents asked Echo to show with `echoctl ui`, newest last; each stays `UI_KEEP` seconds.
@@ -94,7 +97,7 @@ const USAGE_RETRY: Duration = Duration::from_secs(60);
 /// this many times per refresh.
 const USAGE_ATTEMPTS: usize = 3;
 
-/// The Claude account's plan limits, as `claude -p /usage` prints them.
+/// The Claude account's plan limits, as `claude -p /usage` prints them, and after them Kiro's credits.
 #[derive(Default)]
 struct Usage {
     limits: Vec<Value>,
@@ -102,11 +105,41 @@ struct Usage {
     error: Option<String>,
     refreshing: bool,
     refreshed: Option<Instant>,
+    /// Kiro's credits as a limit entry (features/0078): read on their own thread and cadence, so
+    /// Claude's refresh and `error` never wait for or show anything of them.
+    kiro: Option<Value>,
+    kiro_refreshing: bool,
+    kiro_refreshed: Option<Instant>,
 }
 
 impl Usage {
     fn view(&self) -> Value {
-        json!({ "limits": self.limits, "updatedAt": self.updated_at, "error": self.error, "refreshing": self.refreshing })
+        let mut limits = self.limits.clone();
+        limits.extend(self.kiro.clone());
+        json!({ "limits": limits, "updatedAt": self.updated_at, "error": self.error, "refreshing": self.refreshing })
+    }
+
+    /// A reading replaces the last one; no `kiro-cli`, or no login, clears it; a failure keeps it
+    /// and brings the next try forward, as for Claude's.
+    fn finish_kiro(&mut self, outcome: kiro_usage::Outcome) {
+        self.kiro_refreshing = false;
+        match outcome {
+            kiro_usage::Outcome::Reading(entry) => self.kiro = Some(entry),
+            kiro_usage::Outcome::Absent => self.kiro = None,
+            kiro_usage::Outcome::Failed(_) => {
+                self.kiro_refreshed = Instant::now().checked_sub(USAGE_EVERY - USAGE_RETRY);
+            }
+        }
+    }
+}
+
+/// The program that reads Kiro's credits: `kiro-cli`, or what `HUB_TEST_KIRO` names. A daemon
+/// under `HUB_TEST_AGENT` reads none without it, so tests never run a real Kiro.
+fn kiro_usage_program(test_agent: Option<&str>) -> Option<String> {
+    match std::env::var("HUB_TEST_KIRO") {
+        Ok(program) if !program.is_empty() => Some(program),
+        _ if test_agent.is_some() => None,
+        _ => Some("kiro-cli".into()),
     }
 }
 
@@ -194,6 +227,7 @@ pub fn run() -> Result<()> {
         usage: Mutex::new(Usage::default()),
         hub_dir: paths::hub_dir(),
         test_agent: std::env::var("HUB_TEST_AGENT").ok(),
+        kiro_usage: kiro_usage_program(std::env::var("HUB_TEST_AGENT").ok().as_deref()),
         remote: Remote::load(),
         ui: Mutex::new(Vec::new()),
         watchers: Mutex::new(HashMap::new()),
@@ -1326,6 +1360,7 @@ impl Hub {
             "shell.env" => Ok(json!(shell_env())),
             "usage.refresh" => {
                 self.refresh_usage();
+                self.refresh_kiro_usage();
                 Ok(json!({}))
             }
             "usage" => Ok(self.usage.lock().unwrap().view()),
@@ -2911,6 +2946,38 @@ impl Hub {
         });
     }
 
+    /// Reads Kiro's credits on a thread of their own, on the same cadence and retry rules as Claude's.
+    /// Nothing happens when there is no `kiro-cli` to ask.
+    fn refresh_kiro_usage(self: &Arc<Self>) {
+        let Some(program) = self.kiro_usage.clone() else {
+            return;
+        };
+        {
+            let mut usage = self.usage.lock().unwrap();
+            if usage.kiro_refreshing {
+                return;
+            }
+            usage.kiro_refreshing = true;
+            usage.kiro_refreshed = Some(Instant::now());
+        }
+        let hub = Arc::clone(self);
+        std::thread::spawn(move || {
+            let home = kiro_usage::scratch_home();
+            let mut outcome = kiro_usage::Outcome::Failed("not tried".into());
+            for attempt in 0..USAGE_ATTEMPTS {
+                if attempt > 0 {
+                    std::thread::sleep(Duration::from_secs(3));
+                }
+                outcome = kiro_usage::read(&program, home.as_deref());
+                if !matches!(outcome, kiro_usage::Outcome::Failed(_)) {
+                    break;
+                }
+            }
+            hub.usage.lock().unwrap().finish_kiro(outcome);
+            hub.notify();
+        });
+    }
+
     /// Streams a snapshot line now, after every change, and every 5 seconds, until the client leaves.
     fn events(self: &Arc<Self>, p: &Value, mut stream: UnixStream) -> Result<()> {
         let repo = match str_param(p, "repo").and_then(|repo| repo::root(Path::new(repo))) {
@@ -2922,14 +2989,18 @@ impl Hub {
         let _watching = Watching { hub: self, repo: &repo };
         let mut last = None;
         loop {
-            let stale = self
-                .usage
-                .lock()
-                .unwrap()
-                .refreshed
-                .is_none_or(|at| at.elapsed() >= USAGE_EVERY);
+            let (stale, kiro_stale) = {
+                let usage = self.usage.lock().unwrap();
+                (
+                    usage.refreshed.is_none_or(|at| at.elapsed() >= USAGE_EVERY),
+                    usage.kiro_refreshed.is_none_or(|at| at.elapsed() >= USAGE_EVERY),
+                )
+            };
             if stale {
                 self.refresh_usage();
+            }
+            if kiro_stale {
+                self.refresh_kiro_usage();
             }
             let seen = *self.tick.lock().unwrap();
             let snapshot = self.snapshot(&repo)?;
@@ -3449,6 +3520,54 @@ mod tests {
             limits[2],
             json!({ "name": "Week (Fable)", "percent": 0, "resets": null })
         );
+    }
+
+    #[test]
+    fn kiro_credits_follow_claudes_limits_and_a_failed_read_keeps_the_last_good_one() {
+        use kiro_usage::Outcome;
+        let entry = json!({ "name": "Kiro credits", "percent": 30, "resets": "Dec 1", "detail": "603.62 of 2000" });
+        let session = json!({ "name": "Session", "percent": 48, "resets": "Oct 17 at 4:50pm" });
+        let mut usage = Usage {
+            limits: vec![session.clone()],
+            kiro_refreshing: true,
+            ..Usage::default()
+        };
+        assert_eq!(usage.view()["limits"], json!([session]), "none read yet");
+
+        usage.finish_kiro(Outcome::Reading(entry.clone()));
+        assert!(!usage.kiro_refreshing);
+        assert_eq!(usage.view()["limits"], json!([session, entry]));
+
+        usage.kiro_refreshed = Some(Instant::now());
+        usage.finish_kiro(Outcome::Failed("no network".into()));
+        let view = usage.view();
+        assert_eq!(view["limits"], json!([session, entry]), "the last good reading stays");
+        assert!(view["error"].is_null(), "Claude's error is not touched");
+        assert!(
+            usage
+                .kiro_refreshed
+                .is_none_or(|at| at.elapsed() >= USAGE_EVERY - USAGE_RETRY),
+            "the next try comes sooner than usual"
+        );
+
+        let newer = json!({ "name": "Kiro credits", "percent": 31, "resets": "Dec 1", "detail": "620 of 2000" });
+        usage.finish_kiro(Outcome::Reading(newer.clone()));
+        assert_eq!(usage.view()["limits"], json!([session, newer]));
+
+        usage.kiro_refreshed = Some(Instant::now());
+        usage.finish_kiro(Outcome::Absent);
+        assert_eq!(usage.view()["limits"], json!([session]), "signed out: nothing shown");
+        assert!(
+            usage.kiro_refreshed.is_some_and(|at| at.elapsed() < USAGE_RETRY),
+            "being signed out is waited on for the whole cadence"
+        );
+    }
+
+    #[test]
+    fn a_test_daemon_reads_no_kiro_credits_unless_a_stand_in_is_named() {
+        // HUB_TEST_KIRO is not set in this test process.
+        assert_eq!(kiro_usage_program(None).as_deref(), Some("kiro-cli"));
+        assert_eq!(kiro_usage_program(Some("tests/fake-agent.sh")), None);
     }
 
     #[test]
