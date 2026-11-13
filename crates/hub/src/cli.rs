@@ -139,13 +139,13 @@ impl Cli {
         match self {
             Cli::Claude => claude(hub, start),
             Cli::Codex => codex(start),
-            Cli::Kiro => kiro(&kiro_home(), start),
+            Cli::Kiro => kiro(&kiro_home(), &with_kiro_notes(hub, start)?),
         }
     }
 }
 
 /// What an agent starts with, whatever its CLI.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Start {
     /// The session's title in the CLI's own session list.
     pub title: String,
@@ -343,6 +343,44 @@ fn kiro_session_exists(home: &Path, session_id: &str) -> bool {
 fn fnv1a(text: &str) -> u64 {
     text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// The part of `kiro-notes.md` under the `## <title>` heading, up to the next `## ` heading.
+fn notes_section<'a>(notes: &'a str, title: &str) -> Option<&'a str> {
+    let heading = format!("## {title}");
+    let mut offset = 0;
+    let mut start = None;
+    for line in notes.split_inclusive('\n') {
+        let text = line.trim_end();
+        match start {
+            None if text == heading => start = Some(offset + line.len()),
+            Some(from) if text.starts_with("## ") => return Some(notes[from..offset].trim()),
+            _ => {}
+        }
+        offset += line.len();
+    }
+    start.map(|from| notes[from..].trim())
+}
+
+/// `start` with the Kiro notes for its role added to its prompt. The prompt is the body of the
+/// agent file, so the file's name (a hash of its content) covers the notes: a change to
+/// `kiro-notes.md` starts the next agent on a new file and leaves the running ones' alone. A Normal
+/// session has no prompt of Echo's, so it gets no notes.
+fn with_kiro_notes(hub: &Path, start: &Start) -> Result<Start> {
+    let title = match (start.worker, start.prompt.is_empty()) {
+        (true, _) => "Worker",
+        (false, false) => "Orchestrator",
+        (false, true) => return Ok(start.clone()),
+    };
+    let path = hub.join("kiro-notes.md");
+    let notes = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let Some(section) = notes_section(&notes, title).filter(|section| !section.is_empty()) else {
+        bail!("{} has no \"## {title}\" section", path.display());
+    };
+    Ok(Start {
+        prompt: format!("{}\n\n# Running on Kiro\n\n{section}", start.prompt.trim_end()),
+        ..start.clone()
     })
 }
 
@@ -570,6 +608,22 @@ impl Choice {
             model: field("model"),
         })
     }
+}
+
+/// The CLI an agent that is already running was started with, to read its screen after a daemon
+/// restart. It looks at the same levels as `pick` but not at the model: a model that no longer
+/// fits, or a `settings.json` that cannot be read, must not turn a Kiro agent into a Claude one,
+/// whose reader would not know its prompts. Only a CLI no level names, or one Echo no longer
+/// knows, is claude.
+pub fn recovered(state: &Path, repo: Option<&Path>, levels: &[&Choice]) -> Cli {
+    let read = |dir: &Path| Choice::read(dir).ok().and_then(|choice| choice.cli);
+    let name = levels
+        .iter()
+        .rev()
+        .find_map(|choice| choice.cli.clone())
+        .or_else(|| repo.and_then(|repo| read(&repo.join(".echo"))))
+        .or_else(|| read(state));
+    name.and_then(|name| Cli::parse(&name).ok()).unwrap_or(Cli::Claude)
 }
 
 /// The CLI and model an agent runs with: the choice made at its start, else its Profile's, else
@@ -1099,5 +1153,180 @@ mod tests {
         assert!(Cli::Kiro.prompt_lines(permission).contains("shell → touch y"));
         assert!(Cli::Kiro.turn_ended(done));
         assert_eq!(Cli::Kiro.trust_keys(), &[b"\r".as_slice()]);
+    }
+
+    fn hub_with_notes(name: &str, notes: &str) -> PathBuf {
+        let hub = scratch(name);
+        std::fs::write(hub.join("kiro-notes.md"), notes).unwrap();
+        hub
+    }
+
+    const NOTES: &str = "# Notes\n\nintro\n\n## Orchestrator\nwait in the foreground\n\n### Keys\ndown enter\n\n## Worker\nset the timeout\n";
+
+    #[test]
+    fn a_notes_section_runs_to_the_next_top_heading() {
+        assert_eq!(
+            notes_section(NOTES, "Orchestrator"),
+            Some("wait in the foreground\n\n### Keys\ndown enter")
+        );
+        assert_eq!(notes_section(NOTES, "Worker"), Some("set the timeout"));
+        assert_eq!(notes_section(NOTES, "Normal"), None);
+        assert_eq!(notes_section("## Worker \nx", "Worker"), Some("x"));
+    }
+
+    #[test]
+    fn a_kiro_worker_prompt_ends_with_the_worker_notes_and_an_orchestrator_prompt_with_its_own() {
+        let hub = hub_with_notes("notes-roles", NOTES);
+        let worker = with_kiro_notes(&hub, &kiro_worker()).unwrap();
+        assert_eq!(
+            worker.prompt,
+            "Contract: report with \"echoctl done\"\nthen stop\n\n# Running on Kiro\n\nset the timeout"
+        );
+        let orchestrator = Start {
+            prompt: "You are the Orchestrator.\n".into(),
+            ..Start::default()
+        };
+        let orchestrator = with_kiro_notes(&hub, &orchestrator).unwrap();
+        assert_eq!(
+            orchestrator.prompt,
+            "You are the Orchestrator.\n\n# Running on Kiro\n\nwait in the foreground\n\n### Keys\ndown enter"
+        );
+        assert!(!orchestrator.prompt.contains("set the timeout") && !worker.prompt.contains("foreground"));
+        let session = with_kiro_notes(&hub, &Start::default()).unwrap();
+        assert!(session.prompt.is_empty(), "a Normal session gets no notes");
+    }
+
+    #[test]
+    fn the_notes_are_in_the_agent_file_and_its_name() {
+        let hub = hub_with_notes("notes-file", NOTES);
+        let home = scratch("notes-home");
+        let args = kiro(&home, &with_kiro_notes(&hub, &kiro_worker()).unwrap()).unwrap();
+        assert!(
+            agent_file(&home, &args).ends_with("then stop\n\n# Running on Kiro\n\nset the timeout\n"),
+            "{}",
+            agent_file(&home, &args)
+        );
+        let plain = kiro(&home, &kiro_worker()).unwrap();
+        assert_ne!(args[3], plain[3], "the notes are part of what the name hashes");
+        std::fs::write(
+            hub.join("kiro-notes.md"),
+            NOTES.replace("set the timeout", "set it higher"),
+        )
+        .unwrap();
+        let changed = kiro(&home, &with_kiro_notes(&hub, &kiro_worker()).unwrap()).unwrap();
+        assert_ne!(args[3], changed[3]);
+    }
+
+    #[test]
+    fn claude_and_codex_prompts_do_not_carry_the_kiro_notes() {
+        let hub = hub_with_notes("notes-others", NOTES);
+        let worker = Start {
+            model: None,
+            ..kiro_worker()
+        };
+        let claude = Cli::Claude.args(&hub, &worker).unwrap();
+        assert!(claude.contains(&"Contract: report with \"echoctl done\"\nthen stop".to_string()));
+        let codex = Cli::Codex.args(&hub, &worker).unwrap().join(" ");
+        assert!(!codex.contains("Running on Kiro") && !claude.join(" ").contains("Running on Kiro"));
+    }
+
+    #[test]
+    fn a_kiro_start_without_its_notes_fails_before_anything_is_written() {
+        let missing = scratch("notes-missing");
+        let err = with_kiro_notes(&missing, &kiro_worker()).unwrap_err().to_string();
+        assert!(err.contains("kiro-notes.md"), "{err}");
+        let hub = hub_with_notes("notes-no-worker", "## Orchestrator\nx\n");
+        let err = with_kiro_notes(&hub, &kiro_worker()).unwrap_err().to_string();
+        assert!(err.contains("## Worker"), "{err}");
+        assert!(
+            with_kiro_notes(&hub, &Start::default()).is_ok(),
+            "a Normal session needs no notes"
+        );
+    }
+
+    #[test]
+    fn the_shipped_notes_tell_each_role_how_to_wait_and_to_deny() {
+        let notes = std::fs::read_to_string(paths::hub_dir().join("kiro-notes.md")).unwrap();
+        let orchestrator = notes_section(&notes, "Orchestrator").unwrap();
+        let worker = notes_section(&notes, "Worker").unwrap();
+        assert!(orchestrator.contains("command: echoctl wait --timeout 170\n  timeout: 200000"));
+        assert!(orchestrator.contains("echoctl worker key <w> down enter"));
+        assert!(worker.contains("command: echoctl ask \"<question>\"\ntimeout: 600000"));
+        assert!(!worker.contains("echoctl wait"), "Workers do not wait");
+    }
+
+    #[test]
+    fn a_recovered_agent_comes_back_as_the_cli_it_was_stored_with() {
+        let state = scratch("recover-state");
+        let repo = scratch("recover-repo");
+        let stored = |name: &str| Choice {
+            cli: Some(name.into()),
+            model: None,
+        };
+        assert_eq!(recovered(&state, Some(&repo), &[&stored("kiro")]), Cli::Kiro);
+        assert_eq!(recovered(&state, Some(&repo), &[&stored("codex")]), Cli::Codex);
+        // A model that Kiro refuses made `pick` fail, and the agent read as claude.
+        let odd = Choice {
+            cli: Some("kiro".into()),
+            model: Some("anthropic/claude-opus-5-5".into()),
+        };
+        assert!(pick(&state, Some(&repo), &[&odd]).is_err());
+        assert_eq!(recovered(&state, Some(&repo), &[&odd]), Cli::Kiro);
+        // The stored level wins over the files, and an unreadable file does not hide it.
+        std::fs::write(state.join("settings.json"), r#"{"cli": "codex"}"#).unwrap();
+        assert_eq!(recovered(&state, Some(&repo), &[&stored("kiro")]), Cli::Kiro);
+        assert_eq!(recovered(&state, Some(&repo), &[&Choice::default()]), Cli::Codex);
+        std::fs::create_dir_all(repo.join(".echo")).unwrap();
+        std::fs::write(repo.join(".echo/settings.json"), r#"{"cli": "kiro"}"#).unwrap();
+        assert_eq!(
+            recovered(&state, Some(&repo), &[]),
+            Cli::Kiro,
+            "the repo's level is over the human's"
+        );
+        std::fs::write(state.join("settings.json"), "not json").unwrap();
+        assert_eq!(recovered(&state, None, &[&stored("kiro")]), Cli::Kiro);
+        // Nothing names a cli, or one Echo does not run: claude, as before.
+        assert_eq!(recovered(&state, None, &[&Choice::default()]), Cli::Claude);
+        assert_eq!(recovered(&state, None, &[&stored("vim")]), Cli::Claude);
+    }
+
+    #[test]
+    fn a_kiro_orchestrator_is_refused_an_anthropic_model_and_takes_its_own() {
+        let state = scratch("kiro-orchestrator-model");
+        std::fs::write(state.join("settings.json"), r#"{"cli": "kiro"}"#).unwrap();
+        let level = |model: &str| Choice {
+            cli: None,
+            model: Some(model.into()),
+        };
+        let err = pick(&state, None, &[&level("anthropic/claude-opus-5-5")])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("anthropic") && err.contains("pick another cli"), "{err}");
+        assert_eq!(
+            pick(&state, None, &[&level("claude-opus-5.5")]).unwrap(),
+            (Cli::Kiro, Some("claude-opus-5.5".into()))
+        );
+        assert_eq!(
+            pick(&state, None, &[]).unwrap(),
+            (Cli::Kiro, None),
+            "Kiro's own default model"
+        );
+    }
+
+    #[test]
+    fn every_kiro_screen_at_the_input_box_reads_as_idle() {
+        // `watch` raises an idle blocker for a Worker that reads Idle and stays unchanged for 60 s.
+        for screen in [
+            include_str!("../tests/fixtures/kiro/idle.txt"),
+            include_str!("../tests/fixtures/kiro/done.txt"),
+            include_str!("../tests/fixtures/kiro/waiting.txt"),
+            include_str!("../tests/fixtures/kiro/allowed-once.txt"),
+        ] {
+            assert_eq!(Cli::Kiro.look(screen), screen::Look::Idle, "{screen}");
+        }
+        assert_eq!(
+            Cli::Kiro.look(include_str!("../tests/fixtures/kiro/working.txt")),
+            screen::Look::Working
+        );
     }
 }

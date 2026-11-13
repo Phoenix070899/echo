@@ -743,23 +743,27 @@ impl Hub {
         // An Orchestrator's own model setting sits over the repo's and the human's general one, and
         // under what was picked for this agent; with none of them, it runs the built-in default.
         let human = settings::read(&paths::state_dir()).unwrap_or_default();
+        let orchestrator_model = orchestrator.then(|| settings::orchestrator_model(&human)).flatten();
         let (agent_cli, model) = cli::pick(
             &paths::state_dir(),
             Some(&repo),
             &[
                 &cli::Choice {
                     cli: None,
-                    model: orchestrator.then(|| settings::orchestrator_model(&human)).flatten(),
+                    model: orchestrator_model.clone(),
                 },
                 &cli::Choice {
                     cli: agent.cli.clone(),
                     model: agent.model.clone(),
                 },
             ],
-        )?;
-        let model = model.or_else(|| {
-            (orchestrator && agent_cli == cli::Cli::Claude).then(|| settings::ORCHESTRATOR_MODEL.to_string())
-        });
+        )
+        .map_err(|error| match orchestrator_model {
+            // An Anthropic name set for Claude must not be passed to another cli unseen.
+            Some(_) => anyhow::anyhow!("{error:#} (an Orchestrator takes `orchestratorModel` from settings.json unless the agent has a model of its own)"),
+            None => error,
+        })?;
+        let model = model.or_else(|| default_orchestrator_model(orchestrator, agent_cli));
         let effort = orchestrator.then(|| settings::orchestrator_effort(&human));
         let resume = agent_cli.has_session(&agent.session_id);
         // What the human asked for up front, like an issue to work on; a resumed session has its own.
@@ -791,6 +795,10 @@ impl Hub {
                     )?
                 } else {
                     launch::normal_start(&self.hub_dir, &agent, session)
+                };
+                let start = cli::Start {
+                    cwd: Some(home.clone()),
+                    ..start
                 };
                 (agent_cli.program().to_string(), agent_cli.args(&self.hub_dir, &start)?)
             }
@@ -1010,9 +1018,12 @@ impl Hub {
                         cli: worker.cli.clone(),
                         model: worker.model.clone(),
                     };
-                    let worker_cli = profile::load(&self.hub_dir, &state, Some(repo), &worker.profile)
-                        .and_then(|profile| cli::pick(&state, Some(repo), &[&profile.choice(), &picked]))
-                        .map_or(cli::Cli::Claude, |(c, _)| c);
+                    let levels: Vec<cli::Choice> = profile::load(&self.hub_dir, &state, Some(repo), &worker.profile)
+                        .into_iter()
+                        .map(|profile| profile.choice())
+                        .chain([picked])
+                        .collect();
+                    let worker_cli = cli::recovered(&state, Some(repo), &levels.iter().collect::<Vec<_>>());
                     Live::adopt(&key, id, worker_cli, self.worker_exit()).map(|live| {
                         live.map(|live| {
                             self.live.lock().unwrap().insert(id, Arc::clone(&live));
@@ -1026,8 +1037,7 @@ impl Hub {
                         cli: agent.cli.clone(),
                         model: agent.model.clone(),
                     };
-                    let agent_cli = cli::pick(&state, Some(Path::new(&agent.repo)), &[&choice])
-                        .map_or(cli::Cli::Claude, |(c, _)| c);
+                    let agent_cli = cli::recovered(&state, Some(Path::new(&agent.repo)), &[&choice]);
                     Live::adopt(&key, id, agent_cli, self.agent_exit()).map(|live| {
                         live.map(|live| {
                             self.agents.lock().unwrap().insert(id, Arc::clone(&live));
@@ -1717,6 +1727,10 @@ impl Hub {
                     launch,
                     model,
                 )?;
+                let start = cli::Start {
+                    cwd: Some(PathBuf::from(&worker.cwd)),
+                    ..start
+                };
                 (
                     worker_cli,
                     worker_cli.program().to_string(),
@@ -3212,6 +3226,11 @@ fn blocker_body(blocker_kind: &str, message: &str, prompt: &str, screen_tail: &s
     }
 }
 
+/// The variables a running agent CLI sets for its own session. Kiro sets about thirty `KIRO_*`;
+/// only the ones that name its session, its terminal or its binaries are markers: a Kiro started
+/// from inside another would read the first one's session, ready file and paths. The rest of
+/// `KIRO_*` is the human's own configuration and stays: `KIRO_HOME` (where the daemon writes the
+/// agent files and Kiro must read them), `KIRO_API_KEY`, `KIRO_LOG_LEVEL`, `KIRO_TELEMETRY_*`.
 fn is_agent_var(key: &str) -> bool {
     key == "CLAUDECODE"
         || key == "AI_AGENT"
@@ -3219,6 +3238,18 @@ fn is_agent_var(key: &str) -> bool {
         || key.starts_with("ORCA_")
         || key == "CLAUDE_PID"
         || key == "CLAUDE_EFFORT"
+        || key == "KIRO_SESSION_ID"
+        || key == "KIRO_TURN_MARKER_DIR"
+        || key.starts_with("KIRO_TUI_READY_")
+        || key.starts_with("KIRO_CHAT_CLI_")
+        || key.starts_with("KIRO_KAS_")
+}
+
+/// What an Orchestrator runs when nothing names a model: claude's built-in default. Another cli
+/// has no Anthropic name to start from, so it runs its own default until `orchestratorModel` or
+/// the agent names one of its models.
+fn default_orchestrator_model(orchestrator: bool, cli: cli::Cli) -> Option<String> {
+    (orchestrator && cli == cli::Cli::Claude).then(|| settings::ORCHESTRATOR_MODEL.to_string())
 }
 
 /// "in place" for the repo's own checkout, else the worktree's folder name.
@@ -3469,6 +3500,53 @@ mod tests {
     }
 
     #[test]
+    fn a_kiro_sessions_markers_are_not_inherited_but_the_humans_kiro_settings_are() {
+        for marker in [
+            "KIRO_SESSION_ID",
+            "KIRO_TURN_MARKER_DIR",
+            "KIRO_TUI_READY_FILE",
+            "KIRO_TUI_READY_TOKEN",
+            "KIRO_CHAT_CLI_BIN",
+            "KIRO_CHAT_CLI_BIN_IDENTITY",
+            "KIRO_CHAT_CLI_FALLBACK_BIN",
+            "KIRO_KAS_NODE_PATH",
+            "KIRO_KAS_SERVER_PATH",
+        ] {
+            assert!(is_agent_var(marker), "{marker}");
+        }
+        // The agent files go under $KIRO_HOME/agents and Kiro must look there too.
+        for kept in [
+            "KIRO_HOME",
+            "KIRO_API_KEY",
+            "KIRO_LOG_LEVEL",
+            "KIRO_CHAT_LOG_FILE",
+            "KIRO_TELEMETRY_ENABLED",
+            "KIRO_TUI_FORCE_COLOR",
+        ] {
+            assert!(!is_agent_var(kept), "{kept}");
+        }
+    }
+
+    #[test]
+    fn only_claude_orchestrators_get_a_built_in_model() {
+        let default = Some(settings::ORCHESTRATOR_MODEL.to_string());
+        assert_eq!(default_orchestrator_model(true, cli::Cli::Claude), default);
+        assert_eq!(default_orchestrator_model(false, cli::Cli::Claude), None);
+        assert_eq!(default_orchestrator_model(true, cli::Cli::Kiro), None);
+        assert_eq!(default_orchestrator_model(true, cli::Cli::Codex), None);
+    }
+
+    #[test]
+    fn the_hint_for_answering_a_prompt_has_no_esc_for_kiro() {
+        for cli in [cli::Cli::Claude, cli::Cli::Codex] {
+            assert_eq!(decide_hint(cli, 7), "`echoctl worker key w7 enter` or `esc`");
+        }
+        let kiro = decide_hint(cli::Cli::Kiro, 7);
+        assert_eq!(kiro, "`echoctl worker key w7 enter` or `down enter`");
+        assert!(!kiro.contains("esc"));
+    }
+
+    #[test]
     fn place_names_worktrees() {
         assert_eq!(place(Path::new("/r"), Path::new("/r")), "in place");
         assert_eq!(place(Path::new("/r"), Path::new("/w/r/feat-x")), "feat-x");
@@ -3523,14 +3601,26 @@ fn chat_state(live: Option<&Live>) -> Value {
     json!({ "live": true, "look": look, "spinner": spinner, "step": step })
 }
 
+/// How the human is told to answer a permission prompt before typing: Esc denies it for claude
+/// and codex but cancels the whole turn on Kiro, which denies with Down and Enter.
+fn decide_hint(cli: cli::Cli, id: i64) -> String {
+    match cli {
+        cli::Cli::Kiro => format!("`echoctl worker key w{id} enter` or `down enter`"),
+        _ => format!("`echoctl worker key w{id} enter` or `esc`"),
+    }
+}
+
 fn refuse_over_dialog(live: &Live) -> Result<()> {
     match live.cli.look(&live.screen()) {
         Look::PermissionPrompt => bail!(
-            "w{} shows a permission prompt, and typing would answer it; decide it with `echoctl worker key w{} enter` or `esc` first, or pass --force",
+            "w{} shows a permission prompt, and typing would answer it; decide it with {} first, or pass --force",
             live.id,
+            decide_hint(live.cli, live.id)
+        ),
+        Look::TrustPrompt => bail!(
+            "w{} still shows its folder-trust dialog; try again in a moment",
             live.id
         ),
-        Look::TrustPrompt => bail!("w{} still shows its folder-trust dialog; try again in a moment", live.id),
         _ => Ok(()),
     }
 }
