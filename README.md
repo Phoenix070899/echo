@@ -45,9 +45,9 @@ you  ->  Orchestrator  ->  Worker (naruto: implement)
 
 1. You describe the work to the Orchestrator.
 2. It shows a plan and waits for your "go" before any Task that writes code.
-3. It starts Workers with `echoctl worker start <profile> --spec-file <file>`, in place or in their own worktree, at most 4 at once.
+3. It starts Workers with `echoctl worker start <member-or-profile> --spec-file <file>`, in place or in their own worktree, at most 4 at once.
 4. Each Worker does exactly one Task and ends with `echoctl done`, a Final Report that says done or blocked, what changed, and how it was verified.
-5. A `sasuke` Worker verifies every writing Worker's commits before the Orchestrator reports.
+5. A verifier (its Team's `verify` Member, else `sasuke`) checks every writing Worker's commits before the Orchestrator reports.
 6. A Worker that is blocked runs `echoctl ask`; the question reaches the Orchestrator, or you.
 
 Rules for the Orchestrator are in [`orchestrator.md`](orchestrator.md).
@@ -64,6 +64,8 @@ echoctl profile list               every Profile here, and where each comes from
 echoctl profile copy sasuke        your own copy to change ("--repo" for this repo's, shared through git)
 echoctl profile new code-reviewer  a blank Profile to fill in
 ```
+
+A Profile is a Worker's role. A Team's Member starts from a Profile and may change it for that Team alone (see Teams below), so two Workers of one Profile can differ without editing the shared file.
 
 A Profile's `cli` and `model` (`provider/model`) can be left out: they then come from the repo's `.echo/settings.json`, else `~/.echo/settings.json` (`{"cli": "claude", "model": "anthropic/claude-sonnet-5-5"}`), else claude's own default.
 `echoctl worker start --cli --model` overrides all of them for one Worker.
@@ -95,6 +97,7 @@ A repo's `.echo/settings.json` can also prepare new worktrees: `"copy": [".env"]
 ## Teams
 
 A Team is a named setup for an Orchestrator, its Workers and its rules, picked when a session starts: a lean one for speed or for a provider whose usage is low, a thorough one for hard work.
+It also holds a tree of Members, the plan of which Workers the Orchestrator may start and what follows each.
 It is a JSON file `<name>.json` (lowercase letters, digits and `-`, up to 40 characters) in three places, a later one replacing a same-named file whole: Echo's own in [`teams/`](teams/) (`claude-opus`, `claude-lean`, `kiro-lean`), yours in `~/.echo/teams/`, and a repo's in its `.echo/teams/`, shared through git.
 Every field is optional, and a missing one means the level below:
 
@@ -107,15 +110,57 @@ Every field is optional, and a missing one means the level below:
     "profiles": { "naruto": { "model": "claude-sonnet-5.5", "effort": "high" } }
   },
   "rules": { "maxWorkers": 3, "planApproval": true, "review": true, "mergeWithoutAsking": false },
+  "members": [
+    { "id": "build", "action": "execute", "profile": "naruto", "instructions": "Keep changes small." },
+    { "id": "check", "action": "verify", "profile": "sasuke", "parent": "build" },
+    { "id": "ask-the-web", "action": "research", "profile": "jiraiya", "model": "claude-haiku-5.5" }
+  ],
   "instructions": "Text added to the end of the Orchestrator's prompt, after the rules."
 }
 ```
 
 ```
 echoctl team list                          every Team here, with where it comes from and what it runs
-echoctl team show claude-lean              one Team's origin, file and every field it sets
+echoctl team show claude-lean              one Team's origin, file and every field it sets, its Members as a tree
+echoctl team actions                          the Actions a Member can be for, with the Profile each starts from
 echoctl ui orchestrator --team kiro-lean   open an Orchestrator that starts and resumes with that Team
 ```
+
+### Members and Actions
+
+A Member is one node of a Team's tree: a Worker slot with a name (`id`), an Action, the Profile it starts from, and the changes this Team makes to that Profile.
+A Member's fields are `id`, `action`, `profile`, `parent`, `instructions`, `replaceRole`, `cli`, `model`, `effort`, `tools`, `skills`, `context`, `lessons`, `writes` and `worktree`; only `id`, `action` and `profile` are required, and a field left out means the level below.
+`members` is a flat array in tree order, and `parent` names the Member above, so moving a Member is a small diff in git.
+`instructions` are added after the Profile's role (or replace it with `replaceRole`); `tools`, `skills` and `context` replace the Profile's lists when they are not empty; `lessons: false` leaves the repo's Lessons out of that Worker's prompt.
+The tree is at most 3 levels deep with at most 24 Members, and a `verify` Member sits under an `execute` Member.
+
+An Action is what a Member is for. Echo ships six in [`actions/`](actions/), each with a default Profile, and a Member built on a Profile of your own is `custom`:
+
+| Action | Default Profile | For |
+| --- | --- | --- |
+| `scan` | `hinata` | reading the code |
+| `research` | `jiraiya` | reading the web |
+| `execute` | `naruto` | changing code |
+| `verify` | `sasuke` | reviewing a writer's commits |
+| `run` | `lee` | commands, tests and builds |
+| `scribe` | `ino` | Preferences and Lessons |
+
+The tree is a plan of hand-offs that the Orchestrator and the daemon carry out; a Member never starts another Member, and Workers still talk only to their Orchestrator.
+A Team with Members gives its Orchestrator a generated "Your Workers" section: each Member, its Action, what it runs on, and what follows it.
+`echoctl worker start <member-or-profile>` takes a Member's `id` first, else the first Member that uses that Profile, else a bare Profile; the Worker records its Member.
+A writer started with `--verify` is verified by its Member's first `verify` child, else by `sasuke`; the Team's `rules.review`, when set, decides whether it is verified at all.
+A Worker's CLI, model and effort come from the first of these that sets them: what was picked for it, its Member, the Team's `workers.profiles.<Profile>`, the Team's `workers`, the Profile, the repo's `.echo/settings.json`, then `~/.echo/settings.json`.
+
+### The Teams section in Echo
+
+Settings has one section for all of this, Teams, in place of the old Agents and Teams tabs.
+Its list holds a Defaults entry (the default CLI and model, "Use for every agent", and the Orchestrators' default rules) and every Team, with where each comes from.
+Picking a Team shows its tree: the Orchestrator at the root and its Members below it.
+Drag a Member to move it, or drag a chip from the palette to add one; with the tree focused, ↑ and ↓ select, ⌥↑ and ⌥↓ move among siblings, ⌥→ indents, ⌥← outdents, Return renames, Delete removes, `a` adds and `d` duplicates. The same moves are buttons and menu items.
+Picking a Member opens its inspector: name, Action, Profile, instruction, CLI, model and effort, tools, skills, context, Lessons, writes and worktree, with "Edit shared role..." for the Profile's own file and "New custom Worker..." for a Profile of your own.
+"New Team" asks for a starting point and a provider.
+Unsaved edits ask before they are lost.
+Echo's own Teams (`claude-opus`, `claude-lean`, `kiro-lean`) are trees too, and read-only: Duplicate one to change it.
 
 A Team differs from a Profile: a Profile is a Worker's role (its prompt and tools), while a Team says which models the Orchestrator and the Workers run on and under which rules.
 A Team's `workers` choices come before a Profile's own `cli`, `model` and `effort`, and `workers.profiles.<Profile>` before the rest of `workers`.
@@ -135,11 +180,11 @@ echoctl sessions             repos the daemon knows, each with its agents
 echoctl daemon | shutdown    run or stop the Hub Daemon (agents keep running; --force stops them too)
 echoctl stats [--days N]     what Workers spent tokens on and how much they read
 echoctl profile <action>     see and change the Agent Profiles Workers start as
-echoctl team <action>        see the Teams an Orchestrator can start with
-echoctl ui <action>          have Echo open a file, show an agent, a diff, or a Settings section, notify, or start an Orchestrator
+echoctl team <action>        see the Teams an Orchestrator can start with, their Members, and the Actions
+echoctl ui <action>          have Echo open a file, show an agent, a diff, or a Settings section (`ui settings teams`), notify, or start an Orchestrator
                              (agents learn it from the echoctl:echo skill in skills/)
 
-Orchestrator:  echoctl worker start|list|read|send|task|key|close|resume, echoctl wait, echoctl reply, echoctl inbox
+Orchestrator:  echoctl worker start <member-or-profile>|list|read|send|task|key|close|resume, echoctl wait, echoctl reply, echoctl inbox
 Worker:        echoctl ask, echoctl send, echoctl done
 ```
 
@@ -176,6 +221,8 @@ To try the daemon without a real agent, set `HUB_TEST_AGENT=crates/hub/tests/fak
 | `app/` | Echo: `HubCore` (daemon client, models) and `HubApp` (SwiftUI views) |
 | `crates/hub/` | Hub Daemon and `echoctl` CLI |
 | `profiles/` | Agent Profiles |
+| `actions/` | Actions: what a Team's Members are for, each with a default Profile |
+| `teams/` | Echo's own Teams, as trees of Members |
 | `mod/` | Claude Code plugin: folds tool calls and shows the Worker Dashboard in the Orchestrator's terminal |
 | `settings/` | Settings applied to Workers |
 | `docs/adr/` | Architecture decisions |

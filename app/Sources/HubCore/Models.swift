@@ -599,8 +599,6 @@ public struct WorkerProfile: Decodable, Equatable, Identifiable, Sendable {
     /// Where it comes from: "built-in", "yours", or "repo".
     public var level: String? = nil
     public var path: String? = nil
-    /// The levels below that it replaces.
-    public var replaces: [String]? = nil
     /// Why it cannot run here, when its CLI and model do not fit.
     public var problem: String? = nil
     /// The Profile's own lists and role text, which a Member of a Team may replace or add to.
@@ -610,13 +608,6 @@ public struct WorkerProfile: Decodable, Equatable, Identifiable, Sendable {
     public var role: String? = nil
 
     public var id: String { name }
-
-    /// "yours, replaces built-in"
-    public var origin: String {
-        guard let level else { return "" }
-        guard let below = replaces?.last else { return level }
-        return "\(level), replaces \(below)"
-    }
 }
 
 /// The human's Preferences and one repo's Lessons, from `memory.get`.

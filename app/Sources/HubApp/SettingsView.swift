@@ -195,7 +195,7 @@ struct SettingsView: View {
             case .teams:
             TeamsSection(teams: model.teamSettings, agents: agents)
             .onAppear {
-                refreshAgents()
+                agents.refresh()
                 refreshTeams()
             }
             case .worktrees:
@@ -205,12 +205,6 @@ struct SettingsView: View {
             case .remote:
             page { RemoteSettings() }
         }
-    }
-
-    /// Profiles are the selected repo's, its own included.
-    private func refreshAgents() {
-        agents.repo = model.selectedRepo
-        agents.refresh()
     }
 
     /// Teams are the selected repo's, its own included.

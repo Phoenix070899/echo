@@ -9,7 +9,6 @@ final class AgentSettingsModel: ObservableObject {
     /// The default model as typed, saved on Return or when the field is left.
     @Published var model = ""
     private let client = DaemonClient()
-    var repo: String?
 
     func refresh() {
         let client = client
