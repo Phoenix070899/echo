@@ -63,12 +63,10 @@ struct ChatView: View {
             // A Codex Worker keeps no transcript Echo reads; its report reads as before.
             FinalReportView(worker: worker)
         } else if !feed.supported {
-            ContentUnavailableView("No chat for this agent", systemImage: "terminal",
-                                   description: Text("Its CLI keeps no transcript Echo reads yet. Press ⇧⌘T for its terminal."))
+            EmptyNote(title: "No chat for this agent", detail: "Its CLI keeps no transcript Echo reads yet. Press ⇧⌘T for its terminal.")
         } else if feed.loaded && feed.rows.isEmpty && !feed.more && worker?.finalReport == nil {
             VStack(spacing: 0) {
-                ContentUnavailableView("Nothing said yet", systemImage: "bubble.left.and.bubble.right",
-                                       description: Text("Messages show here once the conversation starts."))
+                EmptyNote(title: "Nothing said yet", detail: "Messages show here once the conversation starts.")
                     .frame(maxHeight: .infinity)
                 // The first turn runs before its first line is written.
                 WorkingRow(live: feed.live)
@@ -79,7 +77,7 @@ struct ChatView: View {
         } else {
             ScrollViewReader { scroll in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
+                LazyVStack(alignment: .leading, spacing: 22) {
                     if feed.more {
                         Button(feed.loadingOlder ? "Loading…" : "Show earlier messages") {
                             loadOlder(scroll)
@@ -103,7 +101,8 @@ struct ChatView: View {
                     }
                 }
                 .padding(.horizontal, 32)
-                .padding(.vertical, 24)
+                .padding(.top, 28)
+                .padding(.bottom, 24)
                 .frame(maxWidth: ChatBottom.width, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
@@ -231,7 +230,7 @@ private struct ChatBottom: View {
 
     var body: some View {
         let state = live.state
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             // Its own prompts, as in Needs you; settling one here settles it there (ADR 0010).
             ForEach(needs) { need in NeedItem(need: need, repo: repo) }
             if state.look == .prompt && needs.isEmpty {
@@ -260,7 +259,7 @@ private struct ChatBottom: View {
         }
         .padding(.horizontal, 32)
         .padding(.top, 10)
-        .padding(.bottom, 16)
+        .padding(.bottom, 24)
         .frame(maxWidth: Self.width)
         .frame(maxWidth: .infinity)
         .onAppear {
@@ -322,14 +321,11 @@ private struct ChatBottom: View {
     }
 
     private func field(_ state: ChatState) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 10) {
             TextField(placeholder, text: $composer.text, axis: .vertical)
                 .lineLimit(1...10)
                 .textFieldStyle(.plain)
                 .font(Ledger.font(15))
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 6)
                 .focused($focused)
                 .onKeyPress(.return, phases: .down) { press in
                     // Shift-Return is a new line; Return completes a command, or sends.
@@ -366,12 +362,13 @@ private struct ChatBottom: View {
                     interrupt()
                     return .handled
                 }
-            HStack(spacing: 6) {
+            HStack(spacing: 12) {
                 Button(action: attach) {
                     Image(systemName: "plus")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Ledger.ink2)
-                        .frame(width: 32, height: 32)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Ledger.ink3)
+                        .frame(width: 28, height: 28)
+                        .overlay(Rectangle().strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -379,24 +376,29 @@ private struct ChatBottom: View {
                 .accessibilityLabel("Attach")
                 Spacer(minLength: 8)
                 if let name = modelName {
-                    Text(name).font(Ledger.font(13)).foregroundStyle(Ledger.ink3).lineLimit(1)
+                    MonoLabel(name).lineLimit(1)
                 }
                 Button(action: send) {
+                    // Ink casting the accent's 2 pt offset, as the primary button (ui-ux/0106).
                     Image(systemName: "arrow.up")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 13, weight: .heavy))
                         .foregroundStyle(Ledger.onPrimary)
-                        .frame(width: 32, height: 32)
-                        .background(Ledger.primary.opacity(canSend ? 1 : 0.4),
-                                    in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+                        .frame(width: 28, height: 28)
+                        .background(Ledger.primary)
+                        .background(Rectangle().fill(Ledger.accent).offset(x: 2, y: 2))
+                        .opacity(canSend ? 1 : 0.4)
+                        .padding(.trailing, 2)
+                        .padding(.bottom, 2)
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSend)
                 .help("Send (Return). Shift-Return adds a line.")
                 .accessibilityLabel("Send")
             }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 8)
         }
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
         .background(Ledger.field, in: RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous)
             .strokeBorder(Ledger.ink, lineWidth: Ledger.ruleStrong))
@@ -516,16 +518,22 @@ private struct WorkingRow: View {
     }
 
     private func row(step: String, spinner: String?) -> some View {
-        HStack(spacing: 8) {
-            Spinner(color: Ledger.primary, size: 14, period: 1.4)
-            Text(step).foregroundStyle(Ledger.ink2).lineLimit(1).truncationMode(.middle)
+        HStack(spacing: 12) {
+            Spinner(color: Ledger.accent, size: 14, period: 1.4)
+            Text(step).foregroundStyle(Ledger.ink).lineLimit(1).truncationMode(.middle)
             if let spinner, let open = spinner.range(of: " (") {
-                Text(spinner[open.upperBound...].dropLast().description).foregroundStyle(Ledger.ink3).lineLimit(1)
+                Text(spinner[open.upperBound...].dropLast().description)
+                    .font(Ledger.monoFont(12))
+                    .foregroundStyle(Ledger.ink3)
+                    .lineLimit(1)
             }
             Spacer(minLength: 8)
-            Text("Esc to interrupt").foregroundStyle(Ledger.ink3)
+            MonoLabel("Esc to interrupt").fixedSize()
         }
         .font(Ledger.font(13))
+        .foregroundStyle(Ledger.ink3)
+        .padding(.vertical, 10)
+        .overlay(alignment: .top) { Rule() }
     }
 }
 
@@ -553,9 +561,9 @@ private struct ChatRowView: View {
     private struct Divider: View {
         let label: String
         var body: some View {
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 Rectangle().fill(Ledger.rule).frame(height: 1)
-                Text(label).font(Ledger.font(12)).foregroundStyle(Ledger.ink3).fixedSize()
+                MonoLabel(label).fixedSize()
                 Rectangle().fill(Ledger.rule).frame(height: 1)
             }
             .padding(.vertical, 4)
@@ -574,14 +582,16 @@ private struct UserBubble: View {
             if !fromOrchestrator { Spacer(minLength: 80) }
             VStack(alignment: .leading, spacing: 6) {
                 if fromOrchestrator {
-                    Text("From Orchestrator").font(Ledger.font(12, .medium)).foregroundStyle(Ledger.ink3)
+                    MonoLabel("From Orchestrator")
                 }
-                ChatText(source: .plain(text), size: 15, leading: 5)
+                ChatText(source: .plain(text), size: 15, leading: 8)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .background(Ledger.bubble, in: RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous))
+            // Foundry's bubble stops at 560 pt (ui-ux/0117).
+            .frame(maxWidth: 560, alignment: fromOrchestrator ? .leading : .trailing)
             if fromOrchestrator { Spacer(minLength: 80) }
         }
     }
@@ -594,15 +604,15 @@ private struct FinalReportCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(worker.finalReport == nil ? "No Final Report" : "Final Report").font(Ledger.font(15, .semibold))
+                MonoLabel(worker.finalReport == nil ? "No Final Report" : "Final Report", color: Ledger.ink)
                 Spacer(minLength: 8)
-                Text(worker.phaseLabel).font(Ledger.font(12.5)).foregroundStyle(worker.markColor)
+                PhaseBadge(worker: worker)
             }
             if let report = worker.finalReport {
                 ForEach(Array(ReportSection.parse(report).enumerated()), id: \.offset) { _, section in
                     VStack(alignment: .leading, spacing: 6) {
                         if let title = section.title {
-                            Text(title).font(Ledger.font(13, .semibold)).foregroundStyle(Ledger.ink2)
+                            MonoLabel(title)
                         }
                         let tone = section.title == "State" && worker.isTrouble ? Ledger.fail : Ledger.ink
                         ChatMarkdown(blocks: parseMarkdown(section.body), size: 14, color: tone)
@@ -635,7 +645,7 @@ private struct ReplyView: View {
         .padding(.leading, item.needsHuman ? 14 : 0)
         .overlay(alignment: .leading) {
             if item.needsHuman {
-                RoundedRectangle(cornerRadius: 1.5).fill(Ledger.changed).frame(width: 3)
+                Rectangle().fill(Ledger.accent).frame(width: 3)
             }
         }
     }
@@ -707,8 +717,9 @@ private struct ToolGroup: View {
         VStack(alignment: .leading, spacing: 0) {
             Button { feed.toggle(id) } label: {
                 FoldLabel(icon: "wrench.and.screwdriver", open: open, failed: run.contains(where: \.failed)) {
-                    Text("\(run.count) tool calls").foregroundStyle(Ledger.ink2)
-                    Text(run.compactMap(\.tool).uniqued().joined(separator: ", "))
+                    Text("\(run.count) tool calls").fontWeight(.semibold).foregroundStyle(Ledger.ink)
+                    Text(run.compactMap(\.tool).uniqued().joined(separator: " · "))
+                        .font(Ledger.monoFont(12))
                         .foregroundStyle(Ledger.ink3)
                         .lineLimit(1)
                 }
@@ -737,9 +748,9 @@ private struct ToolRow: View {
         let column = VStack(alignment: .leading, spacing: 0) {
             Button { feed.toggle(item.id) } label: {
                 FoldLabel(icon: toolIcon(item.tool), open: open, failed: item.failed, denied: item.denied) {
-                    Text(item.tool ?? "Tool").fontWeight(.medium).foregroundStyle(Ledger.ink2)
+                    Text(item.tool ?? "Tool").fontWeight(.semibold).foregroundStyle(Ledger.ink)
                     Text(item.summary ?? "")
-                        .font(Ledger.mono)
+                        .font(Ledger.monoFont(12))
                         .foregroundStyle(Ledger.ink3)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -764,10 +775,10 @@ private struct FoldLabel<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 12) {
             Image(systemName: icon)
-                .font(.system(size: 12))
-                .foregroundStyle(Ledger.ink3)
+                .font(.system(size: 13))
+                .foregroundStyle(Ledger.ink)
                 .frame(width: 16)
             content
             if denied {
@@ -777,13 +788,13 @@ private struct FoldLabel<Content: View>: View {
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.right")
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 10, weight: .bold))
                 .rotationEffect(.degrees(open ? 90 : 0))
                 .foregroundStyle(Ledger.ink3)
         }
-        .font(Ledger.font(13))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .font(Ledger.font(14))
+        .padding(.horizontal, 14)
+        .frame(minHeight: 40)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }

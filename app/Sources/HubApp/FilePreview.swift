@@ -23,7 +23,7 @@ struct FilePreviewPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider().overlay(Ledger.rule)
+            Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong)
             body(of: content.state)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Ledger.paper)
@@ -257,11 +257,11 @@ struct FilePreviewPanel: View {
                               : "The agent isn't running, so there is no terminal to send to.")
                 }
             }
-            .font(Ledger.font(12.5))
-            .padding(.horizontal, 18)
-            .padding(.vertical, 9)
+            .font(Ledger.font(13))
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Ledger.wash)
+            .overlay(alignment: .top) { Rule() }
         }
     }
 
@@ -297,11 +297,11 @@ struct FilePreviewPanel: View {
                 Spacer(minLength: 8)
             }
         }
-        .font(Ledger.font(12.5))
-        .padding(.horizontal, 18)
-        .padding(.vertical, 9)
+        .font(Ledger.font(13))
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Ledger.wash)
+        .overlay(alignment: .top) { Rule() }
     }
 
     /// How the file shows: rendered or as source, and editable; one switch for all three.
@@ -328,50 +328,63 @@ struct FilePreviewPanel: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        // In a narrow panel the path takes a row of its own rather than vanish (ui-ux/0118).
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                pathLabel.frame(minWidth: 120, alignment: .leading)
+                Spacer(minLength: 8)
+                controls
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                pathLabel
+                controls
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
+        .background(Ledger.paper)
+    }
+
+    private var pathLabel: some View {
+        HStack(spacing: 8) {
             Text(file.path)
-                .font(Ledger.monoFont(12.5))
-                .foregroundStyle(Ledger.ink2)
+                .font(Ledger.monoFont(12, .bold))
+                .foregroundStyle(Ledger.ink)
                 .lineLimit(1)
                 .truncationMode(.head)
                 .textSelection(.enabled)
-                // The path gives way first; the buttons keep their words.
-                .layoutPriority(-1)
             if let mark = files.marks[file.path] {
                 Text(mark.rawValue)
-                    .font(Ledger.monoFont(11, .semibold))
+                    .font(Ledger.monoFont(11, .bold))
                     .foregroundStyle(mark == .modified || mark == .renamed ? Ledger.changed : mark == .deleted ? Ledger.fail : Ledger.done)
             }
-            Spacer(minLength: 8)
+        }
+    }
+
+    private var controls: some View {
+        HStack(spacing: 12) {
             if modes.count > 1 {
                 ModeSwitch(modes: modes, picked: mode, pick: pick)
             }
-            HStack(spacing: 2) {
-                HeaderIcon(symbol: "folder", label: "Reveal in Finder (⇧⌘R)") { model.revealInFinder(file) }
-                if case .html = content.state {
-                    HeaderIcon(symbol: "safari", label: "Open in browser") { NSWorkspace.shared.open(file.url) }
-                }
-                HeaderIcon(symbol: "arrow.up.forward.app", label: "Open in editor (⌘O)") { model.openInEditor(file) }
+            HeaderIcon(symbol: "folder", label: "Reveal in Finder (⇧⌘R)") { model.revealInFinder(file) }
+            if case .html = content.state {
+                HeaderIcon(symbol: "safari", label: "Open in browser") { NSWorkspace.shared.open(file.url) }
             }
+            HeaderIcon(symbol: "arrow.up.forward.app", label: "Open in editor (⌘O)") { model.openInEditor(file) }
             if content.editing {
                 Button("Save") { save() }
-                    .buttonStyle(.ledgerPrimary)
-                    .fixedSize()
+                    .buttonStyle(LedgerButtonStyle(primary: true, height: 34))
                     .disabled(!unsaved)
                     .help("Writes your changes to the file. ⌘S")
             } else {
                 // An outline, not the primary: inserting a path does not move the work forward (ui-ux/0106).
                 Button("Insert into terminal") { model.insertMention(file) }
-                    .buttonStyle(.ledger)
-                    .fixedSize()
+                    .buttonStyle(LedgerButtonStyle(height: 34))
                     .disabled(!model.terminalTypeable)
                     .help(model.terminalTypeable ? "Types @\(file.path) into the terminal" : "The agent isn't running, so there is no terminal to type into.")
             }
         }
-        .font(Ledger.font(12.5))
-        .padding(.horizontal, 18)
-        .padding(.vertical, 8)
-        .background(Ledger.paper)
+        .fixedSize()
     }
 
     @ViewBuilder
@@ -434,7 +447,9 @@ struct FilePreviewPanel: View {
     }
 }
 
-/// The strip over the main panel: the Terminal, then a tab for each open file of this checkout.
+/// The strip over the main panel: the Chat or Terminal, then a tab for each open file of this
+/// checkout. Mono capitals on the desk; the tab shown sits on the sheet over a 3 pt accent edge
+/// (ui-ux/0114).
 struct PreviewTabs: View {
     @EnvironmentObject private var model: AppModel
     let files: [FileRef]
@@ -454,31 +469,34 @@ struct PreviewTabs: View {
             }
             Spacer(minLength: 8)
             if model.preview != nil {
-                Text("Esc returns to the \(chatShown ? "chat" : "terminal")")
-                    .font(Ledger.font(12))
-                    .foregroundStyle(Ledger.ink3)
+                MonoLabel("Esc returns to the \(chatShown ? "chat" : "terminal")")
+                    .lineLimit(1)
                     .fixedSize()
-                    .padding(.trailing, 6)
-                    .padding(.bottom, 6)
+                    .padding(.trailing, 16)
             }
         }
-        .font(Ledger.font(13, .medium))
-        .padding(.top, 6)
-        .padding(.horizontal, 8)
+        .font(Ledger.monoFont(10, .bold))
+        .tracking(0.8)
+        .textCase(.uppercase)
+        .frame(height: Self.height)
         .background(Ledger.band, in: Rectangle())
+        .overlay(alignment: .bottom) { Rule() }
     }
+
+    static let height: CGFloat = 32
 
     /// The selection shows its chat, not its terminal (ADR 0010).
     private var chatShown: Bool { model.chatShown }
 
     private var tabs: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             tab(active: model.preview == nil) {
                 Button { model.preview = nil } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: chatShown ? "bubble.left.and.bubble.right" : "terminal").font(Ledger.font(11))
+                    HStack(spacing: 8) {
+                        TabGlyph(chat: chatShown)
                         Text(chatShown ? "Chat" : "Terminal").fixedSize()
                     }
+                    .frame(maxHeight: .infinity)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -488,22 +506,21 @@ struct PreviewTabs: View {
                 tab(active: model.preview == file, file: file) {
                     HStack(spacing: 8) {
                         Button { model.preview = file } label: {
-                            Text(file.name).fixedSize().contentShape(Rectangle())
+                            Text(file.name).fixedSize().frame(maxHeight: .infinity).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .help(file.path)
                         if model.unsaved.contains(file) {
-                            Circle()
+                            Rectangle()
                                 .fill(Ledger.ink2)
                                 .frame(width: 6, height: 6)
                                 .help("Unsaved changes")
                                 .accessibilityLabel("Unsaved changes")
                         }
                         Button { model.closePreview(file) } label: {
-                            Image(systemName: "xmark").font(Ledger.font(9, .bold))
+                            Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).frame(width: 12, height: 12).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(Ledger.ink3)
                         .accessibilityLabel("Close \(file.name)")
                     }
                 }
@@ -518,9 +535,12 @@ struct PreviewTabs: View {
     private func tab<Content: View>(active: Bool, file: FileRef? = nil, @ViewBuilder _ content: () -> Content) -> some View {
         let look = content()
             .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .foregroundStyle(active ? Ledger.ink : Ledger.ink2)
-            .background(active ? Ledger.paper : Color.clear, in: UnevenRoundedRectangle(topLeadingRadius: 6, topTrailingRadius: 6))
+            .frame(height: Self.height)
+            .foregroundStyle(active ? Ledger.ink : Ledger.ink3)
+            .background(active ? Ledger.paper : Color.clear)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(active ? Ledger.accent : .clear).frame(height: 3)
+            }
         if let file {
             look
                 .draggable(file.root + "\n" + file.path)
@@ -532,6 +552,34 @@ struct PreviewTabs: View {
         } else {
             look
         }
+    }
+}
+
+/// The Chat tab's square speech bubble, or the Terminal tab's framed prompt, on a 24-unit grid.
+struct TabGlyph: View {
+    let chat: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            let s = min(size.width, size.height) / 24
+            var path = Path()
+            if chat {
+                path.move(to: CGPoint(x: 4 * s, y: 4 * s))
+                path.addLine(to: CGPoint(x: 20 * s, y: 4 * s))
+                path.addLine(to: CGPoint(x: 20 * s, y: 16 * s))
+                path.addLine(to: CGPoint(x: 9 * s, y: 16 * s))
+                path.addLine(to: CGPoint(x: 4 * s, y: 20 * s))
+                path.closeSubpath()
+            } else {
+                path.addRect(CGRect(x: 3 * s, y: 4 * s, width: 18 * s, height: 16 * s))
+                path.move(to: CGPoint(x: 7 * s, y: 9 * s))
+                path.addLine(to: CGPoint(x: 10 * s, y: 12 * s))
+                path.addLine(to: CGPoint(x: 7 * s, y: 15 * s))
+            }
+            context.stroke(path, with: .foreground, style: StrokeStyle(lineWidth: 2.2 * s, lineCap: .square))
+        }
+        .frame(width: 13, height: 13)
+        .accessibilityHidden(true)
     }
 }
 
@@ -823,7 +871,7 @@ private struct MarkdownView: View, Equatable {
                         NoteableBlock(marked: notes.cursor == index || notes.editing == index) {
                             notes.start(at: index)
                         } content: {
-                            MarkdownBlockView(block: block)
+                            MarkdownBlockView(block: block, leading: 7, codeSize: 13)
                         }
                         ForEach(Array(all.enumerated()).filter { $0.element.path == file.path && $0.element.lines == spans[index] },
                                 id: \.offset) { position, note in
@@ -848,12 +896,13 @@ private struct MarkdownView: View, Equatable {
                     .id(index)
                 }
             }
-            .font(Ledger.font(14))
+            .font(Ledger.font(15))
             .foregroundStyle(Ledger.ink)
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
-            .padding(.horizontal, 40)
-            .padding(.vertical, 28)
+            .padding(.horizontal, 56)
+            .padding(.top, 40)
+            .padding(.bottom, 28)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onChange(of: notes.cursor) {
@@ -893,8 +942,8 @@ struct MarkdownBlockView: View {
     static func gap(_ previous: MarkdownBlock, _ block: MarkdownBlock) -> CGFloat {
         switch (previous, block) {
         case (.bullet, .bullet): 5
-        case (_, .heading(let level, _)): level <= 2 ? 28 : 20
-        case (.heading, _): 10
+        case (_, .heading(let level, _)): level <= 2 ? 32 : 20
+        case (.heading(let level, _), _): level == 1 ? 18 : level == 2 ? 16 : 10
         default: 14
         }
     }
@@ -917,11 +966,26 @@ struct MarkdownBlockView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Ledger.wash, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         case .heading(let level, let text):
-            VStack(alignment: .leading, spacing: 8) {
+            // Foundry's heads (ui-ux/0118): the title in the display face over a 2 pt ink rule, a
+            // section in the display face under one; smaller heads in the sans.
+            if level == 1 {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text(inline(text, code: codeSize))
+                        .font(Ledger.display(64))
+                        .textCase(.uppercase)
+                    Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong)
+                }
+            } else if level == 2 {
                 Text(inline(text, code: codeSize))
-                    .font(Ledger.font([26, 20, 16.5, 15, 14, 13.5][min(level, 6) - 1], .semibold))
+                    .font(Ledger.display(34))
+                    .textCase(.uppercase)
+                    .padding(.top, 16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(alignment: .top) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
+            } else {
+                Text(inline(text, code: codeSize))
+                    .font(Ledger.font([18, 15, 14, 13.5][min(level, 6) - 3], .bold))
                     .foregroundStyle(level == 6 ? Ledger.ink2 : Ledger.ink)
-                if level <= 2 { Rectangle().fill(Ledger.rule).frame(height: 1) }
             }
         case .paragraph(let text):
             Text(inline(text, code: codeSize)).lineSpacing(leading)
@@ -1326,26 +1390,18 @@ private struct ModeSwitch: View {
         HStack(spacing: 0) {
             ForEach(modes, id: \.self) { mode in
                 Button { if mode != picked { pick(mode) } } label: {
-                    Text(mode.rawValue)
-                        .font(Ledger.font(12, .medium))
-                        .foregroundStyle(mode == picked ? Ledger.ink : Ledger.ink2)
-                        .padding(.horizontal, 10)
-                        .frame(height: 22)
-                        .background(mode == picked ? Ledger.pill : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
-                        .contentShape(Rectangle())
+                    SegmentLabel(title: mode.rawValue, on: mode == picked, large: true, inset: 12)
                 }
                 .buttonStyle(.plain)
                 .help(mode.help)
                 .accessibilityAddTraits(mode == picked ? .isSelected : [])
             }
         }
-        .padding(2)
-        .background(Ledger.field, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
-        .fixedSize()
+        .segmentTrack(large: true)
     }
 }
 
-/// A quiet icon action in the preview header; its fill shows on hover.
+/// A quiet icon action in the preview header: a 30 pt square in a 1 pt rule, filled on hover.
 private struct HeaderIcon: View {
     let symbol: String
     let label: String
@@ -1355,13 +1411,14 @@ private struct HeaderIcon: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(Ledger.font(13))
-                .frame(width: 26, height: 26)
-                .background(hover.on ? Ledger.fill : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
+                .font(.system(size: 13))
+                .frame(width: 30, height: 30)
+                .background(hover.on ? Ledger.wash : .clear)
+                .overlay(Rectangle().strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(hover.on ? Ledger.ink : Ledger.ink2)
+        .foregroundStyle(hover.on ? Ledger.ink : Ledger.ink3)
         .onHover { hover.on = $0 }
         .help(label)
         .accessibilityLabel(label)

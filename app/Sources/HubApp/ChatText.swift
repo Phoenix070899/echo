@@ -158,8 +158,9 @@ struct ChatTextBuilder {
             carry = 0
             switch block {
             case .heading(let level, let text):
-                let sizes: [CGFloat] = [26, 20, 16.5, 15, 14, 13.5]
-                let font = Ledger.nsFont(sizes[min(max(level, 1), 6) - 1], .semibold)
+                // Foundry's reply heads are the sans, bold: an h3 is 18 pt (ui-ux/0117).
+                let sizes: [CGFloat] = [22, 20, 18, 15, 14, 13.5]
+                let font = Ledger.nsFont(sizes[min(max(level, 1), 6) - 1], .bold)
                 var attributes = attrs(font, level == 6 ? ink2 : base, before: before, line: 2)
                 if level <= 2 {
                     attributes[.paragraphStyle] = paragraph(before: before, line: 2, after: 9)

@@ -41,6 +41,9 @@ enum Ledger {
     /// Foundry's muted safety orange: marks, meters, the picked row's edge, the button's offset. Never
     /// text in light mode (3.1:1 on the sheet).
     static let accent = dynamic(0xC8642E, 0xD9773F) { $0.accent }
+    /// The hard block a raised sheet casts (a menu, a modal): ink in light mode, black in dark,
+    /// where ink is the light text colour.
+    static let cast = dynamic(0x2B2B29, 0x000000)
     /// The highlighter. Text on it is always dark ink, in both modes.
     static let marker = dynamic(0xEBC9B0, 0xD4A27F) { $0.highlighter }
     static let markerInk = rgb(0x2B2B29)
@@ -402,10 +405,28 @@ struct MonoLabel: View {
 
     var body: some View {
         Text(text)
-            .font(Ledger.monoFont(10.5, .bold))
-            .tracking(1)
+            .font(Ledger.monoFont(11, .bold))
+            .tracking(1.1)
             .textCase(.uppercase)
             .foregroundStyle(color)
+    }
+}
+
+/// Where a panel has nothing to show: a mono capital title over one quiet line (ui-ux/0117).
+struct EmptyNote: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            MonoLabel(title)
+            Text(detail)
+                .font(Ledger.font(14))
+                .foregroundStyle(Ledger.ink3)
+                .multilineTextAlignment(.center)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -438,44 +459,49 @@ struct Marked: View {
     }
 }
 
-/// The ledger's buttons (ui-ux/0106): the primary is solid ink casting a hard accent offset that
-/// presses flat; the rest are an ink outline. Mono capitals, square, 28 pt tall or 32 pt when large.
+/// The ledger's buttons (ui-ux/0106, ui-ux/0112): the primary is solid ink casting a hard accent
+/// offset that presses flat; the rest are a 2 pt ink outline. Mono capitals, square; 28 pt tall
+/// with 10 pt capitals and a 2 pt offset, or taller with 11 pt capitals and a 3 pt offset.
 struct LedgerButtonStyle: ButtonStyle {
     var primary = false
     var large = false
+    /// A height of its own, as Foundry's 34 and 36 pt buttons in headers and footers.
+    var height: CGFloat?
 
     func makeBody(configuration: Configuration) -> some View {
-        Styled(configuration: configuration, primary: primary, large: large)
+        Styled(configuration: configuration, primary: primary, height: height ?? (large ? 36 : 28))
     }
 
     private struct Styled: View {
         let configuration: ButtonStyleConfiguration
         let primary: Bool
-        let large: Bool
+        let height: CGFloat
         @Environment(\.isEnabled) private var isEnabled
 
         var body: some View {
-            let pressed: CGFloat = primary && configuration.isPressed ? 3 : 0
+            let tall = height > 30
+            let shift: CGFloat = tall ? 3 : 2
+            let pressed: CGFloat = primary && configuration.isPressed ? shift : 0
             configuration.label
-                .font(Ledger.monoFont(11, .bold))
-                .tracking(0.4)
+                .font(Ledger.monoFont(tall ? 11 : 10, .bold))
+                .tracking(0.6)
                 .textCase(.uppercase)
                 .lineLimit(1)
                 // A label never truncates: capitals in mono run wider than the sans they replaced.
                 .fixedSize(horizontal: true, vertical: false)
-                .padding(.horizontal, large ? 14 : 10)
-                .frame(minHeight: large ? 32 : 28)
+                .padding(.horizontal, tall ? 14 : 12)
+                .frame(minHeight: height)
                 .foregroundStyle(primary ? Ledger.onPrimary : Ledger.ink)
                 .background(primary ? Ledger.primary : Color.clear)
-                .overlay(Rectangle().strokeBorder(primary ? Color.clear : Ledger.ink, lineWidth: 1.5))
+                .overlay(Rectangle().strokeBorder(primary ? Color.clear : Ledger.ink, lineWidth: Ledger.ruleStrong))
                 .offset(x: pressed, y: pressed)
                 // The offset is a solid block behind the button, not a blurred shadow (ui-ux/0106);
                 // pressing moves the button onto it.
                 .background {
-                    if primary && isEnabled { Rectangle().fill(Ledger.accent).offset(x: 3, y: 3) }
+                    if primary && isEnabled { Rectangle().fill(Ledger.accent).offset(x: shift, y: shift) }
                 }
-                .padding(.trailing, primary ? 3 : 0)
-                .padding(.bottom, primary ? 3 : 0)
+                .padding(.trailing, primary ? shift : 0)
+                .padding(.bottom, primary ? shift : 0)
                 .opacity(isEnabled ? 1 : 0.45)
                 .contentShape(Rectangle())
         }
@@ -488,27 +514,35 @@ extension ButtonStyle where Self == LedgerButtonStyle {
     static var ledgerLarge: LedgerButtonStyle { LedgerButtonStyle(primary: true, large: true) }
 }
 
-/// A segmented choice (ui-ux/0107): a sunk square track, the picked choice on the sheet's grey
-/// inside a 1.5 pt ink frame, mono capitals. Stands in for the system's segmented picker, whose
-/// accent-blue thumb belongs to no other control here.
+/// A segmented choice (ui-ux/0107, ui-ux/0112): a sunk square track, the picked choice on the sheet's
+/// grey inside a 2 pt ink frame, mono capitals; 24 pt tall in a compact header, 28 pt in a large one.
+/// Stands in for the system's segmented picker, whose accent-blue thumb belongs to no other control.
 struct LedgerSegmented<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(value: Value, title: String)]
+    var large = false
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.offset) { _, option in
                 let on = option.value == selection
                 Button { selection = option.value } label: {
-                    SegmentLabel(title: option.title, on: on)
+                    SegmentLabel(title: option.title, on: on, large: large)
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
-        .padding(2)
-        .background(Ledger.bubble)
-        .fixedSize()
+        .segmentTrack(large: large)
+    }
+}
+
+extension View {
+    /// The sunk track a segmented choice sits in.
+    func segmentTrack(large: Bool = false) -> some View {
+        padding(large ? 3 : 2)
+            .background(Ledger.bubble)
+            .fixedSize()
     }
 }
 
@@ -516,17 +550,21 @@ struct LedgerSegmented<Value: Hashable>: View {
 struct SegmentLabel: View {
     let title: String
     let on: Bool
+    var large = false
+    var inset: CGFloat?
 
     var body: some View {
         Text(title)
-            .font(Ledger.monoFont(10.5, .bold))
-            .tracking(0.6)
+            .font(Ledger.monoFont(large ? 11 : 10, .bold))
+            .tracking(large ? 0.9 : 0.8)
             .textCase(.uppercase)
+            .lineLimit(1)
+            .fixedSize()
             .foregroundStyle(on ? Ledger.ink : Ledger.ink3)
-            .padding(.horizontal, 10)
-            .frame(height: 24)
+            .padding(.horizontal, inset ?? (large ? 14 : 10))
+            .frame(height: large ? 28 : 24)
             .background(on ? Ledger.field : .clear)
-            .overlay(Rectangle().strokeBorder(on ? Ledger.ink : .clear, lineWidth: 1.5))
+            .overlay(Rectangle().strokeBorder(on ? Ledger.ink : .clear, lineWidth: 2))
             .contentShape(Rectangle())
     }
 }
@@ -618,27 +656,16 @@ extension SectionHeader where Trailing == EmptyView {
     }
 }
 
-/// Echo's mark for the top bar: one solid square and the echoes it sends out, light on a square ink
-/// tile that casts the accent's hard offset, with the highlighter's dot; the app icon is too fine to
-/// read at this size.
+/// Echo's mark for the top bar: a solid ink square casting the accent's hard offset, Foundry's own
+/// block (ui-ux/0110). It takes 3 pt more than its square, right and down, for the offset.
 struct EchoMark: View {
     var body: some View {
-        Canvas { context, size in
-            let s = min(size.width, size.height) / 32
-            context.fill(Path(CGRect(x: 4 * s, y: 4 * s, width: 28 * s, height: 28 * s)), with: .color(Ledger.accent))
-            context.fill(Path(CGRect(x: 0, y: 0, width: 28 * s, height: 28 * s)), with: .color(Ledger.markerInk))
-            // The mark sits on a 16-unit grid, centred in the tile.
-            let unit = 22 * s / 16
-            let origin = CGPoint(x: 3 * s, y: 3 * s)
-            func square(_ x: CGFloat, _ y: CGFloat, _ side: CGFloat, _ radius: CGFloat) -> Path {
-                Path(roundedRect: CGRect(x: origin.x + x * unit, y: origin.y + y * unit, width: side * unit, height: side * unit),
-                     cornerRadius: radius * unit, style: .continuous)
+        GeometryReader { proxy in
+            let side = min(proxy.size.width, proxy.size.height) - 3
+            ZStack(alignment: .topLeading) {
+                Rectangle().fill(Ledger.accent).frame(width: side, height: side).offset(x: 3, y: 3)
+                Rectangle().fill(Ledger.ink).frame(width: side, height: side)
             }
-            let paper = Color(white: 0.985)
-            context.stroke(square(7, 1.5, 7.5, 1.8), with: .color(paper.opacity(0.45)), lineWidth: 1.1 * unit)
-            context.stroke(square(4.5, 4, 7.5, 1.8), with: .color(paper.opacity(0.7)), lineWidth: 1.1 * unit)
-            context.fill(square(1.5, 7, 7.5, 1.8), with: .color(paper))
-            context.fill(square(5.6, 11.1, 2, 0.5), with: .color(Ledger.marker))
         }
         .accessibilityHidden(true)
     }

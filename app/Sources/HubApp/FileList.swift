@@ -53,11 +53,11 @@ final class FileListScrollView: NSScrollView {
 }
 
 final class FileListView: NSView, NSViewToolTipOwner {
-    static let rowHeight: CGFloat = 24
+    static let rowHeight: CGFloat = 26
     /// Space above the first row and below the last.
-    private static let margin: CGFloat = 6
-    /// The rounded fill sits this far in from each side of the column.
-    private static let inset: CGFloat = 8
+    private static let margin: CGFloat = 2
+    /// Rows start this far in from the column's edge; their fills run edge to edge (ui-ux/0118).
+    private static let inset: CGFloat = 12
 
     var click: ((FileEntry) -> Void)?
     private(set) var rows: [FileListRow] = []
@@ -68,7 +68,7 @@ final class FileListView: NSView, NSViewToolTipOwner {
     private var hovered: Int?
     private var pressed: (row: Int, at: NSPoint)?
 
-    private let picked = RowFill(color: Ledger.selected)
+    private let picked = RowFill(color: Ledger.selected, edge: true)
     private let hover = RowFill(color: Ledger.wash)
     /// Draws the rows' icons and text, over the fills.
     private lazy var text = RowsText(list: self)
@@ -132,7 +132,7 @@ final class FileListView: NSView, NSViewToolTipOwner {
         for (fill, index) in [(picked, cursorIndex), (hover, hovered)] {
             let shown = index.map { rows.indices.contains($0) } ?? false
             fill.isHidden = !shown || (fill === hover && hovered == cursorIndex)
-            if shown, let index { fill.frame = rect(of: index).insetBy(dx: Self.inset, dy: 0) }
+            if shown, let index { fill.frame = rect(of: index) }
         }
     }
 
@@ -145,22 +145,23 @@ final class FileListView: NSView, NSViewToolTipOwner {
     }
 
     private static let name = Ledger.nsFont(13)
-    private static let markFont = Ledger.nsMono(11, .semibold)
+    private static let markFont = Ledger.nsMono(11, .bold)
+    private static let chevronFont = Ledger.nsMono(11)
 
     private func draw(_ row: FileListRow, in rect: NSRect) {
         let entry = row.entry
         let ink3 = NSColor(Ledger.ink3)
-        // As the SwiftUI rows were: 10 pt in from the fill, 14 pt more for each level.
-        var x = rect.minX + Self.inset + 10 + CGFloat(entry.depth) * 14
+        // Foundry's tree: a mono ▸ or ▾ before a folder, no icons, 14 pt more for each level.
+        var x = rect.minX + Self.inset + CGFloat(entry.depth) * 14
         if entry.isFolder {
-            x += symbol(row.open ? "chevron.down" : "chevron.right", size: 9, heavy: true, width: 10, drop: 0.25, color: ink3,
-                        at: x, in: rect) + 6
-            x += symbol("folder.fill", size: 12, drop: 0.125, color: ink3, at: x, in: rect) + 6
-        } else {
-            x += 10 + 6
-            x += symbol("doc", size: 11.5, drop: 0.5, color: ink3, at: x, in: rect) + 6
+            let chevron = NSAttributedString(string: row.open ? "▾" : "▸", attributes: [
+                .font: Self.chevronFont, .foregroundColor: ink3,
+            ])
+            let size = chevron.size()
+            chevron.draw(at: NSPoint(x: x, y: rect.midY - size.height / 2))
         }
-        var right = rect.maxX - Self.inset - 12
+        x += 10 + 8
+        var right = rect.maxX - 12
         switch row.mark {
         case .file(let git)?:
             let text = NSAttributedString(string: git.rawValue, attributes: [
@@ -171,7 +172,7 @@ final class FileListView: NSView, NSViewToolTipOwner {
             right -= size.width + 6
         case .folder?:
             NSColor(Ledger.changed).setFill()
-            NSBezierPath(ovalIn: NSRect(x: right - 6, y: rect.midY - 3, width: 6, height: 6)).fill()
+            NSRect(x: right - 6, y: rect.midY - 3, width: 6, height: 6).fill()
             right -= 6 + 6
         case nil:
             break
@@ -193,46 +194,6 @@ final class FileListView: NSView, NSViewToolTipOwner {
         case .file(.deleted)?: Ledger.fail
         default: row.ignored ? Ledger.ink3 : Ledger.ink
         }
-    }
-
-    nonisolated(unsafe) private static var icons: [String: NSImage] = [:]
-
-    /// A symbol as the SwiftUI rows drew it, laid out and rendered by SwiftUI in a row like theirs
-    /// once per colour, so it matches to the pixel: SwiftUI sizes a symbol by the font around it,
-    /// and centres and rounds it in the row, in ways AppKit's own symbol sizes do not.
-    private func icon(_ name: String, size: CGFloat, heavy: Bool, width: CGFloat?, drop: CGFloat, color: NSColor) -> NSImage? {
-        let scale = window?.backingScaleFactor ?? 2
-        let resolved = color.usingColorSpace(.sRGB) ?? color
-        let key = "\(name) \(size) \(heavy) \(width ?? 0) \(drop) \(scale) \(resolved.redComponent) \(resolved.greenComponent) \(resolved.blueComponent) \(resolved.alphaComponent)"
-        if let icon = Self.icons[key] { return icon }
-        // Beside an unseen line of the name's text, as in the row, so the row's height centres it.
-        let renderer = ImageRenderer(content: HStack(spacing: 0) {
-            Image(systemName: name)
-                .font(Ledger.font(size, heavy ? .semibold : .regular))
-                .foregroundStyle(Color(nsColor: resolved))
-                .frame(width: width)
-                .offset(y: drop)
-            Text("M").font(Ledger.font(13)).fixedSize().frame(width: 0).hidden()
-        }
-        .frame(height: Self.rowHeight))
-        // Four times the screen's scale, so a drop of a fraction of a pixel lands where SwiftUI put it.
-        renderer.scale = scale * 4
-        let icon = renderer.nsImage
-        Self.icons[key] = icon
-        return icon
-    }
-
-    /// Draws a symbol in the row at `x`, `width` wide or as wide as it is, and returns its width.
-    @discardableResult
-    /// `drop` moves it down by a fraction of a point, where the SwiftUI rows drew it: measured
-    /// against them pixel by pixel on a 2x screen.
-    private func symbol(_ name: String, size: CGFloat, heavy: Bool = false, width: CGFloat? = nil, drop: CGFloat,
-                        color: NSColor, at x: CGFloat, in rect: NSRect) -> CGFloat {
-        guard let image = icon(name, size: size, heavy: heavy, width: width, drop: drop, color: color) else { return 0 }
-        image.draw(in: NSRect(x: x, y: rect.minY, width: image.size.width, height: image.size.height))
-        // What follows starts on a whole screen pixel, as SwiftUI laid it out.
-        let scale = window?.backingScaleFactor ?? 2
-        return (image.size.width * scale).rounded() / scale
     }
 
     // MARK: Mouse
@@ -338,13 +299,15 @@ final class FileListView: NSView, NSViewToolTipOwner {
 /// Claude's rounded fill behind a row, in a colour that follows the light or dark look.
 private final class RowFill: NSView {
     private let color: Color
+    /// The picked row's 3 pt accent bar at its leading edge (ui-ux/0109).
+    private let edge: CALayer?
 
-    init(color: Color) {
+    init(color: Color, edge: Bool = false) {
         self.color = color
+        self.edge = edge ? CALayer() : nil
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.cornerCurve = .continuous
+        if let line = self.edge { layer?.addSublayer(line) }
         isHidden = true
     }
 
@@ -354,6 +317,15 @@ private final class RowFill: NSView {
 
     override func updateLayer() {
         layer?.backgroundColor = NSColor(color).cgColor
+        edge?.backgroundColor = NSColor(Ledger.accent).cgColor
+    }
+
+    override func setFrameSize(_ size: NSSize) {
+        super.setFrameSize(size)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        edge?.frame = CGRect(x: 0, y: 0, width: 3, height: size.height)
+        CATransaction.commit()
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }

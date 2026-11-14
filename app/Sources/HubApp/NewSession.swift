@@ -18,119 +18,115 @@ struct NewSessionModal: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.28)
-                .ignoresSafeArea()
-                .onTapGesture(perform: close)
-                .accessibilityHidden(true)
+            ModalBackdrop(close: close)
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Start a session")
-                        .font(Ledger.font(20, .semibold))
-                        .accessibilityAddTraits(.isHeader)
-                    Text("Pick how you want to work, then a git repo.")
-                        .foregroundStyle(Ledger.ink2)
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 22)
-                .padding(.bottom, 14)
+                ModalHead(label: "New session", title: "Start a session",
+                          detail: "Pick how you want to work, then a git repo.", close: close)
 
-                FieldLabel("Mode")
-                HStack(spacing: 10) {
-                    ModeCard(kind: .orchestrator, picked: form.kind == .orchestrator,
-                             title: "Orchestrator",
-                             detail: "You talk to an Orchestrator. It hands Tasks to Workers and reports back.") {
-                        form.kind = .orchestrator
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        StepLabel(number: 1, title: "Mode")
+                        HStack(spacing: 12) {
+                            ModeCard(kind: .orchestrator, picked: form.kind == .orchestrator,
+                                     title: "Orchestrator",
+                                     detail: "You talk to an Orchestrator. It hands Tasks to Workers and reports back.") {
+                                form.kind = .orchestrator
+                            }
+                            ModeCard(kind: .claude, picked: form.kind == .claude,
+                                     title: "Normal",
+                                     detail: "One Claude Code terminal in the repo. Just you and the agent.") {
+                                form.kind = .claude
+                            }
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
                     }
-                    ModeCard(kind: .claude, picked: form.kind == .claude,
-                             title: "Normal",
-                             detail: "One Claude Code terminal in the repo. Just you and the agent.") {
-                        form.kind = .claude
-                    }
-                }
-                .padding(.horizontal, 24)
 
-                FieldLabel("Repos Echo knows")
-                    .padding(.top, 18)
-                if repos.isEmpty {
-                    Text("No repos yet. Choose the folder of a git repo to start.")
-                        .font(Ledger.font(12.5))
-                        .foregroundStyle(Ledger.ink2)
-                        .padding(.horizontal, 24)
-                } else {
-                    ScrollView {
-                        // Inset like every other field, so a picked row's fill stops short of the edges.
-                        VStack(spacing: 2) {
-                            ForEach(repos, id: \.self) { repo in
-                                RepoChoice(repo: repo, status: status(repo), picked: form.picked == repo) {
-                                    form.picked = repo
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline) {
+                            StepLabel(number: 2, title: "Repo")
+                            Spacer(minLength: 8)
+                            Button("Choose another folder…", action: choose)
+                                .buttonStyle(.ledgerLink)
+                        }
+                        if repos.isEmpty {
+                            Text("No repos yet. Choose the folder of a git repo to start.")
+                                .font(Ledger.font(13))
+                                .foregroundStyle(Ledger.ink3)
+                        } else {
+                            ScrollView {
+                                VStack(spacing: 0) {
+                                    ForEach(repos, id: \.self) { repo in
+                                        RepoChoice(repo: repo, status: status(repo), picked: form.picked == repo) {
+                                            form.picked = repo
+                                        }
+                                    }
+                                }
+                                .overlay(alignment: .top) { Rule() }
+                            }
+                            .frame(height: min(CGFloat(repos.count) * 41 + 1, 206))
+                        }
+                    }
+
+                    if form.picked != nil {
+                        CreateFromSection(form: form, submit: start)
+                    }
+
+                    // Name and Team share a row, keeping the dialog short enough for small windows.
+                    // An Orchestrator takes its model from its Team, so the Team has the model's place.
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                StepLabel(number: 4, title: "Name")
+                                TextField(namePlaceholder, text: $form.name)
+                                    .textFieldStyle(.plain)
+                                    .font(Ledger.font(14))
+                                    .padding(.horizontal, 10)
+                                    .frame(height: 38)
+                                    .background(Ledger.field)
+                                    .overlay(Rectangle().strokeBorder(nameFocused ? Ledger.ink : Ledger.ink3, lineWidth: Ledger.hairline))
+                                    .focused($nameFocused)
+                            }
+                            VStack(alignment: .leading, spacing: 8) {
+                                if form.kind == .orchestrator {
+                                    MonoLabel("Team")
+                                    TeamPicker(form: form)
+                                } else {
+                                    MonoLabel("Model")
+                                    FieldMenu(title: form.model.isEmpty ? "Default model" : form.model) {
+                                        ForEach(AppModel.models, id: \.self) { name in
+                                            Button(name.isEmpty ? "Default model" : name) { form.model = name }
+                                        }
+                                    }
                                 }
                             }
+                            .frame(width: 210)
                         }
-                        .padding(.horizontal, 24)
-                    }
-                    .frame(height: min(CGFloat(repos.count) * 55, 220))
-                }
-                Button("Choose another folder…", action: choose)
-                    .buttonStyle(.ledgerLink)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 10)
-
-                if form.picked != nil {
-                    CreateFromSection(form: form, submit: start)
-                        .padding(.horizontal, 24)
-                        .padding(.top, 18)
-                }
-
-                // Name and model share a row, keeping the dialog short enough for small windows.
-                // An Orchestrator takes its model from its Team, so the Team has the model's place.
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text("Name")
-                        .font(Ledger.font(12.5, .semibold))
-                        .foregroundStyle(Ledger.ink2)
-                        .frame(width: 44, alignment: .leading)
-                    TextField(namePlaceholder, text: $form.name)
-                        .textFieldStyle(.plain)
-                        .ledgerField()
-                        .focused($nameFocused)
-                    if form.kind == .orchestrator {
-                        TeamPicker(form: form)
-                    } else {
-                        Picker("Model", selection: $form.model) {
-                            ForEach(AppModel.models, id: \.self) { name in
-                                Text(name.isEmpty ? "Default model" : name).tag(name)
-                            }
+                        if form.kind == .orchestrator, let line = form.teamLine {
+                            Text(line)
+                                .font(Ledger.font(13))
+                                .lineSpacing(3)
+                                .lineLimit(3)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Ledger.bubble)
                         }
-                        .labelsHidden()
-                        .fixedSize()
                     }
                 }
                 .padding(.horizontal, 24)
-                .padding(.top, 16)
+                .padding(.top, 18)
 
-                if form.kind == .orchestrator, let line = form.teamLine {
-                    Text(line)
-                        .font(Ledger.font(12.5))
-                        .foregroundStyle(Ledger.ink2)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, 24 + 54)
-                        .padding(.trailing, 24)
-                        .padding(.top, 6)
-                }
-
-                if let note = joinNote {
-                    Text(note)
-                        .font(Ledger.font(12.5))
-                        .foregroundStyle(Ledger.ink2)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 24)
-                        .padding(.top, 14)
-                }
-
-                HStack(spacing: 8) {
-                    Spacer()
+                HStack(spacing: 10) {
+                    if let note = joinNote {
+                        Text(note)
+                            .font(Ledger.font(12))
+                            .foregroundStyle(Ledger.ink3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
                     Button("Cancel", action: close)
-                        .buttonStyle(.ledger)
+                        .buttonStyle(LedgerButtonStyle(height: 36))
                         .keyboardShortcut(.cancelAction)
                     Button(action: start) {
                         HStack(spacing: 6) {
@@ -138,20 +134,17 @@ struct NewSessionModal: View {
                             Text(startTitle)
                         }
                     }
-                        .buttonStyle(.ledgerPrimary)
+                        .buttonStyle(LedgerButtonStyle(primary: true, height: 36))
                         .keyboardShortcut(.defaultAction)
                         .disabled(form.picked == nil || model.daemonDown || form.starting)
                 }
                 .padding(.horizontal, 24)
+                .padding(.vertical, 14)
+                .overlay(alignment: .top) { Rule() }
                 .padding(.top, 20)
-                .padding(.bottom, 22)
             }
-            .frame(width: 560)
-            .background(Ledger.paper, in: RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous))
-            // A hairline, not a shadow, sets it apart from the dimmed window.
-            .overlay(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous).strokeBorder(Ledger.rule))
-            .accessibilityElement(children: .contain)
-            .accessibilityAddTraits(.isModal)
+            .frame(width: 600)
+            .foundryModal()
         }
         .onAppear {
             let request = model.newSession
@@ -217,7 +210,7 @@ struct NewSessionModal: View {
         guard count > 0 else { return nil }
         let name = URL(fileURLWithPath: repo).lastPathComponent
         let newcomer = form.kind == .orchestrator ? "The new Orchestrator" : "Claude Code"
-        return "\(name) already has \(count) Orchestrator\(count == 1 ? "" : "s"). \(newcomer) joins in the \(name) tab as its own group, and they all keep running."
+        return "\(name) already has \(count) Orchestrator\(count == 1 ? "" : "s"). \(newcomer) joins it as its own group; they all keep running."
     }
 
     private func choose() {
@@ -337,19 +330,124 @@ struct TeamPicker: View {
     @ObservedObject var form: NewSessionForm
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text("Team")
-                .font(Ledger.font(12.5, .semibold))
-                .foregroundStyle(Ledger.ink2)
-            Picker("Team", selection: $form.team) {
-                ForEach(form.teams) { team in
-                    Text(team.name).tag(Optional(team.name)).disabled(!team.usable)
+        FieldMenu(title: form.team ?? "No Teams yet") {
+            ForEach(form.teams) { team in
+                Button(team.name) { form.team = team.name }.disabled(!team.usable)
+            }
+        }
+        .disabled(form.teams.isEmpty)
+    }
+}
+
+/// A menu drawn as Foundry's field: the choice in a 38 pt box in a 1 pt rule, with a chevron.
+struct FieldMenu<Items: View>: View {
+    let title: String
+    @ViewBuilder var items: () -> Items
+
+    var body: some View {
+        Menu {
+            items()
+        } label: {
+            HStack(spacing: 8) {
+                Text(title).font(Ledger.font(14)).foregroundStyle(Ledger.ink).lineLimit(1)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold)).foregroundStyle(Ledger.ink3)
+            }
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38)
+            .background(Ledger.field)
+            .overlay(Rectangle().strokeBorder(Ledger.ink3, lineWidth: Ledger.hairline))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+    }
+}
+
+/// A step's label in a modal: "01 / Mode", the number in ink and the rest muted, then a quiet note.
+struct StepLabel: View {
+    let number: Int
+    let title: String
+    var note: String?
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text(String(format: "%02d", number)).foregroundStyle(Ledger.ink)
+            Text(" / \(title)")
+            if let note {
+                Text(" " + note).font(Ledger.font(11)).tracking(0).textCase(nil)
+            }
+        }
+        .font(Ledger.monoFont(11, .bold))
+        .tracking(1.1)
+        .textCase(.uppercase)
+        .foregroundStyle(Ledger.ink3)
+        .lineLimit(1)
+        .fixedSize()
+    }
+}
+
+/// The dimmed window behind a modal; a click on it closes the modal.
+struct ModalBackdrop: View {
+    let close: () -> Void
+
+    var body: some View {
+        Ledger.markerInk.opacity(0.38)
+            .ignoresSafeArea()
+            .onTapGesture(perform: close)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A modal's head: a mono label, the title in the display face, a line under it, and a close box,
+/// over a 2 pt ink rule.
+struct ModalHead: View {
+    let label: String
+    let title: String
+    var detail: String?
+    let close: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                MonoLabel(label)
+                Text(title)
+                    .font(Ledger.display(34))
+                    .textCase(.uppercase)
+                    .accessibilityAddTraits(.isHeader)
+                if let detail {
+                    Text(detail).font(Ledger.font(14)).foregroundStyle(Ledger.ink3)
                 }
             }
-            .labelsHidden()
-            .fixedSize()
-            .disabled(form.teams.isEmpty)
+            Spacer(minLength: 8)
+            Button(action: close) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Ledger.ink3)
+                    .frame(width: 28, height: 28)
+                    .overlay(Rectangle().strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel")
         }
+        .padding(.horizontal, 24)
+        .padding(.top, 22)
+        .padding(.bottom, 16)
+        .overlay(alignment: .bottom) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
+    }
+}
+
+extension View {
+    /// Foundry's raised sheet (ui-ux/0113, ui-ux/0119): the sheet in a 2 pt ink frame casting a hard ink block
+    /// down and right, never a blur.
+    func foundryModal(offset: CGFloat = 8) -> some View {
+        background(Ledger.paper)
+            .overlay(Rectangle().strokeBorder(Ledger.ink, lineWidth: Ledger.ruleStrong))
+            .background(Rectangle().fill(Ledger.cast).offset(x: offset, y: offset))
+            .accessibilityElement(children: .contain)
+            .accessibilityAddTraits(.isModal)
     }
 }
 
@@ -368,7 +466,8 @@ struct FieldLabel: View {
     }
 }
 
-/// One of the two ways to work, as a card you pick.
+/// One of the two ways to work, as a card you pick: a 1 pt rule, or picked a 2 pt ink frame casting
+/// the accent's hard offset.
 struct ModeCard: View {
     let kind: Agent.Kind
     let picked: Bool
@@ -379,23 +478,22 @@ struct ModeCard: View {
     var body: some View {
         Button(action: pick) {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
+                HStack(spacing: 10) {
                     AgentGlyph(kind: kind)
-                    Text(title).fontWeight(.medium)
-                    Spacer(minLength: 0)
-                    Image(systemName: picked ? "largecircle.fill.circle" : "circle")
-                        .foregroundStyle(picked ? Ledger.ink : Ledger.ink3)
+                    Text(title).font(Ledger.font(15, .bold))
                 }
                 Text(detail)
-                    .font(Ledger.font(12.5))
-                    .foregroundStyle(Ledger.ink2)
+                    .font(Ledger.font(13))
+                    .foregroundStyle(Ledger.ink3)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, minHeight: 84, alignment: .topLeading)
-            .background(picked ? Ledger.chosen : Ledger.wash,
-                        in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+            .foregroundStyle(Ledger.ink)
+            .padding(14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Ledger.paper)
+            .overlay(Rectangle().strokeBorder(picked ? Ledger.ink : Ledger.rule, lineWidth: picked ? Ledger.ruleStrong : Ledger.hairline))
+            .background { if picked { Rectangle().fill(Ledger.accent).offset(x: 4, y: 4) } }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -403,6 +501,8 @@ struct ModeCard: View {
     }
 }
 
+/// A repo to start in: its name and what runs there, a 40 pt row between 1 pt rules; picked, the
+/// sunk fill with the accent's edge.
 struct RepoChoice: View {
     let repo: String
     let status: String?
@@ -413,30 +513,23 @@ struct RepoChoice: View {
         let info = SessionInfo(repo: repo, live: false)
         Button(action: pick) {
             HStack(spacing: 10) {
-                Image(systemName: picked ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(picked ? Ledger.ink : Ledger.ink3)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(info.name).fontWeight(.medium)
-                    Text(info.shortPath)
-                        .font(Ledger.mono)
-                        .foregroundStyle(Ledger.ink2)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
+                Image(systemName: "folder").font(.system(size: 13, weight: .medium)).frame(width: 18)
+                Text(info.name).font(Ledger.font(14, picked ? .bold : .regular)).lineLimit(1)
                 Spacer(minLength: 8)
                 if let status {
-                    Text(status)
-                        .font(Ledger.font(12))
-                        .foregroundStyle(Ledger.ink2)
+                    Text(status).font(Ledger.monoFont(11)).foregroundStyle(Ledger.ink3)
                 }
             }
+            .foregroundStyle(Ledger.ink)
             .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(picked ? Ledger.chosen : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            .background(picked ? Ledger.selected : Color.clear)
+            .overlay(alignment: .leading) { if picked { Rectangle().fill(Ledger.accent).frame(width: 3) } }
+            .overlay(alignment: .bottom) { Rule() }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(info.shortPath)
         .accessibilityAddTraits(picked ? .isSelected : [])
     }
 }
@@ -450,17 +543,10 @@ struct RenameModal: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.28)
-                .ignoresSafeArea()
-                .onTapGesture(perform: close)
-                .accessibilityHidden(true)
+            ModalBackdrop(close: close)
             VStack(alignment: .leading, spacing: 0) {
-                Text("Rename \(agent.isOrchestrator ? "Orchestrator" : "session")")
-                    .font(Ledger.font(18, .semibold))
-                    .accessibilityAddTraits(.isHeader)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 20)
-                    .padding(.bottom, 12)
+                ModalHead(label: agent.displayName, title: "Rename \(agent.isOrchestrator ? "Orchestrator" : "session")", close: close)
+                    .padding(.bottom, 18)
                 TextField(agent.displayName, text: $draft.text)
                     .textFieldStyle(.plain)
                     .ledgerField()
@@ -482,11 +568,7 @@ struct RenameModal: View {
                 .padding(.bottom, 20)
             }
             .frame(width: 420)
-            .background(Ledger.paper, in: RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous))
-            // A hairline, not a shadow, sets it apart from the dimmed window.
-            .overlay(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous).strokeBorder(Ledger.rule))
-            .accessibilityElement(children: .contain)
-            .accessibilityAddTraits(.isModal)
+            .foundryModal()
         }
         .onAppear {
             if draft.text.isEmpty { draft.text = agent.name ?? "" }

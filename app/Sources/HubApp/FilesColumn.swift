@@ -49,10 +49,9 @@ private struct FilesTree: View {
                 .font(Ledger.font(12))
                 .foregroundStyle(Ledger.ink3)
                 .lineLimit(1)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Ledger.band, in: Rectangle())
         }
     }
 
@@ -108,53 +107,34 @@ private struct FilesTree: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
             if let branch = files.branch {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.triangle.branch").font(Ledger.font(10.5))
-                    Text(branch).font(Ledger.monoFont(12)).lineLimit(1).truncationMode(.middle)
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.branch").font(.system(size: 12, weight: .semibold))
+                    Text(branch).font(Ledger.monoFont(12, .bold)).lineLimit(1).truncationMode(.middle)
                 }
-                .foregroundStyle(Ledger.ink2)
+                .foregroundStyle(Ledger.ink)
                 .help(root)
             }
             Spacer(minLength: 4)
             if model.filesTab == .files {
-                Button { model.showIgnoredFiles.toggle() } label: {
-                    Image(systemName: model.showIgnoredFiles ? "eye.fill" : "eye")
-                        .frame(width: 24, height: 24)
-                        .contentShape(Rectangle())
+                ColumnIcon(symbol: model.showIgnoredFiles ? "eye.fill" : "eye", on: model.showIgnoredFiles,
+                           label: model.showIgnoredFiles ? "Hide ignored files" : "Show ignored files") {
+                    model.showIgnoredFiles.toggle()
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(model.showIgnoredFiles ? Ledger.ink : Ledger.ink2)
-                .help(model.showIgnoredFiles ? "Hide ignored files" : "Show ignored files")
-                .accessibilityLabel(model.showIgnoredFiles ? "Hide ignored files" : "Show ignored files")
             }
-            Button { model.toggleSide() } label: {
-                Image(systemName: "terminal")
-                    .font(Ledger.font(12))
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
+            ColumnIcon(symbol: "terminal", on: model.sideShown, label: "Terminal", help: "Terminal in this folder (⌃`)") {
+                model.toggleSide()
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(model.sideShown ? Ledger.ink : Ledger.ink2)
-            .help("Terminal in this folder (⌃`)")
-            .accessibilityLabel("Terminal")
-            Button { model.hideFiles() } label: {
-                Image(systemName: "xmark")
-                    .font(Ledger.font(11, .semibold))
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
+            ColumnIcon(symbol: "xmark", on: false, label: "Hide Files", help: "Hide Files (⇧⌘E)", size: 11) {
+                model.hideFiles()
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(Ledger.ink2)
-            .help("Hide Files (⇧⌘E)")
-            .accessibilityLabel("Hide Files")
         }
-        .font(Ledger.font(13))
         .padding(.leading, 14)
-        .padding(.trailing, 8)
-        .padding(.vertical, 8)
+        .padding(.trailing, 6)
+        .frame(height: 40)
         .background(Ledger.band, in: Rectangle())
+        .overlay(alignment: .bottom) { Rule() }
     }
 
     private func mark(_ entry: FileEntry) -> RowMark? {
@@ -284,8 +264,8 @@ private struct FilesSearchField: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(Ledger.font(11.5)).foregroundStyle(Ledger.ink3)
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold)).foregroundStyle(Ledger.ink3)
             TextField("Search files and text", text: $query)
                 .textFieldStyle(.plain)
                 .focused($focused)
@@ -303,12 +283,12 @@ private struct FilesSearchField: View {
                 .accessibilityLabel("Clear search")
             }
         }
-        .font(Ledger.font(12.5))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(Ledger.field, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
+        .font(Ledger.font(13))
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .frame(height: 30)
+        .overlay(Rectangle().strokeBorder(focused ? Ledger.ink : Ledger.rule, lineWidth: Ledger.hairline))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 }
 
@@ -520,21 +500,25 @@ private struct FilesTabBar: View {
     let commits: Int?
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 0) {
             ForEach(FilesTab.allCases) { tab in
                 let picked = model.filesTab == tab
                 Button { model.filesTab = tab } label: {
-                    HStack(spacing: 5) {
+                    HStack(spacing: 6) {
                         Text(tab.title)
                         if let count = count(tab) {
-                            Text("\(count)").foregroundStyle(Ledger.ink3).monospacedDigit()
+                            Text("\(count)").monospacedDigit()
                         }
                     }
-                    .font(Ledger.font(12.5, picked ? .medium : .regular))
-                    .foregroundStyle(picked ? Ledger.ink : Ledger.ink2)
-                    .padding(.bottom, 7)
+                    .font(Ledger.monoFont(11, .bold))
+                    .tracking(0.9)
+                    .textCase(.uppercase)
+                    .foregroundStyle(picked ? Ledger.ink : Ledger.ink3)
+                    .padding(.horizontal, 10)
+                    .frame(height: 38)
+                    // Foundry's tab: the picked one stands on a 3 pt accent edge (ui-ux/0114).
                     .overlay(alignment: .bottom) {
-                        if picked { Rectangle().fill(Ledger.ink).frame(height: 2) }
+                        if picked { Rectangle().fill(Ledger.accent).frame(height: 3) }
                     }
                     .contentShape(Rectangle())
                 }
@@ -543,9 +527,8 @@ private struct FilesTabBar: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .background(Ledger.band, in: Rectangle())
-        .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: 1) }
+        .padding(.horizontal, 6)
+        .overlay(alignment: .bottom) { Rule() }
     }
 
     private func count(_ tab: FilesTab) -> Int? {
@@ -925,5 +908,31 @@ private struct ChangedFileRow: View {
         .help(file.path)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(picked ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// An icon action in a column's header: a 28 pt square, muted until hovered or on.
+struct ColumnIcon: View {
+    let symbol: String
+    let on: Bool
+    let label: String
+    var help: String?
+    var size: CGFloat = 13
+    let action: () -> Void
+    @StateObject private var hover = Flag()
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .background(hover.on ? Ledger.wash : .clear)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(on || hover.on ? Ledger.ink : Ledger.ink3)
+        .onHover { hover.on = $0 }
+        .help(help ?? label)
+        .accessibilityLabel(label)
     }
 }

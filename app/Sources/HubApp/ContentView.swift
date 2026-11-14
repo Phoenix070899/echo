@@ -39,6 +39,13 @@ struct ContentView: View {
         .tint(Ledger.run)
         .background(Ledger.desk)
         .ignoresSafeArea(.container, edges: .top)
+        .overlayPreferenceValue(NewSessionAnchor.self) { anchor in
+            GeometryReader { proxy in
+                if model.newSessionMenuShown, let anchor {
+                    NewSessionPopup(anchor: proxy[anchor])
+                }
+            }
+        }
         .overlay {
             ZStack {
                 if model.newSession != nil {
@@ -104,6 +111,7 @@ struct ContentView: View {
                 }
             }
             .padding(.horizontal, 12)
+            .padding(.top, 12)
             .padding(.bottom, 12)
         }
     }
@@ -127,25 +135,25 @@ struct TitleBar: View {
     var body: some View {
         // The search field sits between the two sides, so a long right side never covers it;
         // the spacers share the room, which keeps it centred while the sides are about even.
-        HStack(spacing: 18) {
-            HStack(spacing: 8) {
-                EchoMark().frame(width: 22, height: 22)
-                Text("Echo").font(Ledger.font(14, .semibold)).foregroundStyle(Ledger.ink)
+        HStack(spacing: 24) {
+            HStack(spacing: 10) {
+                EchoMark().frame(width: 25, height: 25, alignment: .topLeading)
+                Text("Echo").font(Ledger.display(22)).textCase(.uppercase).foregroundStyle(Ledger.ink)
             }
             .fixedSize()
             Spacer(minLength: 0)
             SearchField()
             Spacer(minLength: 0)
-            HStack(spacing: 18) {
+            HStack(spacing: 22) {
                 if model.sessions.isEmpty && !model.daemonDown {
                     // Before the first session there is nothing to count: say the daemon is up.
                     HStack(spacing: 8) {
-                        Circle().fill(Ledger.done).frame(width: 7, height: 7)
-                        Text("Echo daemon running").foregroundStyle(Ledger.ink2)
+                        Rectangle().fill(Ledger.done).frame(width: 7, height: 7)
+                        Text("Echo daemon running")
                     }
                 } else {
                     if model.runningCount > 0 {
-                        Text(workers(model.runningCount, "running")).foregroundStyle(Ledger.ink2)
+                        Text(workers(model.runningCount, "running")).foregroundStyle(Ledger.ink)
                     }
                     UsageInline(usage: model.usage)
                     if let stats = model.workerStats, stats.withTranscript > 0 {
@@ -153,17 +161,34 @@ struct TitleBar: View {
                     }
                 }
             }
+            .modifier(BarLabel())
             // The search field gives up room first.
             .fixedSize()
         }
         // Past the traffic lights, which full screen hides.
-        .padding(.leading, model.fullScreen ? 16 : 86)
-        .padding(.trailing, 16)
-        .font(Ledger.font(12.5))
-        .frame(height: Self.height)
+        .padding(.leading, model.fullScreen ? 20 : 86)
+        .padding(.trailing, 20)
+        .frame(height: Self.height - Ledger.ruleStrong)
+        // Foundry's bar ends on a 2 pt ink rule across the window (ui-ux/0110).
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong).offset(y: Ledger.ruleStrong)
+        }
+        .padding(.bottom, Ledger.ruleStrong)
     }
 
     static let height: CGFloat = 52
+}
+
+/// The title bar's readouts: JetBrains Mono capitals, muted unless a part says otherwise.
+struct BarLabel: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(Ledger.monoFont(11, .bold))
+            .tracking(1.1)
+            .textCase(.uppercase)
+            .foregroundStyle(Ledger.ink3)
+            .lineLimit(1)
+    }
 }
 
 /// What looks like a search field at the top of the window: it opens Quick open (⌘K).
@@ -174,23 +199,25 @@ struct SearchField: View {
     var body: some View {
         Button { model.quickOpenShown = true } label: {
             HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").font(Ledger.font(13, .semibold))
+                Image(systemName: "magnifyingglass").font(.system(size: 13, weight: .semibold))
                 Text("Search repos, agents, Workers and commands")
                 Spacer(minLength: 8)
                 Text("⌘K")
-                    .font(Ledger.font(11.5, .semibold))
-                    .foregroundStyle(Ledger.ink2)
+                    .font(Ledger.monoFont(11, .bold))
+                    .foregroundStyle(Ledger.ink3)
                     .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Ledger.strip, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
+                    .padding(.vertical, 1)
+                    .overlay(Rectangle().strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
             }
-            .font(Ledger.font(13.5))
-            .foregroundStyle(Ledger.ink2)
+            .font(Ledger.font(13))
+            .foregroundStyle(Ledger.ink3)
             .lineLimit(1)
-            .padding(.horizontal, 12)
-            .frame(minWidth: 220, maxWidth: 520, minHeight: 30, maxHeight: 30)
-            // Fill alone sets it apart, a shade darker on hover; no shadow.
-            .background(hovering.on ? Ledger.band : Ledger.pill, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+            .padding(.leading, 10)
+            .padding(.trailing, 6)
+            .frame(minWidth: 220, maxWidth: 460, minHeight: 32, maxHeight: 32)
+            // The sheet inside a 1 pt rule, a shade darker on hover; no shadow.
+            .background(hovering.on ? Ledger.wash : Ledger.paper)
+            .overlay(Rectangle().strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -204,66 +231,49 @@ struct SearchField: View {
 /// one line apiece (ui-ux/0084). A Worker that finished leaves it; one that needs you stays.
 struct LedgerTree: View {
     @EnvironmentObject private var model: AppModel
-    @StateObject private var stoppedOpen = Flag()
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
-                NewSessionMenu(row: true)
-                    .padding(.horizontal, 8)
-                    .padding(.top, 8)
-                Text("Sessions")
-                    .font(Ledger.font(12))
-                    .foregroundStyle(Ledger.ink3)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 14)
-                    .padding(.bottom, 4)
-                let tabs = model.tabSessions
-                if tabs.isEmpty {
-                    Hint("No repos yet. Start a session with +.")
-                }
-                ForEach(tabs) { session in
-                    RepoGroup(session: session)
-                }
-                let stopped = model.stoppedSessions
-                if !stopped.isEmpty {
-                    Button { stoppedOpen.on.toggle() } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "chevron.right")
-                                .font(Ledger.font(9, .semibold))
-                                .rotationEffect(.degrees(stoppedOpen.on ? 90 : 0))
-                                .frame(width: 16)
-                            Text("Stopped")
-                            Text("\(stopped.count)").monospacedDigit()
-                            Spacer()
+        VStack(alignment: .leading, spacing: 16) {
+            NewSessionMenu(row: true)
+                .padding(.trailing, 4)
+            VStack(alignment: .leading, spacing: 0) {
+                // Foundry's section label over a 2 pt ink rule (ui-ux/0111).
+                MonoLabel("Sessions")
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(alignment: .bottom) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
+                    .accessibilityAddTraits(.isHeader)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        let tabs = model.tabSessions
+                        if tabs.isEmpty {
+                            Hint("No repos yet. Start a session with New session.").padding(.top, 10)
                         }
-                        .font(Ledger.font(12, .medium))
-                        .foregroundStyle(Ledger.ink3)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.top, 8)
-                    if stoppedOpen.on {
-                        ForEach(stopped) { session in
-                            TreeRow(selected: false, indent: 0) {
-                                model.selectSession(session.repo)
-                            } label: {
-                                Image(systemName: "folder").font(Ledger.font(13)).foregroundStyle(Ledger.ink3).frame(width: 16)
-                                Text(session.name).foregroundStyle(Ledger.ink2).fadedEnd()
+                        ForEach(tabs) { session in
+                            RepoGroup(session: session)
+                        }
+                        if model.stoppedShown {
+                            ForEach(model.stoppedSessions) { session in
+                                TreeRow(selected: false, indent: 0) {
+                                    model.selectSession(session.repo)
+                                } label: {
+                                    Image(systemName: "folder").font(.system(size: 13)).foregroundStyle(Ledger.ink3).frame(width: 15)
+                                    Text(session.name).foregroundStyle(Ledger.ink2).fadedEnd()
+                                }
                             }
+                            .padding(.top, 8)
                         }
                     }
+                    .padding(.bottom, 12)
                 }
             }
-            .padding(.bottom, 12)
         }
     }
 }
 
-/// A line of the tree: a square fill when hovered, the sunk fill with an accent edge when picked,
-/// the same height everywhere.
+/// A line of the tree: 32 pt tall, a wash when hovered, the sunk fill when picked, square
+/// everywhere; a Worker's row says it is picked with its marker (ui-ux/0111).
 struct TreeRow<Label: View>: View {
     let selected: Bool
     /// 0 for a repo, 1 for an agent, 2 for a Worker.
@@ -274,25 +284,13 @@ struct TreeRow<Label: View>: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) { label() }
+            HStack(spacing: 10) { label() }
                 .font(Ledger.font(14))
-                .padding(.leading, 12 + CGFloat(indent) * 22)
-                .padding(.trailing, 12)
+                .padding(.leading, [10, 22, 30][min(indent, 2)])
+                .padding(.trailing, 10)
                 .frame(height: 32)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(selected ? Ledger.selected : hovering.on ? Ledger.wash : Color.clear)
-                .overlay(alignment: .leading) {
-                    // Beneath a repo or an agent, a spine runs through the row's children (ui-ux/0109).
-                    // It overhangs the row by the stack's 2 pt gap, so the line reads unbroken.
-                    if indent > 0 {
-                        Rectangle().fill(Ledger.rule).frame(width: 2, height: 34)
-                            .padding(.leading, CGFloat(indent) * 20 - 1)
-                    }
-                }
-                .overlay(alignment: .leading) {
-                    if selected { Rectangle().fill(Ledger.accent).frame(width: 3) }
-                }
-                .padding(.horizontal, 8)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -300,7 +298,7 @@ struct TreeRow<Label: View>: View {
     }
 }
 
-/// One repo: its header line, and under it an indent guide beside its agents.
+/// One repo: its header line, and its agents beneath.
 struct RepoGroup: View {
     @EnvironmentObject private var model: AppModel
     let session: SessionInfo
@@ -310,22 +308,27 @@ struct RepoGroup: View {
         let groups = snapshot.groups
         let needs = snapshot.needsYouCount
         let folded = model.collapsedRepos.contains(session.repo)
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 0) {
             TreeRow(selected: false, indent: 0) {
                 model.selectSession(session.repo)
             } label: {
-                Image(systemName: "folder").font(Ledger.font(13)).foregroundStyle(Ledger.ink3).frame(width: 16)
+                Image(systemName: "folder").font(.system(size: 13, weight: .medium)).foregroundStyle(Ledger.ink).frame(width: 15)
                 Text(session.name)
-                    .font(Ledger.font(14, .semibold))
+                    .font(Ledger.font(14, .bold))
                     .foregroundStyle(Ledger.ink)
                     .fadedEnd()
                 // Folded, the agents' own counts are hidden, so the repo shows their total (ui-ux/0095).
-                if folded && needs > 0 { NeedsBadge(count: needs) }
+                if folded {
+                    let running = model.activeCount(session.repo)
+                    if running > 0 {
+                        Text("\(running) running").font(Ledger.monoFont(11)).foregroundStyle(Ledger.ink3).fixedSize()
+                    }
+                    if needs > 0 { NeedsBadge(count: needs) }
+                }
                 if !groups.isEmpty {
                     Button { model.toggleRepoCollapsed(session.repo) } label: {
-                        Image(systemName: "chevron.right")
-                            .font(Ledger.font(9, .semibold))
-                            .rotationEffect(.degrees(folded ? 0 : 90))
+                        Image(systemName: folded ? "chevron.right" : "chevron.down")
+                            .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(Ledger.ink3)
                             .frame(width: 16, height: 16)
                             .contentShape(Rectangle())
@@ -336,130 +339,115 @@ struct RepoGroup: View {
             }
             .help("\(session.name): \(workers(model.activeCount(session.repo), "at work"))")
             if !groups.isEmpty && !folded {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
-                        AgentBranch(group: group, snapshot: snapshot, repo: session.repo, number: index + 1)
-                    }
+                ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                    AgentBranch(group: group, snapshot: snapshot, repo: session.repo, number: index + 1)
                 }
             }
         }
-        .padding(.bottom, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
     }
 }
 
-/// The amber count of what waits on the human.
+/// The count of what waits on the human: mono, on the accent's soft fill in a 2 pt accent frame.
 struct NeedsBadge: View {
     let count: Int
 
     var body: some View {
         Text("\(count)")
-            .font(Ledger.font(11, .semibold))
+            .font(Ledger.monoFont(11, .bold))
             .foregroundStyle(Ledger.markerInk)
             .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .background(Ledger.marker, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
+            .frame(minWidth: 20, minHeight: 20, maxHeight: 20)
+            .background(Ledger.marker)
+            .overlay(Rectangle().strokeBorder(Ledger.accent, lineWidth: 2))
+            .fixedSize()
     }
 }
 
-/// The + at the end of the tabs: an Orchestrator, or a Terminal (a plain shell in the repo).
+/// The sidebar's New session button, solid ink casting the accent's offset, or the bare +. Either
+/// opens Echo's own New session menu (ui-ux/0113).
 struct NewSessionMenu: View {
     @EnvironmentObject private var model: AppModel
-    /// The sidebar's "New session" row, as Claude's "New chat"; else the bare +.
+    /// The sidebar's full-width "New session" button; else the bare +.
     var row = false
 
     var body: some View {
-        Menu {
-            Button { model.showNewSession(repo: model.selectedRepo, kind: .orchestrator) } label: {
-                Text("Orchestrator")
-                Text("Hands Tasks to Workers and reports back")
-            }
-            Button { model.openTerminal() } label: {
-                Text("Terminal")
-                Text("A plain shell in the repo, in your multiplexer")
-            }
-            .disabled(model.selectedRepo == nil)
-            Divider()
-            Button { model.showFanOut() } label: {
-                Text("Fan Out a Task")
-                Text("Several Workers try it; you keep one")
-            }
-            .disabled(model.selectedRepo == nil)
-        } label: {
+        Button { model.newSessionMenuShown.toggle() } label: {
             if row {
                 HStack(spacing: 10) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Ledger.onPrimary)
-                        .frame(width: 22, height: 22)
-                        .background(Ledger.primary)
-                        .background(Rectangle().fill(Ledger.accent).offset(x: 2, y: 2))
-                    Text("New session").font(Ledger.monoFont(12, .bold)).tracking(0.8).textCase(.uppercase).foregroundStyle(Ledger.ink)
+                    Image(systemName: "plus").font(.system(size: 12, weight: .heavy))
+                    Text("New session")
                     Spacer(minLength: 0)
+                    Text("⌘N").opacity(0.7)
                 }
-                .padding(.leading, 6)
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                .font(Ledger.monoFont(11, .bold))
+                .tracking(0.9)
+                .textCase(.uppercase)
+                .foregroundStyle(Ledger.onPrimary)
+                .padding(.horizontal, 10)
+                .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32, alignment: .leading)
+                .background(Ledger.primary)
+                .background(Rectangle().fill(Ledger.accent).offset(x: 3, y: 3))
                 .contentShape(Rectangle())
             } else {
                 Image(systemName: "plus")
-                    .font(Ledger.font(12, .semibold))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Ledger.ink2)
                     .frame(width: 26, height: 26)
                     .contentShape(Rectangle())
             }
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize(horizontal: !row, vertical: false)
-        .foregroundStyle(Ledger.ink2)
+        .anchorPreference(key: NewSessionAnchor.self, value: .bounds) { $0 }
         .help("New session")
         .accessibilityLabel("New session")
     }
 }
 
-/// An agent's mark: three dots for an Orchestrator, a prompt for a Claude Code session, a framed
-/// prompt for a Terminal.
+/// Where the New session button sits, so the menu opens under it.
+struct NewSessionAnchor: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
+    }
+}
+
+/// An agent's mark, drawn square on a 24-unit grid as Foundry's icons are: four squares for an
+/// Orchestrator, a prompt for a Claude Code session, a framed prompt for a Terminal (ui-ux/0111).
 struct AgentGlyph: View {
     let kind: Agent.Kind
+    var size: CGFloat = 14
 
     var body: some View {
-        Group {
-            if kind == .orchestrator {
-                Canvas { context, size in
-                    let s = min(size.width, size.height) / 16
-                    for (x, y, r) in [(8.0, 8.0, 2.6), (8.0, 2.4, 1.4), (12.85, 10.8, 1.4), (3.15, 10.8, 1.4)] {
-                        let rect = CGRect(x: (x - r) * s, y: (y - r) * s, width: 2 * r * s, height: 2 * r * s)
-                        context.fill(Path(ellipseIn: rect), with: .foreground)
-                    }
+        Canvas { context, canvas in
+            let s = min(canvas.width, canvas.height) / 24
+            let line = StrokeStyle(lineWidth: (kind == .claude ? 2.2 : 2) * s, lineCap: .square)
+            switch kind {
+            case .orchestrator:
+                for (x, y) in [(4.0, 4.0), (14.0, 4.0), (4.0, 14.0), (14.0, 14.0)] {
+                    context.fill(Path(CGRect(x: x * s, y: y * s, width: 6 * s, height: 6 * s)), with: .foreground)
                 }
-            } else if kind == .terminal {
-                Canvas { context, size in
-                    let s = min(size.width, size.height) / 16
-                    let frame = CGRect(x: 1 * s, y: 2 * s, width: 14 * s, height: 12 * s)
-                    context.stroke(Path(roundedRect: frame, cornerRadius: 2.5 * s), with: .foreground, lineWidth: 1.4 * s)
-                    var chevron = Path()
-                    chevron.move(to: CGPoint(x: 4.2 * s, y: 5.8 * s))
-                    chevron.addLine(to: CGPoint(x: 6.6 * s, y: 8 * s))
-                    chevron.addLine(to: CGPoint(x: 4.2 * s, y: 10.2 * s))
-                    context.stroke(chevron, with: .foreground,
-                                   style: StrokeStyle(lineWidth: 1.4 * s, lineCap: .round, lineJoin: .round))
-                    let bar = CGRect(x: 8 * s, y: 9.5 * s, width: 3.6 * s, height: 1.4 * s)
-                    context.fill(Path(roundedRect: bar, cornerRadius: 0.7 * s), with: .foreground)
-                }
-            } else {
-                Canvas { context, size in
-                    let s = min(size.width, size.height) / 16
-                    var chevron = Path()
-                    chevron.move(to: CGPoint(x: 2.6 * s, y: 4.2 * s))
-                    chevron.addLine(to: CGPoint(x: 6.4 * s, y: 8 * s))
-                    chevron.addLine(to: CGPoint(x: 2.6 * s, y: 11.8 * s))
-                    context.stroke(chevron, with: .foreground,
-                                   style: StrokeStyle(lineWidth: 2 * s, lineCap: .round, lineJoin: .round))
-                    let bar = CGRect(x: 8.6 * s, y: 10 * s, width: 5 * s, height: 2 * s)
-                    context.fill(Path(roundedRect: bar, cornerRadius: s), with: .foreground)
-                }
+            case .terminal:
+                context.stroke(Path(CGRect(x: 3 * s, y: 4 * s, width: 18 * s, height: 16 * s)), with: .foreground, style: line)
+                var path = Path()
+                path.move(to: CGPoint(x: 7 * s, y: 9 * s))
+                path.addLine(to: CGPoint(x: 10 * s, y: 12 * s))
+                path.addLine(to: CGPoint(x: 7 * s, y: 15 * s))
+                path.move(to: CGPoint(x: 12 * s, y: 15 * s))
+                path.addLine(to: CGPoint(x: 17 * s, y: 15 * s))
+                context.stroke(path, with: .foreground, style: line)
+            default:
+                var path = Path()
+                path.move(to: CGPoint(x: 5 * s, y: 7 * s))
+                path.addLine(to: CGPoint(x: 10 * s, y: 12 * s))
+                path.addLine(to: CGPoint(x: 5 * s, y: 17 * s))
+                path.move(to: CGPoint(x: 12 * s, y: 18 * s))
+                path.addLine(to: CGPoint(x: 19 * s, y: 18 * s))
+                context.stroke(path, with: .foreground, style: line)
             }
         }
-        .frame(width: 13, height: 13)
+        .frame(width: size, height: size)
         .accessibilityLabel(kind == .orchestrator ? "Orchestrator" : kind == .terminal ? "Terminal" : "Claude Code session")
     }
 }
@@ -473,13 +461,25 @@ struct LedgerColumn: View {
         VStack(spacing: 0) {
             LedgerTree()
             Spacer(minLength: 0)
-            HStack {
-                LedgerToggle()
+            // The foot: the stopped repos' count, which shows or hides them, then the buttons.
+            HStack(spacing: 4) {
+                let stopped = model.stoppedSessions.count
+                if stopped > 0 {
+                    Button { model.stoppedShown.toggle() } label: {
+                        MonoLabel("Stopped \(stopped)", color: model.stoppedShown ? Ledger.ink : Ledger.ink3)
+                            .padding(.leading, 10)
+                            .frame(height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(model.stoppedShown ? "Hide the stopped repos" : "Show the stopped repos")
+                }
                 Spacer()
+                LedgerToggle()
                 SettingsButton()
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.top, 10)
+            .overlay(alignment: .top) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
@@ -493,9 +493,9 @@ struct LedgerToggle: View {
         let title = model.ledgerCollapsed ? "Expand ledger" : "Collapse ledger"
         Button { model.toggleLedger() } label: {
             Image(systemName: "sidebar.left")
-                .font(Ledger.font(14))
-                .foregroundStyle(Ledger.ink2)
-                .frame(width: 32, height: 28)
+                .font(.system(size: 14))
+                .foregroundStyle(Ledger.ink3)
+                .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -511,9 +511,9 @@ struct SettingsButton: View {
     var body: some View {
         Button { model.showSettings() } label: {
             Image(systemName: "gearshape")
-                .font(Ledger.font(14))
-                .foregroundStyle(Ledger.ink2)
-                .frame(width: 32, height: 28)
+                .font(.system(size: 14))
+                .foregroundStyle(Ledger.ink3)
+                .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -641,7 +641,7 @@ struct AgentBranch: View {
         }()
         let workers = visibleWorkers(group, in: snapshot, selected: selectedWorker)
         let folded = model.collapsed.contains(agent.id)
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 0) {
             AgentLine(group: group, repo: repo, number: number, folded: folded, hasChildren: !workers.isEmpty,
                       running: workers.filter(\.isActive).count)
             if !folded {
@@ -649,10 +649,8 @@ struct AgentBranch: View {
                     ConfirmationLine(text: confirmation.text)
                         .padding(.leading, 22)
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(workers) { worker in
-                        LedgerRow(worker: worker, repo: repo)
-                    }
+                ForEach(workers) { worker in
+                    LedgerRow(worker: worker, repo: repo)
                 }
             }
         }
@@ -678,23 +676,26 @@ struct AgentLine: View {
         TreeRow(selected: selected, indent: 1) {
             model.select(.agent(repo: repo, id: agent.id))
         } label: {
-            AgentGlyph(kind: agent.kind).foregroundStyle(agent.live ? Ledger.ink2 : Ledger.ink3)
+            AgentGlyph(kind: agent.kind).foregroundStyle(agent.live ? Ledger.ink : Ledger.ink3)
+            // Bold while it is picked or has Workers out or waiting; a quiet one reads regular.
             Text(agent.displayName)
+                .fontWeight(selected || running > 0 || !group.needs.isEmpty ? .semibold : .regular)
                 .italic(agent.name == nil && !agent.isTerminal)
                 .foregroundStyle(agent.live ? Ledger.ink : Ledger.ink3)
                 .fadedEnd()
             if folded && running > 0 {
-                Text("\(running)").font(Ledger.font(12)).monospacedDigit().foregroundStyle(Ledger.ink3)
+                Text("\(running)").font(Ledger.monoFont(11)).monospacedDigit().foregroundStyle(Ledger.ink3)
             }
             if !agent.live {
-                Circle().strokeBorder(Ledger.ink3, lineWidth: 1).frame(width: 7, height: 7)
+                // Stopped: a hollow small square.
+                Rectangle().strokeBorder(Ledger.ink3, lineWidth: 1.5).frame(width: 6, height: 6)
+                    .frame(width: 8, height: 8)
                     .accessibilityLabel("Stopped")
             }
             if hasChildren && (folded || hovering.on) {
                 Button { model.toggleCollapsed(agent.id) } label: {
-                    Image(systemName: "chevron.right")
-                        .font(Ledger.font(9, .semibold))
-                        .rotationEffect(.degrees(folded ? 0 : 90))
+                    Image(systemName: folded ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(Ledger.ink3)
                         .frame(width: 16, height: 16)
                         .contentShape(Rectangle())
@@ -748,8 +749,7 @@ struct MainPanel: View {
                     if let agent = model.agents(repo).first(where: { $0.id == id }) {
                         AgentPanel(repo: repo, agent: agent)
                     } else {
-                        ContentUnavailableView("That session is closed", systemImage: "questionmark.square.dashed",
-                                               description: Text("Pick another agent in the ledger."))
+                        EmptyNote(title: "That session is closed", detail: "Pick another agent in the ledger.")
                     }
                 case .worker(let repo, let id)?:
                     WorkerPanel(repo: repo, id: id)
@@ -785,28 +785,33 @@ struct AgentPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             PanelHeader {
-                AgentGlyph(kind: agent.kind).foregroundStyle(Ledger.ink3)
-                Text(agent.displayName).fontWeight(.medium).lineLimit(1)
-                Text(meta)
-                    .font(Ledger.font(12.5))
-                    .foregroundStyle(Ledger.ink3)
-                    .lineLimit(1)
+                // One compact row: the name in Foundry's display face, what it is in mono capitals,
+                // then Chat | Terminal and Stop (ui-ux/0115).
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(agent.displayName)
+                        .font(Ledger.display(20))
+                        .textCase(.uppercase)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    Text(meta)
+                        .font(Ledger.monoFont(10, .bold))
+                        .tracking(1)
+                        .textCase(.uppercase)
+                        .foregroundStyle(Ledger.ink3)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .layoutPriority(-1)
                 Spacer(minLength: 8)
                 if model.hasChat(agent) {
                     ChatTerminalSwitch(chat: model.showsChat(agent)) { model.toggleChat() }
                 }
                 if agent.isTerminal {
                 } else if agent.live {
-                    Button { model.stopAgent(agent.id) } label: {
-                        Image(systemName: "stop.circle")
-                            .font(Ledger.font(14))
-                            .foregroundStyle(Ledger.ink2)
-                            .frame(width: 26, height: 26)
-                            .contentShape(Rectangle())
+                    StopSquare(label: agent.isOrchestrator ? "Stop Orchestrator" : "End session",
+                               help: agent.isOrchestrator ? "Stop the Orchestrator. Its Workers keep running." : "End this Claude Code session. You can resume it.") {
+                        model.stopAgent(agent.id)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(agent.isOrchestrator ? "Stop Orchestrator" : "End session")
-                    .help(agent.isOrchestrator ? "Stop the Orchestrator. Its Workers keep running." : "End this Claude Code session. You can resume it.")
                 } else if agent.isOrchestrator {
                     Button("Start Orchestrator") { model.startAgent(agent.id) }
                         .buttonStyle(.ledgerPrimary)
@@ -835,15 +840,16 @@ struct AgentPanel: View {
         }
     }
 
+    /// "Orchestrator · zzshots · main · opus · Team claude-lean".
     private var meta: String {
         let name = URL(fileURLWithPath: repo).lastPathComponent
         // An Orchestrator on a Team takes its model from it, so "default model" would mislead.
-        let model = agent.model ?? (agent.team == nil ? "default model" : nil)
-        let place = (agent.head ?? agent.branch).map { "\(name) on \($0)" } ?? name
-        if agent.isTerminal { return "Shell in \(place)" }
-        if !agent.live { return "\(agent.isOrchestrator ? "Stopped" : "Exited"), a shell in \(place)" }
-        return ["\(agent.kindName) in \(place)", model, agent.team.map { "Team \($0)" }]
-            .compactMap { $0 }.joined(separator: ", ")
+        let model = agent.model.map(AgentLine.short) ?? (agent.team == nil ? "default model" : nil)
+        let place = [name, agent.head ?? agent.branch].compactMap { $0 }
+        if agent.isTerminal { return (["Shell"] + place).joined(separator: " · ") }
+        if !agent.live { return ([agent.isOrchestrator ? "Stopped" : "Exited", "a shell"] + place).joined(separator: " · ") }
+        return ([agent.kindName] + place + [model, agent.team.map { "Team \($0)" }].compactMap { $0 })
+            .joined(separator: " · ")
     }
 
     private var stoppedHelp: String {
@@ -861,12 +867,11 @@ struct ChatTerminalSwitch: View {
     let toggle: () -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             segment("Chat", on: chat)
             segment(other, on: !chat)
         }
-        .padding(2)
-        .background(Ledger.bubble)
+        .segmentTrack()
         .help("Switch between the chat and the \(other.lowercased()) (⇧⌘T)")
     }
 
@@ -982,17 +987,40 @@ struct TerminalBackdrop: View {
 
 // MARK: - Panels shared parts
 
-/// A panel's title row: what the terminal below is showing.
+/// A panel's title row: what the terminal below is showing, over a 2 pt ink rule.
 struct PanelHeader<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         // As tall as its buttons, so a header without any lines up with the rest.
-        HStack(spacing: 10) { content() }
-            .frame(minHeight: 26)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 11)
+        HStack(spacing: 16) { content() }
+            .frame(minHeight: 28)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .bottom) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
+    }
+}
+
+/// Stop, as Foundry draws it: a small solid square in a 24 pt 2 pt ink frame.
+struct StopSquare: View {
+    let label: String
+    let help: String
+    let action: () -> Void
+    @StateObject private var hover = Flag()
+
+    var body: some View {
+        Button(action: action) {
+            Rectangle().fill(Ledger.ink).frame(width: 8, height: 8)
+                .frame(width: 24, height: 24)
+                .background(hover.on ? Ledger.wash : .clear)
+                .overlay(Rectangle().strokeBorder(Ledger.ink, lineWidth: Ledger.ruleStrong))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover.on = $0 }
+        .accessibilityLabel(label)
+        .help(help)
     }
 }
 
@@ -1061,8 +1089,7 @@ struct WorkerPanel: View {
                 Text("Its terminal closes and the Orchestrator is told it ended without a Final Report.")
             }
         } else {
-            ContentUnavailableView("\(id) is gone", systemImage: "questionmark.square.dashed",
-                                   description: Text("Its row left the ledger. Pick another Worker or the Orchestrator."))
+            EmptyNote(title: "\(id) is gone", detail: "Its row left the ledger. Pick another Worker or the Orchestrator.")
         }
     }
 
@@ -1087,9 +1114,9 @@ struct WorkerHeader: View {
     @EnvironmentObject private var model: AppModel
 
     /// The header's choices: the chat and the terminal (or Final Report) are both its main view.
-    private enum Shown: Hashable { case chat, main, changes, compare }
+    fileprivate enum Shown: Hashable { case chat, main, changes, compare }
 
-    private var shown: Binding<Shown> {
+    fileprivate var shown: Binding<Shown> {
         Binding {
             switch view {
             case .main: chat ? .chat : .main
@@ -1107,7 +1134,7 @@ struct WorkerHeader: View {
         }
     }
 
-    private var shownOptions: [(value: Shown, title: String)] {
+    fileprivate var shownOptions: [(value: Shown, title: String)] {
         var options: [(value: Shown, title: String)] = []
         if worker.number != nil { options.append((.chat, "Chat")) }
         options.append((.main, worker.isActive && worker.live ? "Terminal" : "Final Report"))
@@ -1117,59 +1144,116 @@ struct WorkerHeader: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Text("\(worker.id) \(worker.profile)").fontWeight(.medium)
-                Text(worker.title).foregroundStyle(Ledger.ink2).lineLimit(1)
-                HStack(spacing: 6) {
-                    WorkerMark(worker: worker)
-                    // The title gives way first; the phase word never wraps (bugs/0076).
-                    Text(worker.phaseLabel).fixedSize()
-                }
-                .font(Ledger.font(12.5))
-                .foregroundStyle(worker.markColor)
-                .padding(.leading, 4)
-                Spacer(minLength: 8)
-                LedgerSegmented(selection: shown, options: shownOptions)
-                .help("⇧⌘T switches between the chat and the \(worker.isActive && worker.live ? "terminal" : "Final Report")")
-                if worker.isActive, worker.live {
-                    Button("Stop Worker") { confirmStop = true }.buttonStyle(.ledger)
-                }
-            }
-            Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 2) {
-                GridRow {
-                    Fact.label("Model")
-                    Fact.label(worker.branch == nil ? "Where" : "Worktree")
-                    Fact.label("Latest status")
-                    Fact.label("Quiet for")
-                }
-                GridRow {
-                    Fact.value(worker.modelLine ?? "From its profile")
-                    Fact.value(worker.branch ?? worker.place, mono: worker.branch != nil)
-                    Fact.value(worker.progress ?? "None sent yet")
-                    TimelineView(.periodic(from: .now, by: 5)) { context in
-                        Fact.value(formatAge(worker.quietFor(at: context.date)))
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                // Who and how it stands, then the views; the title takes the full width under them,
+                // since the panel sits between the ledger and Files (ui-ux/0116).
+                // In a narrow panel the views drop under who it is, rather than push the header wider.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        who
+                        Spacer(minLength: 8)
+                        views
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        who
+                        views
                     }
                 }
+                Text(worker.title)
+                    .font(Ledger.display(40))
+                    .textCase(.uppercase)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
+            HStack(alignment: .top, spacing: 32) {
+                Fact(label: "Model", value: worker.modelLine ?? "From its profile")
+                Fact(label: worker.branch == nil ? "Where" : "Worktree", value: worker.branch ?? worker.place, mono: worker.branch != nil)
+                Fact(label: "Latest status", value: worker.progress ?? "None sent yet")
+                TimelineView(.periodic(from: .now, by: 5)) { context in
+                    Fact(label: "Quiet for", value: formatAge(worker.quietFor(at: context.date)))
+                }
+            }
+            .overlay(alignment: .top) { Rule() }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 40)
+        .padding(.top, 24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Ledger.band, in: Rectangle())
+        .background(Ledger.paper, in: Rectangle())
+        .overlay(alignment: .bottom) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
     }
 }
 
-enum Fact {
-    static func label(_ text: String) -> some View {
-        Text(text).font(Ledger.font(11.5)).foregroundStyle(Ledger.ink3)
+extension WorkerHeader {
+    private var who: some View {
+        HStack(spacing: 12) {
+            MonoLabel("\(worker.id) · \(worker.profile)").lineLimit(1).fixedSize()
+            PhaseBadge(worker: worker)
+        }
     }
 
-    static func value(_ text: String, mono: Bool = false) -> some View {
-        Text(text)
-            .font(mono ? Ledger.monoFont(12) : .system(size: 12.5))
-            .lineLimit(1)
-            .truncationMode(.middle)
+    private var views: some View {
+        HStack(spacing: 12) {
+            LedgerSegmented(selection: shown, options: shownOptions, large: true)
+                .help("⇧⌘T switches between the chat and the \(worker.isActive && worker.live ? "terminal" : "Final Report")")
+            if worker.isActive, worker.live {
+                Button("Stop Worker") { confirmStop = true }.buttonStyle(LedgerButtonStyle(height: 34))
+            }
+        }
+    }
+}
+
+/// One of a Worker's facts: a mono label over its value, in an equal column.
+struct Fact: View {
+    let label: String
+    let value: String
+    var mono = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            MonoLabel(label).lineLimit(1)
+            Text(value)
+                .font(mono ? Ledger.monoFont(13, .semibold) : Ledger.font(14, .semibold))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A Worker's phase as Foundry's badge: ink when done, the accent's soft fill when it needs you,
+/// red when it went wrong, a dashed muted frame when it ended, an ink frame while it works.
+struct PhaseBadge: View {
+    let worker: WorkerRow
+
+    var body: some View {
+        let needs = worker.isActive && worker.state == .needsYou
+        let wrong = !worker.isActive && worker.isTrouble
+        let ended = !worker.isActive && !wrong && worker.phase == "ended"
+        let done = !worker.isActive && !wrong && !ended
+        HStack(spacing: 6) {
+            if worker.isActive && !needs {
+                Spinner(color: Ledger.run, size: 9, period: worker.state == .waiting ? 2.4 : 1)
+            }
+            Text(worker.phaseLabel)
+        }
+        .font(Ledger.monoFont(11, .bold))
+        .tracking(0.9)
+        .textCase(.uppercase)
+        .fixedSize()
+        .foregroundStyle(done || wrong ? Ledger.desk : needs ? Ledger.markerInk : ended ? Ledger.ink3 : Ledger.ink)
+        .padding(.horizontal, 8)
+        .frame(height: 24)
+        .background(done ? Ledger.ink : wrong ? Ledger.fail : needs ? Ledger.marker : .clear)
+        .overlay {
+            if ended {
+                Rectangle().strokeBorder(Ledger.ink3, style: StrokeStyle(lineWidth: 2, dash: [4, 2]))
+            } else {
+                Rectangle().strokeBorder(needs ? Ledger.accent : wrong ? Ledger.fail : Ledger.ink, lineWidth: 2)
+            }
+        }
     }
 }
 
@@ -1180,38 +1264,36 @@ struct FinalReportView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 30) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(worker.finalReport == nil ? "No Final Report" : "Final Report")
-                        .font(Ledger.font(30, .bold))
-                    Spacer(minLength: 8)
-                    if let report = worker.finalReport {
-                        Button("Copy report") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(report, forType: .string)
-                        }
-                        .buttonStyle(.ledger)
-                    }
-                }
+            VStack(alignment: .leading, spacing: 32) {
+                MonoLabel(worker.finalReport == nil ? "No Final Report" : "Final Report")
+                    .accessibilityAddTraits(.isHeader)
                 if let report = worker.finalReport {
-                    ForEach(Array(ReportSection.parse(report).enumerated()), id: \.offset) { _, section in
+                    let sections = ReportSection.parse(report)
+                    ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
                         VStack(alignment: .leading, spacing: 12) {
                             if let title = section.title {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text(title).font(Ledger.font(19, .semibold))
-                                    Rectangle().fill(Ledger.rule).frame(height: 1)
-                                }
+                                // Foundry's numbered section head over a 2 pt ink rule (ui-ux/0116).
+                                MonoLabel(String(format: "%02d / %@", index + (sections.first?.title == nil ? 0 : 1), title))
+                                    .padding(.top, 14)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .overlay(alignment: .top) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
+                                    .accessibilityAddTraits(.isHeader)
                             }
                             let blocks = parseMarkdown(section.body)
                             VStack(alignment: .leading, spacing: 0) {
                                 ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                                    MarkdownBlockView(block: block, leading: 7, codeSize: 13.5)
+                                    MarkdownBlockView(block: block, leading: 7, codeSize: 13)
                                         .padding(.top, index == 0 ? 0 : Self.gap(blocks[index - 1], block))
                                 }
                             }
                             .foregroundStyle(section.title == "State" && worker.isTrouble ? Ledger.fail : Ledger.ink)
                         }
                     }
+                    Button("Copy report") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(report, forType: .string)
+                    }
+                    .buttonStyle(LedgerButtonStyle(height: 36))
                 } else {
                     Text("\(worker.id) \(worker.phaseLabel.lowercased()) without sending one. The Orchestrator has been told.")
                         .lineSpacing(7)
@@ -1219,6 +1301,7 @@ struct FinalReportView: View {
                 }
             }
             .font(Ledger.font(15))
+            .lineSpacing(5)
             .foregroundStyle(Ledger.ink)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
@@ -1276,15 +1359,18 @@ struct LedgerRow: View {
         TreeRow(selected: selected, indent: 2) {
             model.select(.worker(repo: repo, id: worker.id))
         } label: {
+            // A small square starts the row, under the agent's mark: the accent when picked, grey
+            // otherwise; the title lines up with the agent's (ui-ux/0111).
+            Rectangle().fill(selected ? Ledger.accent : Ledger.rule).frame(width: 6, height: 6)
             Text(worker.title)
-                .fontWeight(worker.state == .needsYou && worker.isActive ? .medium : .regular)
+                .fontWeight(worker.state == .needsYou && worker.isActive ? .semibold : .regular)
                 .foregroundStyle(selected || worker.state == .needsYou && worker.isActive ? Ledger.ink : Ledger.ink2)
                 .fadedEnd()
             // How long since it last reported, then its state; the minute ticks without a new snapshot.
             TimelineView(.everyMinute) { context in
                 let quiet = worker.quietFor(at: context.date)
                 Text(quiet < 60 ? "now" : formatAge(quiet))
-                    .font(Ledger.font(12))
+                    .font(Ledger.monoFont(11))
                     .monospacedDigit()
                     .foregroundStyle(Ledger.ink3)
                     .lineLimit(1)
@@ -1349,22 +1435,24 @@ struct StatsInline: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            HStack(spacing: 4) {
-                Text("Worker start").foregroundStyle(Ledger.ink2)
-                Text(tokenCount(stats.startContext)).fontWeight(.medium).monospacedDigit().foregroundStyle(Ledger.ink)
+            HStack(spacing: 6) {
+                Text("Worker start")
+                Text(tokenCount(stats.startContext)).monospacedDigit().foregroundStyle(Ledger.ink)
             }
             .help("The median context a Worker starts with over the last 7 days; every turn re-reads it")
             Button { shown.on.toggle() } label: {
-                Image(systemName: "ellipsis")
-                    .font(Ledger.font(12, .semibold))
-                    .foregroundStyle(Ledger.ink2)
-                    .frame(width: 24, height: 22)
-                    .background(shown.on ? Ledger.fill : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
-                    .contentShape(Rectangle())
+                // Three squares, Foundry's "more" (ui-ux/0110).
+                HStack(spacing: 4.5) {
+                    ForEach(0..<3, id: \.self) { _ in Rectangle().frame(width: 3, height: 3) }
+                }
+                .foregroundStyle(shown.on ? Ledger.ink : Ledger.ink3)
+                .frame(width: 28, height: 28)
+                .background(shown.on ? Ledger.wash : Color.clear)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Worker statistics")
-            .accessibilityLabel("Worker statistics")
+            .help("Workers, last 7 days")
+            .accessibilityLabel("Workers, last 7 days")
             .popover(isPresented: $shown.on, arrowEdge: .bottom) { StatsReport(stats: stats) }
         }
     }
@@ -1375,13 +1463,20 @@ struct StatsReport: View {
     let stats: WorkerStats
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Workers, last 7 days").font(Ledger.font(14, .semibold)).foregroundStyle(Ledger.ink)
+        VStack(alignment: .leading, spacing: 18) {
+            // Foundry's head: a mono label, the title in the display face (ui-ux/0110).
+            VStack(alignment: .leading, spacing: 6) {
+                MonoLabel("Worker statistics")
+                Text("Workers, last 7 days")
+                    .font(Ledger.display(26))
+                    .textCase(.uppercase)
+                    .foregroundStyle(Ledger.ink)
+                    .accessibilityAddTraits(.isHeader)
                 Text("\(stats.withTranscript) Workers, \(stats.turns) turns")
+                    .font(Ledger.monoFont(12))
                     .foregroundStyle(Ledger.ink3)
             }
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+            VStack(spacing: 0) {
                 row("Start context", "\(tokenCount(stats.startContext)), re-read on every turn")
                 row("Context per turn", tokenCount(stats.contextPerTurn))
                 row("Token cost", "cache reads \(percent(stats.share.cacheReads)), cache writes \(percent(stats.share.cacheWrites)), output \(percent(stats.share.output))")
@@ -1389,48 +1484,60 @@ struct StatsReport: View {
                 row("Per Worker", "\(number(stats.perWorker.reads)) Reads, \(number(stats.perWorker.shellReads)) cat, head, or sed, \(number(stats.perWorker.searches)) searches")
                 row("Repeated reads", "\(percent(stats.repeatReads)) of Reads")
             }
-            Rectangle().fill(Ledger.rule).frame(height: 1)
-            Grid(alignment: .trailing, horizontalSpacing: 16, verticalSpacing: 6) {
+            .overlay(alignment: .top) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
+            // The profiles as a ruled table: mono figures that line up in their columns.
+            Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 0) {
                 GridRow {
-                    Text("Profile").gridColumnAlignment(.leading)
-                    Text("Workers")
-                    Text("Turns each")
-                    Text("Start")
-                    Text("Per turn")
-                    Text("Cost")
+                    MonoLabel("Profile").gridColumnAlignment(.leading)
+                    MonoLabel("Workers")
+                    MonoLabel("Turns")
+                    MonoLabel("Start")
+                    MonoLabel("Per turn")
+                    MonoLabel("Cost")
                 }
-                .font(Ledger.font(12, .semibold))
-                .foregroundStyle(Ledger.ink3)
+                .padding(.vertical, 8)
+                Rectangle().fill(Ledger.ink).frame(height: Ledger.hairline).gridCellUnsizedAxes(.horizontal)
                 ForEach(stats.profiles) { p in
                     GridRow {
-                        Text(p.profile).foregroundStyle(Ledger.ink)
+                        Text(p.profile).font(Ledger.font(13, .semibold)).foregroundStyle(Ledger.ink)
                         Text("\(p.workers)")
                         Text("\(p.turnsPerWorker)")
                         Text(tokenCount(p.startContext))
                         Text(tokenCount(p.contextPerTurn))
                         Text(percent(p.share))
                     }
+                    .font(Ledger.monoFont(12))
                     .monospacedDigit()
-                    .foregroundStyle(Ledger.ink2)
+                    .foregroundStyle(Ledger.ink)
+                    .padding(.vertical, 7)
+                    Rule().gridCellUnsizedAxes(.horizontal)
                 }
             }
+            .overlay(alignment: .top) { Rule() }
             Text("From Claude Code transcripts; Codex and Kiro Workers are not counted. Token cost weighs a cache read 0.1, a write 1.25 to 2, and output 5 against fresh input.")
-                .font(Ledger.font(11.5))
+                .font(Ledger.font(12))
                 .foregroundStyle(Ledger.ink3)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .font(Ledger.font(12.5))
-        .padding(16)
-        .frame(width: 460)
+        .padding(20)
+        .frame(width: 480)
         .background(Ledger.paper)
         .textSelection(.enabled)
     }
 
+    /// A fact of the week: its mono label, then its value, between 1 pt rules.
     private func row(_ label: String, _ value: String) -> some View {
-        GridRow {
-            Text(label).foregroundStyle(Ledger.ink3)
-            Text(value).foregroundStyle(Ledger.ink).fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            MonoLabel(label).frame(width: 140, alignment: .leading)
+            Text(value)
+                .font(Ledger.font(13))
+                .foregroundStyle(Ledger.ink)
+                .monospacedDigit()
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) { Rule() }
     }
 
     private func percent(_ value: Double) -> String { "\(Int(value.rounded()))%" }
@@ -1448,13 +1555,12 @@ struct UsageInline: View {
 
     var body: some View {
         Button { model.refreshUsage() } label: {
-            HStack(spacing: 14) {
+            HStack(spacing: 22) {
                 if usage == nil || usage?.refreshing == true { Spinner(size: 10) }
                 if let usage {
                     // Claude's error stands in for its limits only; Kiro's entry shows beside it.
                     if !usage.hasClaudeLimits, usage.error != nil {
                         Text(usage.shown.isEmpty ? "Usage unavailable" : "Claude usage unavailable")
-                            .foregroundStyle(Ledger.ink3)
                     }
                     ForEach(usage.shown) { limit in
                         UsageItem(limit: limit)
@@ -1481,16 +1587,15 @@ private struct UsageItem: View {
     let limit: Usage.Limit
 
     var body: some View {
-        HStack(spacing: 4) {
-            Text(limit.name).foregroundStyle(Ledger.ink2)
+        HStack(spacing: 6) {
+            Text(limit.name)
             Text("\(limit.percent)%")
-                .fontWeight(.medium)
                 .monospacedDigit()
                 .foregroundStyle(limit.percent >= 90 ? Ledger.fail : Ledger.ink)
             // Counts down between snapshots, which repeat an unchanged `resets`.
             TimelineView(.everyMinute) { context in
                 if let left = limit.resetsIn(now: context.date) {
-                    Text(left).monospacedDigit().foregroundStyle(Ledger.ink3)
+                    Text(left).monospacedDigit()
                 }
             }
         }
@@ -1592,7 +1697,7 @@ struct ColumnResizer: View {
             .frame(width: 12)
             .frame(maxHeight: .infinity)
             .overlay {
-                Capsule()
+                Rectangle()
                     .fill(Ledger.rule)
                     .frame(width: 3, height: 36)
                     .opacity(hover.on || drag.width != nil ? 1 : 0)

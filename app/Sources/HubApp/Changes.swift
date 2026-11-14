@@ -18,11 +18,17 @@ struct ChangesView: View {
     var body: some View {
         VStack(spacing: 0) {
             summary
-            Divider().overlay(Ledger.rule)
+            Rule()
+            // The diff is a sheet in a 1 pt rule on the desk (ui-ux/0116).
             content
-            Divider().overlay(Ledger.rule)
+                .overlay(Rectangle().strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
             reviewBar
+                .overlay(alignment: .top) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
+                .padding(.top, 16)
         }
+        .background(Ledger.desk)
         .task(id: worker.id) { await load() }
     }
 
@@ -30,26 +36,29 @@ struct ChangesView: View {
         let files = state.files
         let added = files.reduce(0) { $0 + $1.additions }
         let removed = files.reduce(0) { $0 + $1.deletions }
-        return HStack(spacing: 10) {
+        return HStack(spacing: 16) {
+            MonoLabel("Changes", color: Ledger.ink)
             if state.loaded {
-                Text("\(files.count) file\(files.count == 1 ? "" : "s") changed")
-                    .fontWeight(.medium)
-                Text("+\(added)").foregroundStyle(Ledger.okInk)
-                Text("-\(removed)").foregroundStyle(Ledger.failInk)
+                HStack(spacing: 6) {
+                    Text("\(files.count) file\(files.count == 1 ? "" : "s") changed")
+                    Text("+\(added)").foregroundStyle(Ledger.done)
+                    Text("−\(removed)").foregroundStyle(Ledger.fail)
+                }
+                .font(Ledger.monoFont(12))
+                .fixedSize()
                 Text(worker.branch.map { "on \($0), since it branched" } ?? "uncommitted in the repo, yours included")
+                    .font(Ledger.font(13))
                     .foregroundStyle(Ledger.ink3)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             if state.loading { Spinner(size: 12) }
             Button("Refresh") { Task { await load() } }
-                .buttonStyle(.ledger)
+                .buttonStyle(.ledgerLink)
                 .disabled(state.loading)
         }
-        .font(Ledger.font(12.5))
-        .padding(.horizontal, 18)
-        .padding(.vertical, 8)
-        .background(Ledger.paper)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
     }
 
     @ViewBuilder
@@ -152,7 +161,7 @@ struct ChangesView: View {
             }
             .id(ref)
             ForEach(Array(comments.enumerated()).filter { $0.element.path == file.path && $0.element.line == line }, id: \.offset) { position, comment in
-                CommentCard(text: comment.text) {
+                CommentCard(text: comment.text, label: "Your note · line \((line.new ?? line.old).map(String.init) ?? "")") {
                     state.draft = comment.text
                     model.reviews[key]?.remove(at: position)
                     state.editing = ref
@@ -174,16 +183,17 @@ struct ChangesView: View {
 
     private var reviewBar: some View {
         let live = worker.isActive && worker.live
-        return HStack(spacing: 10) {
+        return HStack(spacing: 12) {
             if let sent = state.sent, comments.isEmpty {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(Ledger.done)
-                Text(sent)
+                SquareGlyph(symbol: "checkmark", fill: Ledger.done, size: 14)
+                Text(sent).font(Ledger.font(13))
             } else if comments.isEmpty {
                 Text("Click a line, or pick one with ↑ ↓ and press Return, to comment on it. Comments go to \(live ? "\(worker.id) or " : "")the Orchestrator as one review.")
+                    .font(Ledger.font(13))
                     .foregroundStyle(Ledger.ink3)
                     .lineLimit(1)
             } else {
-                Text("\(comments.count) comment\(comments.count == 1 ? "" : "s")").fontWeight(.medium)
+                MonoLabel("\(comments.count) comment\(comments.count == 1 ? "" : "s")", color: Ledger.ink)
                 Button("Discard") { model.reviews[key] = nil }
                     .buttonStyle(.ledgerLink)
             }
@@ -191,25 +201,23 @@ struct ChangesView: View {
             if !comments.isEmpty {
                 if live {
                     Button("Send to the Orchestrator") { send(toWorker: false) }
-                        .buttonStyle(.ledger)
+                        .buttonStyle(LedgerButtonStyle(height: 36))
                         .help("The Orchestrator decides what happens next, like resuming \(worker.id) or starting a new Task.")
                     Button("Send to \(worker.id)") { send(toWorker: true) }
-                        .buttonStyle(.ledgerPrimary)
+                        .buttonStyle(LedgerButtonStyle(primary: true, height: 36))
                         .keyboardShortcut(sendShortcut)
                         .help("Typed into \(worker.id)'s terminal; the Orchestrator is told too. ⇧⌘Return")
                 } else {
                     Button("Send to the Orchestrator") { send(toWorker: false) }
-                        .buttonStyle(.ledgerPrimary)
+                        .buttonStyle(LedgerButtonStyle(primary: true, height: 36))
                         .keyboardShortcut(sendShortcut)
                         .help("The Orchestrator decides what happens next, like resuming \(worker.id) or starting a new Task. ⇧⌘Return")
                 }
             }
         }
-        .font(Ledger.font(12.5))
-        .padding(.horizontal, 18)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Ledger.wash)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
     }
 
     /// ⇧⌘Return, unless a previewed file covers the review and sends its own notes with it.
@@ -218,17 +226,9 @@ struct ChangesView: View {
     }
 
     private func message(_ title: String, detail: String) -> some View {
-        VStack(spacing: 6) {
-            Text(title).font(Ledger.font(15, .semibold))
-            Text(detail)
-                .font(Ledger.font(13))
-                .foregroundStyle(Ledger.ink2)
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
-        }
-        .padding(30)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Ledger.paper)
+        EmptyNote(title: title, detail: detail)
+            .textSelection(.enabled)
+            .background(Ledger.paper)
     }
 
     private func load() async {
@@ -287,29 +287,30 @@ struct DiffFileHeader: View {
 
     var body: some View {
         Button(action: toggle) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                    .font(Ledger.font(10, .semibold))
+                    .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(Ledger.ink3)
                     .frame(width: 12)
                 Text(file.path)
-                    .font(Ledger.monoFont(12.5, .semibold))
+                    .font(Ledger.monoFont(12, .bold))
                     .lineLimit(1)
                     .truncationMode(.head)
                 switch file.change {
-                case .added: Text("new").foregroundStyle(Ledger.okInk)
-                case .deleted: Text("deleted").foregroundStyle(Ledger.failInk)
+                case .added: MonoLabel("new", color: Ledger.done)
+                case .deleted: MonoLabel("deleted", color: Ledger.fail)
                 case .modified: EmptyView()
                 }
                 Spacer(minLength: 8)
-                Text("+\(file.additions)").foregroundStyle(Ledger.okInk)
-                Text("-\(file.deletions)").foregroundStyle(Ledger.failInk)
+                Text("+\(file.additions)").foregroundStyle(Ledger.done)
+                Text("−\(file.deletions)").foregroundStyle(Ledger.fail)
             }
-            .font(Ledger.font(12))
-            .padding(.horizontal, 18)
-            .padding(.vertical, 7)
+            .font(Ledger.monoFont(12))
+            .padding(.horizontal, 12)
+            .frame(height: 36)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Ledger.band, in: Rectangle())
+            .background(Ledger.selected, in: Rectangle())
+            .overlay(alignment: .bottom) { Rule() }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -332,7 +333,7 @@ struct DiffLineRow: View {
                 if commentable && (hover.on || marked) {
                     Image(systemName: "plus.bubble.fill")
                         .font(Ledger.font(11))
-                        .foregroundStyle(Ledger.run)
+                        .foregroundStyle(Ledger.accent)
                         .padding(.trailing, 8)
                 } else {
                     number(line.old)
@@ -349,11 +350,11 @@ struct DiffLineRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(Ledger.monoFont(12))
-        .padding(.vertical, 1)
-        .padding(.trailing, 18)
+        .padding(.vertical, 2)
+        .padding(.trailing, 12)
         .background(background)
         .overlay(alignment: .leading) {
-            if marked { Rectangle().fill(Ledger.run).frame(width: 2) }
+            if marked { Rectangle().fill(Ledger.accent).frame(width: 3) }
         }
         .contentShape(Rectangle())
         .onHover { hover.on = $0 }
@@ -365,7 +366,7 @@ struct DiffLineRow: View {
 
     private func number(_ value: Int?) -> some View {
         Text(value.map(String.init) ?? "")
-            .font(Ledger.monoFont(11))
+            .font(Ledger.monoFont(12))
             .foregroundStyle(Ledger.ink3)
             .padding(.trailing, 8)
     }
@@ -392,18 +393,23 @@ struct DiffLineRow: View {
     }
 }
 
-/// A saved comment under its line.
+/// A saved comment under its line: Foundry's callout, the accent's soft fill in a 2 pt accent frame.
 struct CommentCard: View {
     let text: String
+    /// Above the text, as "Your note · line 14".
+    var label = "Your note"
     /// From the left edge: past a diff's gutters, or none under a Markdown block.
-    var inset: CGFloat = 110
+    var inset: CGFloat = 100
     let edit: () -> Void
     let delete: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            MonoLabel(label, color: Ledger.markerInk)
             Text(text)
-                .font(Ledger.font(13))
+                .font(Ledger.font(14))
+                .lineSpacing(4)
+                .foregroundStyle(Ledger.markerInk)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
             HStack(spacing: 14) {
@@ -412,13 +418,14 @@ struct CommentCard: View {
             }
             .font(Ledger.font(12))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
         .frame(maxWidth: 640, alignment: .leading)
-        .background(Ledger.needCard, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+        .background(Ledger.marker)
+        .overlay(Rectangle().strokeBorder(Ledger.accent, lineWidth: Ledger.ruleStrong))
         .padding(.leading, inset)
-        .padding(.trailing, inset == 0 ? 0 : 18)
-        .padding(.vertical, 6)
+        .padding(.trailing, inset == 0 ? 0 : 12)
+        .padding(.vertical, 12)
     }
 }
 
@@ -427,7 +434,7 @@ struct CommentEditor: View {
     @Binding var draft: String
     var placeholder = "What should change here?"
     var action = "Add comment"
-    var inset: CGFloat = 110
+    var inset: CGFloat = 100
     let cancel: () -> Void
     let save: () -> Void
     @FocusState private var focused: Bool

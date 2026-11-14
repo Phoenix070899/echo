@@ -17,15 +17,6 @@ enum CreateFromTab: CaseIterable, Identifiable {
         }
     }
 
-    var icon: String {
-        switch self {
-        case .smart: "sparkles"
-        case .github: "number"
-        case .branch: "arrow.triangle.branch"
-        case .name: "textformat"
-        }
-    }
-
     var placeholder: String {
         switch self {
         case .smart: "Type a name, #1234, a branch, or a GitHub issue link"
@@ -47,37 +38,45 @@ struct CreateFromSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center) {
-                (Text("Create from ").foregroundStyle(Ledger.ink2) + Text("(optional)").foregroundStyle(Ledger.ink3))
-                    .font(Ledger.font(12.5, .semibold))
+            HStack(alignment: .center, spacing: 12) {
+                StepLabel(number: 3, title: "Create from", note: "(optional)")
                 Spacer(minLength: 8)
-                basePicker
-            }
-
-            HStack(spacing: 18) {
-                ForEach(CreateFromTab.allCases) { tab in
-                    TabButton(tab: tab, picked: form.tab == tab) {
-                        form.tab = tab
-                        form.problem = nil
-                        if tab == .branch { form.from = "" }
-                        fieldFocused = true
+                // Where it looks, as Foundry's segmented choice (ui-ux/0112).
+                HStack(spacing: 0) {
+                    ForEach(CreateFromTab.allCases) { tab in
+                        Button {
+                            form.tab = tab
+                            form.problem = nil
+                            if tab == .branch { form.from = "" }
+                            fieldFocused = true
+                        } label: {
+                            SegmentLabel(title: tab.title, on: form.tab == tab, large: false)
+                                .frame(height: 26)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(form.tab == tab ? .isSelected : [])
                     }
                 }
-                Spacer(minLength: 0)
+                .segmentTrack()
             }
-            .padding(.top, 8)
-            .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: 1) }
 
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(Ledger.ink3)
-                TextField(form.tab.placeholder, text: $form.from)
-                    .textFieldStyle(.plain)
-                    .autocorrectionDisabled()
-                    .focused($fieldFocused)
-                    .onSubmit(submit)
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .semibold)).foregroundStyle(Ledger.ink3)
+                    TextField(form.tab.placeholder, text: $form.from)
+                        .textFieldStyle(.plain)
+                        .font(Ledger.font(14))
+                        .autocorrectionDisabled()
+                        .focused($fieldFocused)
+                        .onSubmit(submit)
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 38)
+                .background(Ledger.field)
+                .overlay(Rectangle().strokeBorder(fieldFocused ? Ledger.ink : Ledger.ink3, lineWidth: Ledger.hairline))
+                basePicker
             }
-            .ledgerField()
-            .padding(.top, 10)
+            .padding(.top, 8)
             .onChange(of: form.from) {
                 form.problem = nil
                 if form.tab == .branch, form.pickedBranch != form.from { form.pickedBranch = nil }
@@ -100,18 +99,17 @@ struct CreateFromSection: View {
     /// New branches start from this branch; a repo has many, so it is a search, not a menu.
     private var basePicker: some View {
         Button { baseSearch.shown = true } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.triangle.branch")
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.branch").font(.system(size: 11, weight: .semibold))
                 Text(form.base.isEmpty ? "HEAD" : form.base)
                     .font(Ledger.monoFont(12))
                     .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down").font(Ledger.font(9, .semibold))
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Ledger.ink3)
             }
-            .font(Ledger.font(12))
-            .foregroundStyle(Ledger.ink2)
-            .padding(.horizontal, 9)
-            .frame(height: 26)
-            .background(Ledger.fill, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+            .foregroundStyle(Ledger.ink)
+            .padding(.horizontal, 12)
+            .frame(height: 38)
+            .overlay(Rectangle().strokeBorder(Ledger.ink3, lineWidth: Ledger.hairline))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -163,8 +161,10 @@ struct CreateFromSection: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(form.pickedBranch == branch.name ? Ledger.chosen : Color.clear,
-                                in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+                    .background(form.pickedBranch == branch.name ? Ledger.selected : Color.clear)
+                    .overlay(alignment: .leading) {
+                        if form.pickedBranch == branch.name { Rectangle().fill(Ledger.accent).frame(width: 3) }
+                    }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -220,36 +220,11 @@ struct CreateFromSection: View {
 
     private func note(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(Ledger.font(12.5))
+            .font(Ledger.font(12))
             .foregroundStyle(color)
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
             .padding(.top, 6)
-    }
-}
-
-/// One Create from tab: icon and title, underlined when picked.
-private struct TabButton: View {
-    let tab: CreateFromTab
-    let picked: Bool
-    let pick: () -> Void
-
-    var body: some View {
-        Button(action: pick) {
-            HStack(spacing: 6) {
-                Image(systemName: tab.icon).font(Ledger.font(12))
-                Text(tab.title)
-            }
-            .font(Ledger.font(13, picked ? .medium : .regular))
-            .foregroundStyle(picked ? Ledger.ink : Ledger.ink3)
-            .padding(.bottom, 8)
-            .overlay(alignment: .bottom) {
-                if picked { Rectangle().fill(Ledger.ink).frame(height: 2) }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(picked ? .isSelected : [])
     }
 }
 

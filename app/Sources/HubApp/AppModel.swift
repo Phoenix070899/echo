@@ -129,6 +129,10 @@ final class AppModel: ObservableObject {
     @Published var fullScreen = false
     /// Quick open (⌘K) is up.
     @Published var quickOpenShown = false
+    /// The New session menu under the ledger's button is open (ui-ux/0113).
+    @Published var newSessionMenuShown = false
+    /// The ledger lists the stopped repos under the live ones.
+    @Published var stoppedShown = false
     /// The Settings section filling the window; nil shows the agents.
     @Published var settingsSection: SettingsSection?
     /// The Teams section's state, kept here so that its unsaved edits outlive the section's views
@@ -137,7 +141,7 @@ final class AppModel: ObservableObject {
     /// The New Team sheet is up, over the Teams section.
     @Published var newTeamShown = false
     /// While a modal is up, terminals hand it the keyboard.
-    var modalShown: Bool { teamSettings.asking || newTeamShown || newSession != nil || renaming != nil || closing != nil || quickOpenShown || fanOutShown }
+    var modalShown: Bool { teamSettings.asking || newTeamShown || newSession != nil || renaming != nil || closing != nil || quickOpenShown || fanOutShown || newSessionMenuShown }
     /// Shrinks the ledger to a strip of status marks so the terminal takes almost the whole window.
     @Published var ledgerCollapsed = false
 

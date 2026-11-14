@@ -12,22 +12,25 @@ struct NeedItem: View {
     @FocusState private var replyFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // The whole line opens what asked, not just the highlighted words.
+        VStack(alignment: .leading, spacing: 10) {
+            // The whole line opens what asked, not just its words.
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Marked(need.headline)
+                MonoLabel(need.headline, color: Ledger.markerInk)
                     .lineLimit(1)
                 Spacer(minLength: 6)
-                Text(age).font(Ledger.font(12)).foregroundStyle(Ledger.ink3).monospacedDigit()
+                Text(age).font(Ledger.monoFont(11)).foregroundStyle(Ledger.markerInk.opacity(0.7)).monospacedDigit()
             }
             .contentShape(Rectangle())
             .onTapGesture(perform: open)
             .help("Open \(need.worker ?? need.title)")
             content
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .background(Ledger.needCard, in: RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous))
+        .foregroundStyle(Ledger.markerInk)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        // Foundry's callout: the accent's soft fill in a 2 pt accent frame (ui-ux/0117).
+        .background(Ledger.marker)
+        .overlay(Rectangle().strokeBorder(Ledger.accent, lineWidth: Ledger.ruleStrong))
         .disabled(draft.sent || !model.connected)
         .opacity(draft.sent ? 0.55 : 1)
         .contextMenu {
@@ -61,17 +64,18 @@ struct NeedItem: View {
     @ViewBuilder private var content: some View {
         switch need.kind {
         case .permissionPrompt:
+            Text(need.command ?? need.body)
+                .font(Ledger.monoFont(13))
+                .foregroundStyle(Ledger.ink)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Ledger.paper)
+                .help(need.promptLines.joined(separator: "\n"))
             HStack(spacing: 8) {
-                Text(need.command ?? need.body)
-                    .font(Ledger.mono)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Ledger.wash, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
-                    .help(need.promptLines.joined(separator: "\n"))
                 Button("Approve") {
                     draft.sent = true
                     model.decide(need, repo: repo, approve: true, note: "")
@@ -87,6 +91,7 @@ struct NeedItem: View {
                     }
                 }
                 .buttonStyle(.ledger)
+                .foregroundStyle(Ledger.markerInk)
             }
             if draft.denying {
                 HStack(spacing: 8) {

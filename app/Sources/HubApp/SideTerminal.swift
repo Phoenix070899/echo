@@ -21,25 +21,23 @@ struct SideTerminalSection: View {
                 SideTerminalPane(root: root).frame(height: height)
             }
         }
-        .overlay(alignment: .top) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
+        // Foundry closes the column's list with a 2 pt ink rule over the terminal (ui-ux/0118).
+        .overlay(alignment: .top) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
     }
 
     private func bar(_ status: SideStatus?, open: Bool) -> some View {
         HStack(spacing: 4) {
             Button { open ? model.hideSide() : model.toggleSide() } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .rotationEffect(.degrees(open ? 90 : 0))
-                        .foregroundStyle(Ledger.ink3)
-                        .frame(width: 12)
-                    Image(systemName: "terminal").font(.system(size: 12)).foregroundStyle(Ledger.ink3)
-                    Text("Terminal").font(Ledger.font(13, .medium)).foregroundStyle(Ledger.ink2)
+                    Text(open ? "▾" : "▸").font(Ledger.monoFont(11)).foregroundStyle(Ledger.ink)
+                        .frame(width: 10)
+                    TabGlyph(chat: false).frame(width: 14, height: 14).foregroundStyle(Ledger.ink)
+                    MonoLabel("Terminal", color: Ledger.ink)
                     mark(status)
                     Spacer(minLength: 4)
                 }
                 .padding(.leading, 12)
-                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -70,7 +68,7 @@ struct SideTerminalSection: View {
                 if !model.sideShown { Text("running").font(Ledger.font(12)).foregroundStyle(Ledger.ink3) }
             }
         } else if status?.live == true {
-            Circle().fill(Ledger.done).frame(width: 6, height: 6).accessibilityLabel("Running")
+            Rectangle().fill(Ledger.done).frame(width: 7, height: 7).accessibilityLabel("Running")
         }
     }
 }
