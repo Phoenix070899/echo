@@ -640,7 +640,7 @@ final class GhosttyView: NSView, NSTextInputClient {
     }
 
     /// A surface in a window counts as visible even while other windows cover it; only a kept
-    /// terminal, out of any window, is occluded and draws nothing (ui-ux/0127). libghostty frees
+    /// terminal, out of any window, is occluded and draws nothing (ui-ux/0129). libghostty frees
     /// an occluded surface's frames, so a covered window came back with its terminals empty until
     /// they drew again: a dark flash on every return to Echo (bugs/0081).
     private func syncOcclusion() {
