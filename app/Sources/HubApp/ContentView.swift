@@ -40,14 +40,18 @@ struct ContentView: View {
         .background(Ledger.desk)
         .ignoresSafeArea(.container, edges: .top)
         .overlay {
-            if model.newSession != nil {
-                NewSessionModal()
-            } else if let agent = model.renaming {
-                RenameModal(agent: agent)
-            } else if model.quickOpenShown {
-                QuickOpen()
-            } else if model.fanOutShown {
-                FanOutModal()
+            ZStack {
+                if model.newSession != nil {
+                    NewSessionModal()
+                } else if let agent = model.renaming {
+                    RenameModal(agent: agent)
+                } else if model.quickOpenShown {
+                    QuickOpen()
+                } else if model.fanOutShown {
+                    FanOutModal()
+                }
+                // Asked while Settings change or close with a Team's edits not saved (ui-ux/0103).
+                UnsavedTeamModal(teams: model.teamSettings)
             }
         }
         .confirmationDialog(closeTitle, isPresented: closingShown, presenting: model.closing) { agent in

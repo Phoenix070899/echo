@@ -2,7 +2,7 @@ import AppKit
 import HubCore
 import SwiftUI
 
-/// Settings' Agents tab: what agents run with, each Profile, and the Orchestrator's rules. Everything lives in the daemon's files, so it reads them fresh each time.
+/// What the Teams section's Defaults and Profiles entries edit: what agents run with, each Profile, and the Orchestrator's rules. Everything lives in the daemon's files, so it reads them fresh each time.
 @MainActor
 final class AgentSettingsModel: ObservableObject {
     @Published var settings: AgentSettings?
@@ -105,13 +105,12 @@ final class AgentSettingsModel: ObservableObject {
     }
 }
 
-/// The CLI and model every agent runs with unless its Profile or the repo says otherwise, then
-/// each Profile.
-struct AgentsSettings: View {
+/// The CLI and model every agent runs with unless its Profile or the repo says otherwise.
+struct DefaultsSettings: View {
     @ObservedObject var agents: AgentSettingsModel
 
     var body: some View {
-        Section {
+        Section("Every agent") {
             Picker("CLI", selection: Binding(get: { agents.settings?.cli ?? "claude" }, set: { agents.set("cli", $0) })) {
                 ForEach(agentCLIs, id: \.self) { Text($0).tag($0) }
             }
@@ -124,7 +123,16 @@ struct AgentsSettings: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        Section {
+    }
+}
+
+/// One Profile, picked from a menu: where it comes from, what it runs with, and its own CLI,
+/// model and effort. The Member inspector will hold this; until then it has its own entry.
+struct ProfileSettings: View {
+    @ObservedObject var agents: AgentSettingsModel
+
+    var body: some View {
+        Section("Profile") {
             Picker("Profile", selection: $agents.picked) {
                 ForEach(agents.profiles) { profile in
                     Text(profile.name).tag(profile.name)
@@ -167,6 +175,14 @@ struct AgentsSettings: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// The daemon's message when a change here was refused.
+struct AgentFailure: View {
+    @ObservedObject var agents: AgentSettingsModel
+
+    var body: some View {
         if let failure = agents.failure {
             Section {
                 Text(failure)

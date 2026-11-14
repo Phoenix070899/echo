@@ -3,9 +3,18 @@ import SwiftUI
 
 /// One part of Settings, listed down the page's left side.
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case window, theme, background, font, multiplexer, agents, teams, worktrees, memory, remote
+    case window, theme, background, font, multiplexer, teams, worktrees, memory, remote
 
     var id: String { rawValue }
+
+    /// The section a name asks for; a name that was retired goes to the section that took its place
+    /// (`agents` shows Teams).
+    init?(named name: String) {
+        self.init(rawValue: SettingsSectionName.canonical(name))
+    }
+
+    /// Teams fill the whole width beside the list (ui-ux/0101); every other section is one column.
+    var fillsWidth: Bool { self == .teams }
 
     var title: String {
         switch self {
@@ -14,7 +23,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .background: "Background"
         case .font: "Font"
         case .multiplexer: "Multiplexer"
-        case .agents: "Agents"
         case .teams: "Teams"
         case .worktrees: "Worktrees"
         case .memory: "Preferences and Lessons"
@@ -29,7 +37,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .background: "photo"
         case .font: "textformat"
         case .multiplexer: "rectangle.split.2x1"
-        case .agents: "person.2"
         case .teams: "person.3"
         case .worktrees: "arrow.triangle.branch"
         case .memory: "text.book.closed"
@@ -59,7 +66,7 @@ struct SettingsPage: View {
                 .padding(.horizontal, 16)
                 .frame(height: 44)
                 ForEach(SettingsSection.allCases) { item in
-                    SectionRow(item: item, picked: item == section) { model.settingsSection = item }
+                    SectionRow(item: item, picked: item == section) { model.showSettingsSection(item) }
                 }
                 Spacer(minLength: 0)
             }
@@ -76,7 +83,7 @@ struct SettingsPage: View {
                 SettingsView(section: section)
                     .id(section)
             }
-            .frame(maxWidth: 680)
+            .frame(maxWidth: section.fillsWidth ? .infinity : 680)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .ledgerSheet()
@@ -85,16 +92,21 @@ struct SettingsPage: View {
         .focusEffectDisabled()
         .focused($focused)
         .onAppear { focused = true }
+        // The card that asks about unsaved edits takes the keyboard; the page takes it back after.
+        .onReceive(model.teamSettings.$asking) { asking in
+            if !asking { DispatchQueue.main.async { focused = true } }
+        }
         .onKeyPress(.escape) {
+            guard !model.teamSettings.asking else { return .ignored }
             model.hideSettings()
             return .handled
         }
         .onKeyPress(keys: [.upArrow, .downArrow]) { press in
-            guard press.modifiers.isEmpty else { return .ignored }
+            guard press.modifiers.isEmpty, !model.teamSettings.asking else { return .ignored }
             let all = SettingsSection.allCases
             let at = all.firstIndex(of: section) ?? 0
             let next = press.key == .downArrow ? min(at + 1, all.count - 1) : max(at - 1, 0)
-            model.settingsSection = all[next]
+            model.showSettingsSection(all[next])
             return .handled
         }
     }

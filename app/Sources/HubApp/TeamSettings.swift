@@ -2,10 +2,19 @@ import AppKit
 import HubCore
 import SwiftUI
 
-/// Settings' Teams page: the Teams to pick from, and the editor for the one picked. The Teams live
-/// in the daemon's files, so the page reads them fresh each time it opens.
+/// What the Teams section's right side shows.
+enum TeamsPane: Equatable {
+    case defaults, profiles, team
+}
+
+/// Settings' Teams section: the Teams to pick from, and the editor for the one picked. The Teams
+/// live in the daemon's files, so the section reads them fresh each time it opens. The model is
+/// the app's own, not a view's, so edits not yet saved survive until the human is asked about
+/// them (ui-ux/0103).
 @MainActor
 final class TeamSettingsModel: ObservableObject {
+    /// What is picked in the list: Defaults, Profiles, or a Team (`picked`, or the new one).
+    @Published var pane = TeamsPane.team
     @Published var teams: [Team] = []
     @Published var profileNames: [String] = []
     /// The human's Orchestrator settings: what a rule the Team leaves out falls back to.
@@ -34,7 +43,14 @@ final class TeamSettingsModel: ObservableObject {
 
     @Published private(set) var saving = false
 
-    func refresh(select name: String? = nil) {
+    /// The card that asks what to do with unsaved edits is up.
+    @Published private(set) var asking = false
+    /// Where the human was going when the card came up.
+    private var pending: (@MainActor () -> Void)?
+    /// The first read of the Teams picks the first one, once.
+    private var started = false
+
+    func refresh(select name: String? = nil, then done: (@MainActor () -> Void)? = nil) {
         let (client, repo) = (client, repo)
         run({ (try client.teams(repo: repo), try client.profiles(repo: repo), try client.agentSettings()) }) { teams, profiles, settings in
             self.teams = teams
@@ -43,12 +59,66 @@ final class TeamSettingsModel: ObservableObject {
             self.fallbackCli = settings.cli ?? "claude"
             if let name, teams.contains(where: { $0.name == name }) {
                 self.pick(name)
-            } else if !self.form.isNew, !teams.contains(where: { $0.name == self.picked }) {
+            } else if !self.started, !self.changed {
                 self.pick(teams.first?.name)
+            } else if !self.form.isNew {
+                if !teams.contains(where: { $0.name == self.picked }) {
+                    self.pick(teams.first?.name)
+                } else if !self.changed {
+                    // Read fresh, unless the human has edits here.
+                    self.pick(self.picked)
+                }
             }
+            self.started = true
+            done?()
         }
     }
 
+    /// Shows what the list entry names; unsaved edits are asked about first.
+    func show(_ pane: TeamsPane) {
+        leave { self.pane = pane }
+    }
+
+    /// Picks a Team in the list; unsaved edits are asked about first.
+    func choose(_ name: String) {
+        leave {
+            self.pane = .team
+            self.pick(name)
+        }
+    }
+
+    /// Runs `go` now, or after the human has answered the card when edits are not saved: Save
+    /// goes on once the Team is written, Discard goes on at once, Cancel never goes (ui-ux/0103).
+    func leave(then go: @escaping @MainActor () -> Void) {
+        if asking { return }
+        guard UnsavedChanges.needsAsk(changed: changed, asking: asking) else {
+            go()
+            return
+        }
+        pending = go
+        asking = true
+    }
+
+    func answer(_ answer: UnsavedAnswer) {
+        guard asking else { return }
+        let go = pending
+        pending = nil
+        asking = false
+        switch UnsavedChanges.step(for: answer) {
+        case .save:
+            save { saved in
+                if UnsavedChanges.afterSave(succeeded: saved) == .goOn { go?() }
+            }
+        case .discardAndGo:
+            // A Team that was never saved has nothing to go back to: the first one is shown.
+            if form.isNew { pick(teams.first?.name) } else { revert() }
+            go?()
+        case .stay, .goOn:
+            break
+        }
+    }
+
+    /// Shows the Team's fields; `pick` does not move the pane.
     func pick(_ name: String?) {
         picked = name
         failure = nil
@@ -57,31 +127,46 @@ final class TeamSettingsModel: ObservableObject {
     }
 
     func newTeam() {
-        picked = nil
-        failure = nil
-        form = TeamForm()
-        saved = form
+        leave {
+            self.pane = .team
+            self.picked = nil
+            self.failure = nil
+            self.form = TeamForm()
+            self.saved = self.form
+        }
     }
 
     func duplicate() {
         guard let team else { return }
-        picked = nil
-        failure = nil
-        form = TeamForm(copying: team, taking: teams.map(\.name))
-        saved = TeamForm()
+        leave {
+            self.pane = .team
+            self.picked = nil
+            self.failure = nil
+            self.form = TeamForm(copying: team, taking: self.teams.map(\.name))
+            self.saved = TeamForm()
+        }
     }
 
-    func save() {
+    /// Writes the Team; `done` hears whether it was written, after the list has been read again.
+    func save(done: (@MainActor (Bool) -> Void)? = nil) {
         if let blocker = form.blocker {
             failure = blocker
+            done?(false)
+            return
+        }
+        guard !saving else {
+            done?(false)
             return
         }
         let (client, params) = (client, form.saveParams(repo: repo))
         saving = true
         run({ try client.saveTeam(params) }, then: { name in
             self.saving = false
-            self.refresh(select: name)
-        }, otherwise: { self.saving = false })
+            self.refresh(select: name) { done?(true) }
+        }, otherwise: {
+            self.saving = false
+            done?(false)
+        })
     }
 
     func revert() {
@@ -132,34 +217,12 @@ final class TeamSettingsModel: ObservableObject {
     }
 }
 
-/// The list of Teams, then the picked one's fields.
-struct TeamsSettings: View {
+/// The picked Team's fields: what it is, the Orchestrator, the Workers, the rules and the
+/// instructions, then Save and Revert.
+struct TeamEditor: View {
     @ObservedObject var teams: TeamSettingsModel
 
     var body: some View {
-        Section {
-            if teams.form.isNew {
-                TeamRow(name: teams.form.name.isEmpty ? "New Team" : teams.form.name, label: "not saved yet",
-                        problem: nil, picked: true) {}
-            }
-            ForEach(teams.teams) { team in
-                TeamRow(name: team.name, label: team.origin, problem: team.problem,
-                        picked: !teams.form.isNew && team.name == teams.picked) { teams.pick(team.name) }
-            }
-            HStack {
-                Button("New Team", action: teams.newTeam)
-                Button("Duplicate", action: teams.duplicate)
-                    .disabled(teams.form.isNew || teams.team == nil)
-                Spacer()
-                if teams.canDelete {
-                    Button("Delete…", action: teams.delete)
-                }
-            }
-            Text("A Team sets what an Orchestrator and its Workers run with. It applies when an Orchestrator starts or resumes. Echo's own Teams cannot be changed: duplicate one to make it yours.")
-                .font(Ledger.font(11))
-                .foregroundStyle(Ledger.ink3)
-                .fixedSize(horizontal: false, vertical: true)
-        }
         TeamAbout(teams: teams)
         Group {
             TeamOrchestrator(teams: teams)
@@ -169,47 +232,6 @@ struct TeamsSettings: View {
         }
         .disabled(teams.readOnly)
         TeamSave(teams: teams)
-    }
-}
-
-/// A Team in the list: flat, 30 pt at least, the picked one on the selected fill, and its problem
-/// under it where it has one.
-private struct TeamRow: View {
-    let name: String
-    let label: String
-    let problem: String?
-    let picked: Bool
-    let pick: () -> Void
-
-    var body: some View {
-        Button(action: pick) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 8) {
-                    Text(name)
-                        .fontWeight(picked ? .medium : .regular)
-                        .foregroundStyle(Ledger.ink)
-                    Text(label)
-                        .font(Ledger.font(11))
-                        .foregroundStyle(Ledger.ink3)
-                    Spacer(minLength: 0)
-                }
-                if let problem {
-                    Text(problem)
-                        .font(Ledger.font(11))
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .multilineTextAlignment(.leading)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .frame(minHeight: 30)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(picked ? Ledger.selected : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(picked ? .isSelected : [])
     }
 }
 
@@ -408,7 +430,7 @@ private struct TeamSave: View {
                     Spacer()
                     Button("Revert", action: teams.revert)
                         .disabled(!teams.changed)
-                    Button("Save", action: teams.save)
+                    Button("Save") { teams.save() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(!teams.canSave)
                 }

@@ -131,8 +131,11 @@ final class AppModel: ObservableObject {
     @Published var quickOpenShown = false
     /// The Settings section filling the window; nil shows the agents.
     @Published var settingsSection: SettingsSection?
+    /// The Teams section's state, kept here so that its unsaved edits outlive the section's views
+    /// and are asked about before Settings change or close (ui-ux/0103).
+    let teamSettings = TeamSettingsModel()
     /// While a modal is up, terminals hand it the keyboard.
-    var modalShown: Bool { newSession != nil || renaming != nil || closing != nil || quickOpenShown || fanOutShown }
+    var modalShown: Bool { teamSettings.asking || newSession != nil || renaming != nil || closing != nil || quickOpenShown || fanOutShown }
     /// Shrinks the ledger to a strip of status marks so the terminal takes almost the whole window.
     @Published var ledgerCollapsed = false
 
@@ -1066,7 +1069,7 @@ final class AppModel: ObservableObject {
             preview = nil
         case "settings":
             // Shown without coming forward, like the rest; the human looks when they choose.
-            settingsSection = request.text.flatMap(SettingsSection.init(rawValue:)) ?? .agents
+            showSettingsSection(request.text.flatMap(SettingsSection.init(named:)) ?? .teams)
         case "notify":
             guard let text = request.text else { return }
             let sender = request.from.flatMap { from -> String? in
@@ -1314,9 +1317,18 @@ final class AppModel: ObservableObject {
         openMainWindow?()
     }
 
+    /// Shows another section; a Team with edits that are not saved asks first (ui-ux/0103).
+    func showSettingsSection(_ section: SettingsSection) {
+        guard section != settingsSection else { return }
+        teamSettings.leave { self.settingsSection = section }
+    }
+
+    /// Back to the agents; a Team with edits that are not saved asks first (ui-ux/0103).
     func hideSettings() {
-        if let section = settingsSection { lastSettingsSection = section }
-        settingsSection = nil
+        teamSettings.leave {
+            if let section = self.settingsSection { self.lastSettingsSection = section }
+            self.settingsSection = nil
+        }
     }
 
     private var lastSettingsSection = SettingsSection.window
