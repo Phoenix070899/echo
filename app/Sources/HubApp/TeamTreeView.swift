@@ -205,9 +205,11 @@ struct TreeDropDelegate: DropDelegate {
     }
 }
 
-/// The Team's tree: the Orchestrator at the root and its Members under it, indented by depth, with
-/// the buttons and the keys of ui-ux/0102 and the one-line reason under it when a command is
-/// refused. The rows are drawn from `TeamTree.rows`; the operations are `TeamTreeEditing`'s.
+/// The Team's tree (ui-ux/0121): the Team's head with its Members and models, then the Orchestrator
+/// at the root and its Members hanging from a spine, one row each in fixed columns (Member and id,
+/// Profile and model, effort), then the bar with Add Member and the More menu. The keys and drags of
+/// ui-ux/0102 work as before. The rows are drawn from `TeamTree.rows`; the operations are
+/// `TeamTreeEditing`'s.
 struct TeamTreeColumn: View {
     @ObservedObject var teams: TeamSettingsModel
     @StateObject private var drag = TreeDragState()
@@ -216,34 +218,54 @@ struct TeamTreeColumn: View {
     private static let rootID = "orchestrator"
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            TeamPalette(teams: teams, drag: drag)
-            Rectangle()
-                .fill(Ledger.rule)
-                .frame(height: Ledger.hairline)
+        // The column takes the width it is offered and lays its rows out for it, so a narrow window
+        // never pushes the sections list or the inspector off the window.
+        GeometryReader { proxy in
+            column(width: proxy.size.width)
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+        }
+    }
+
+    private func column(width: CGFloat) -> some View {
+        let rows = TeamTree.rows(teams.form.members)
+        let layout = TreeLayout(deepest: rows.map(\.depth).max() ?? 1, width: width)
+        let mix = TreeMix(teams: teams)
+        return VStack(alignment: .leading, spacing: 0) {
+            TeamHead(teams: teams, mix: mix, layout: layout)
+            TreeColumnHeads(layout: layout)
+                .padding(.horizontal, layout.pad)
+                .padding(.top, 14)
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        OrchestratorRow(teams: teams, drag: drag, picked: teams.member == nil, focused: focused) { pick(nil) }
+                        OrchestratorRow(teams: teams, drag: drag, layout: layout, mix: mix,
+                                        picked: teams.member == nil, focused: focused) { pick(nil) }
                             .id(Self.rootID)
-                        ForEach(TeamTree.rows(teams.form.members), id: \.member.id) { row in
-                            MemberRow(teams: teams, drag: drag, row: row, picked: row.member.id == teams.selectedMember, focused: focused) {
+                        ForEach(rows, id: \.member.id) { row in
+                            MemberRow(teams: teams, drag: drag, row: row, layout: layout, mix: mix,
+                                      picked: row.member.id == teams.selectedMember, focused: focused) {
                                 pick(row.member.id)
                             }
                             .id(row.member.id)
                         }
+                        if !teams.readOnly {
+                            AddRow(teams: teams, layout: layout)
+                        }
                         if teams.form.members.isEmpty {
-                            Text("This Team has no Members yet. Add one below. A Worker can still be started by its Profile's name.")
-                                .font(Ledger.font(11))
+                            Text("This Team has no Members yet. A Worker can still be started by its Profile's name.")
+                                .font(Ledger.font(13))
                                 .foregroundStyle(Ledger.ink3)
                                 .fixedSize(horizontal: false, vertical: true)
-                                .padding(.horizontal, 8)
-                                .padding(.top, 6)
+                                .padding(.leading, layout.body)
+                                .padding(.top, 10)
                         }
                     }
-                    .padding(8)
+                    .background(alignment: .topLeading) { TreeSpine() }
+                    .padding(.horizontal, layout.pad)
+                    .padding(.bottom, 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .scrollIndicators(.never)
                 .onChange(of: teams.selectedMember) { proxy.scrollTo(teams.selectedMember ?? Self.rootID) }
                 // Over the space around the rows (a row's own drop takes the pointer over it): level 1, last.
                 .onDrop(of: [.plainText], delegate: TreeDropDelegate(teams: teams, drag: drag, row: nil))
@@ -257,8 +279,8 @@ struct TeamTreeColumn: View {
             .onChange(of: teams.treeFocusRequest) { focused = true }
             .onDisappear { teams.treeFocused = false }
             .accessibilityLabel("Team tree")
-            TreeCaption(teams: teams)
-            TreeButtons(teams: teams)
+            TreeCaption(teams: teams, pad: layout.pad)
+            TreeBar(teams: teams, layout: layout)
         }
     }
 
@@ -300,75 +322,270 @@ struct TeamTreeColumn: View {
     }
 }
 
+/// Where the parts of a row sit: a node steps 30 pt right per level, and the text columns start at
+/// one place for every row, after the deepest node. Under 600 pt wide the margins and the Profile
+/// and effort columns narrow, so the Member's name keeps its room.
+struct TreeLayout {
+    static let node: CGFloat = 32
+    static let gap: CGFloat = 12
+    /// The deepest level shown; the columns make room for its node.
+    let deepest: Int
+    let width: CGFloat
+
+    var compact: Bool { width < 600 }
+    var pad: CGFloat { compact ? 20 : 28 }
+    var profile: CGFloat { compact ? 136 : 150 }
+    var effort: CGFloat { compact ? 48 : 74 }
+    var step: CGFloat { compact ? 22 : 30 }
+
+    /// Where the text columns start: 106 pt, as Foundry's tree has it, until a third level needs more.
+    var body: CGFloat { Self.node + (compact ? 10 : 14) + step * CGFloat(max(2, deepest)) }
+
+    func indent(_ depth: Int) -> CGFloat { step * CGFloat(depth) }
+}
+
+/// The models the Orchestrator and the Members run on, by family, and the mark of each family.
+struct TreeMix {
+    let families: [(family: String, count: Int)]
+
+    @MainActor
+    init(teams: TeamSettingsModel) {
+        let form = teams.form
+        let lead = form.orchestratorModel.isEmpty ? teams.defaults.model : form.orchestratorModel
+        let models = [lead] + form.members.map { member in
+            form.resolve(.model, for: member, profile: teams.profile(named: member.profile), defaults: teams.defaults).value
+        }
+        families = ModelMix.tally(models)
+    }
+
+    /// The family's place in the mix: its colour in the bar and the dot in a row.
+    func index(of model: String) -> Int {
+        families.firstIndex { $0.family == ModelMix.family(model) } ?? 0
+    }
+
+    /// The accent, its deep shade, its soft tint, then greys.
+    static func color(_ index: Int) -> Color {
+        [Ledger.accent, SettingsLook.accentDeep, Ledger.marker, Ledger.ink3, Ledger.rule][min(index, 4)]
+    }
+}
+
+/// A family's mark: a 7 pt square in its colour; the soft tint is framed in the accent so it shows.
+private struct MixDot: View {
+    let index: Int
+    var size: CGFloat = 7
+
+    var body: some View {
+        Rectangle()
+            .fill(TreeMix.color(index))
+            .overlay(Rectangle().strokeBorder(index == 2 ? Ledger.accent : .clear, lineWidth: 1))
+            .frame(width: size, height: size)
+    }
+}
+
+/// The Team's head: its name in condensed capitals with where it comes from, how many Members it
+/// has, and the bar of the models they run on.
+private struct TeamHead: View {
+    @ObservedObject var teams: TeamSettingsModel
+    let mix: TreeMix
+    let layout: TreeLayout
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: layout.compact ? 14 : 20) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    SettingsLabel("Team", size: 11)
+                        .fixedSize()
+                    badge
+                }
+                Text(teams.form.name.isEmpty ? "New Team" : teams.form.name)
+                    .font(Ledger.display(40))
+                    .textCase(.uppercase)
+                    .foregroundStyle(Ledger.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            .layoutPriority(1)
+            Spacer(minLength: 0)
+            HStack(alignment: .top, spacing: layout.compact ? 14 : 22) {
+                VStack(alignment: .leading, spacing: 2) {
+                    SettingsLabel("Members", size: 11)
+                    Text("\(teams.form.members.count)")
+                        .font(Ledger.display(28))
+                        .foregroundStyle(Ledger.ink)
+                }
+                .accessibilityElement(children: .combine)
+                VStack(alignment: .leading, spacing: 6) {
+                    SettingsLabel("Models", size: 11)
+                    MixBar(mix: mix)
+                    HStack(spacing: 10) {
+                        ForEach(mix.families, id: \.family) { family in
+                            Text("\(family.family.capitalized) \(family.count)")
+                        }
+                    }
+                    .font(Ledger.monoFont(10))
+                    .foregroundStyle(Ledger.ink3)
+                    .lineLimit(1)
+                }
+                .frame(width: layout.compact ? 150 : 200, alignment: .leading)
+                .accessibilityElement(children: .combine)
+            }
+            // The counts keep their room; a long name scales down first.
+            .fixedSize()
+            .layoutPriority(2)
+        }
+        .padding(.horizontal, layout.pad)
+        .padding(.top, 24)
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
+    }
+
+    /// Where the Team comes from, as Foundry's badge: solid ink for a saved Team, dashed for one not
+    /// saved yet.
+    private var badge: some View {
+        let fresh = teams.form.isNew
+        let title: String
+        switch teams.team?.origin {
+        case _ where fresh: title = "Not saved"
+        case "shipped": title = "Shipped"
+        case "repo": title = "This repo"
+        default: title = "Yours"
+        }
+        return Text(title)
+            .font(Ledger.monoFont(11, .bold))
+            .tracking(0.88)
+            .textCase(.uppercase)
+            .lineLimit(1)
+            .foregroundStyle(fresh ? Ledger.ink3 : Ledger.desk)
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background(fresh ? Color.clear : Ledger.ink)
+            .overlay {
+                if fresh {
+                    Rectangle().strokeBorder(Ledger.ink3, style: StrokeStyle(lineWidth: Ledger.ruleStrong, dash: [4, 3]))
+                }
+            }
+            .fixedSize()
+    }
+}
+
+/// The models as one 10 pt bar, a part per family as wide as its share, 2 pt apart.
+private struct MixBar: View {
+    let mix: TreeMix
+
+    var body: some View {
+        GeometryReader { proxy in
+            let total = CGFloat(max(1, mix.families.reduce(0) { $0 + $1.count }))
+            let room = proxy.size.width - CGFloat(max(0, mix.families.count - 1)) * 2
+            HStack(spacing: 2) {
+                ForEach(Array(mix.families.enumerated()), id: \.offset) { index, family in
+                    Rectangle()
+                        .fill(TreeMix.color(index))
+                        .frame(width: room * CGFloat(family.count) / total)
+                }
+            }
+        }
+        .frame(height: 10)
+    }
+}
+
+/// The columns' names over the rows, in mono capitals.
+private struct TreeColumnHeads: View {
+    let layout: TreeLayout
+
+    var body: some View {
+        HStack(spacing: TreeLayout.gap) {
+            Text("Member · id").frame(maxWidth: .infinity, alignment: .leading)
+            Text("Profile · model").frame(width: layout.profile, alignment: .leading)
+            Text("Effort").frame(width: layout.effort, alignment: .trailing)
+        }
+        .font(Ledger.monoFont(10, .bold))
+        .tracking(1)
+        .textCase(.uppercase)
+        .foregroundStyle(Ledger.ink3)
+        .lineLimit(1)
+        .padding(.leading, layout.body)
+        .padding(.trailing, 12)
+        .padding(.bottom, 8)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The 2 pt rule the rows hang from, from the Orchestrator's node down to the last row.
+private struct TreeSpine: View {
+    var body: some View {
+        GeometryReader { proxy in
+            Rectangle()
+                .fill(Ledger.rule)
+                .frame(width: Ledger.ruleStrong, height: max(0, proxy.size.height - 56))
+                .offset(x: TreeLayout.node / 2 - 1, y: 26)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 /// The Orchestrator, at the root: picking it shows the Team's own fields. A drop on it is level 1.
 private struct OrchestratorRow: View {
     @ObservedObject var teams: TeamSettingsModel
     @ObservedObject var drag: TreeDragState
+    let layout: TreeLayout
+    let mix: TreeMix
     let picked: Bool
     let focused: Bool
     let pick: () -> Void
 
-    private var meta: String {
-        let form = teams.form
-        return ActionLook.meta(profile: teams.effectiveCli(form.orchestratorCli), model: form.orchestratorModel)
-    }
-
     var body: some View {
-        HStack(spacing: 0) {
-            TreeRowButton(symbol: "person.crop.circle", title: "Orchestrator",
-                          name: teams.form.name.isEmpty ? "New Team" : teams.form.name,
-                          meta: meta, depth: 0, picked: picked, focused: focused,
-                          marked: drag.mark == .root ? DropLook.fill(refused: drag.refused) : nil, pick: pick)
-            if picked {
-                AddMemberMenu(teams: teams, compact: true)
-            }
-        }
-        .padding(.vertical, 1)
-        .dropLine(drag.mark, on: nil, refused: drag.refused)
-        .onDrop(of: [.plainText], delegate: TreeDropDelegate(teams: teams, drag: drag, row: nil, onOrchestrator: true))
+        let form = teams.form
+        let cli = teams.effectiveCli(form.orchestratorCli)
+        let model = form.orchestratorModel.isEmpty ? teams.defaults.model : form.orchestratorModel
+        TeamTreeRow(initials: ActionLook.initials("Orchestrator"), root: true, title: "Orchestrator", id: nil,
+                pill: model.isEmpty ? "\(cli) · default" : TeamTreeRow.shortModel(model), mix: mix.index(of: model),
+                effort: form.orchestratorEffort, changed: false, depth: 0, layout: layout,
+                picked: picked, focused: focused,
+                marked: drag.mark == .root ? DropLook.fill(refused: drag.refused) : nil, pick: pick)
+            .dropLine(drag.mark, on: nil, refused: drag.refused)
+            .onDrop(of: [.plainText], delegate: TreeDropDelegate(teams: teams, drag: drag, row: nil, onOrchestrator: true))
     }
 }
 
-/// A Member: its Action's icon and title, its id, its Profile and the model it runs on. It can be
-/// dragged, and is dropped on at its top quarter, middle, bottom quarter or left edge.
+/// A Member: its Action and id, its Profile and the model it runs on, its effort. It can be dragged,
+/// and is dropped on at its top quarter, middle, bottom quarter or left edge.
 private struct MemberRow: View {
     @ObservedObject var teams: TeamSettingsModel
     @ObservedObject var drag: TreeDragState
     let row: TeamTree.Row
+    let layout: TreeLayout
+    let mix: TreeMix
     let picked: Bool
     let focused: Bool
     let pick: () -> Void
 
-    private var model: String {
-        let profile = teams.profile(named: row.member.profile)
-        return teams.form.resolve(.model, for: row.member, profile: profile, defaults: teams.defaults).value
-    }
-
     var body: some View {
-        let id = row.member.id
-        HStack(spacing: 0) {
-            TreeRowButton(symbol: ActionLook.symbol(for: row.member.action),
-                          title: ActionLook.title(for: row.member.action), name: id,
-                          meta: ActionLook.meta(profile: row.member.profile, model: model),
-                          depth: row.depth, picked: picked, focused: focused,
-                          marked: drag.mark == .fill(id) ? DropLook.fill(refused: drag.refused) : nil, pick: pick)
-            if picked {
-                AddMemberMenu(teams: teams, compact: true)
+        let member = row.member
+        let id = member.id
+        let profile = teams.profile(named: member.profile)
+        let model = teams.form.resolve(.model, for: member, profile: profile, defaults: teams.defaults).value
+        let effort = teams.form.resolve(.effort, for: member, profile: profile, defaults: teams.defaults).value
+        let title = ActionLook.title(for: member.action)
+        TeamTreeRow(initials: ActionLook.initials(title), root: false, title: title, id: id,
+                pill: model.isEmpty ? member.profile : "\(member.profile) · \(ModelMix.family(model))",
+                mix: mix.index(of: model), effort: effort, changed: teams.memberChanged(id),
+                depth: row.depth, layout: layout, picked: picked, focused: focused,
+                marked: drag.mark == .fill(id) ? DropLook.fill(refused: drag.refused) : nil, pick: pick)
+            .background(GeometryReader { geometry in
+                Color.clear
+                    .onAppear { drag.heights[id] = geometry.size.height }
+                    .onChange(of: geometry.size.height) { drag.heights[id] = geometry.size.height }
+            })
+            .dropLine(drag.mark, on: id, refused: drag.refused)
+            .onDrag {
+                drag.begin(.member(id))
+                return NSItemProvider(object: DropPayload.member(id).text as NSString)
             }
-        }
-        .padding(.vertical, 1)
-        .background(GeometryReader { geometry in
-            Color.clear
-                .onAppear { drag.heights[id] = geometry.size.height }
-                .onChange(of: geometry.size.height) { drag.heights[id] = geometry.size.height }
-        })
-        .dropLine(drag.mark, on: id, refused: drag.refused)
-        .onDrag {
-            drag.begin(.member(id))
-            return NSItemProvider(object: DropPayload.member(id).text as NSString)
-        }
-        .onDrop(of: [.plainText], delegate: TreeDropDelegate(teams: teams, drag: drag, row: id))
-        .contextMenu { MoveToMenu(teams: teams, id: id) }
+            .onDrop(of: [.plainText], delegate: TreeDropDelegate(teams: teams, drag: drag, row: id))
+            .contextMenu { MoveToMenu(teams: teams, id: id) }
     }
 }
 
@@ -409,55 +626,113 @@ private struct DropLine: ViewModifier {
     }
 }
 
-/// One row, flat: indented by depth, the picked one on the selected fill (the chosen fill while the
-/// tree has the keyboard, so the keyboard's place shows without an outline or a shadow).
-private struct TreeRowButton: View {
-    let symbol: String
+/// One row of the tree: a square node with two capitals, stepped in by depth, then the text columns
+/// over a 1 pt rule. The picked row is the sunk grey with a 3 pt accent edge and an accent node frame
+/// (ui-ux/0109); while the tree has the keyboard its fill is the soft accent instead, so the
+/// keyboard's place shows without an outline. A drag over it fills it with where the drop lands.
+private struct TeamTreeRow: View {
+    let initials: String
+    let root: Bool
     let title: String
-    let name: String
-    let meta: String
+    let id: String?
+    let pill: String
+    let mix: Int
+    let effort: String
+    let changed: Bool
     let depth: Int
+    let layout: TreeLayout
     let picked: Bool
     let focused: Bool
     /// The fill a drag over this row gives it, which wins over the picked fill.
     var marked: Color?
     let pick: () -> Void
 
+    /// A model without its provider and Claude's prefix: "sonnet-5-5".
+    static func shortModel(_ model: String) -> String {
+        var name = model
+        if let slash = name.lastIndex(of: "/") { name = String(name[name.index(after: slash)...]) }
+        return name.hasPrefix("claude-") ? String(name.dropFirst("claude-".count)) : name
+    }
+
     var body: some View {
         Button(action: pick) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol)
-                    .font(Ledger.font(13))
-                    .foregroundStyle(picked ? Ledger.ink : Ledger.ink2)
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 6) {
+            HStack(alignment: .top, spacing: 0) {
+                node
+                    .padding(.leading, layout.indent(depth))
+                    .frame(width: layout.body, alignment: .leading)
+                HStack(spacing: TreeLayout.gap) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(title)
-                            .fontWeight(picked ? .medium : .regular)
+                            .font(Ledger.font(15, .bold))
                             .foregroundStyle(Ledger.ink)
-                        Text(name)
-                            .font(Ledger.font(12))
-                            .foregroundStyle(Ledger.ink2)
+                            .lineLimit(1)
+                            .layoutPriority(2)
+                        if let id {
+                            Text(id)
+                                .font(Ledger.monoFont(11))
+                                .foregroundStyle(Ledger.ink3)
+                                .lineLimit(1)
+                        }
+                        if changed && layout.compact {
+                            Rectangle().fill(Ledger.accent).frame(width: 7, height: 7)
+                                .layoutPriority(2)
+                        } else if changed {
+                            Text("Changed")
+                                .font(Ledger.monoFont(10, .bold))
+                                .tracking(1)
+                                .textCase(.uppercase)
+                                .foregroundStyle(Ledger.markerInk)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Ledger.marker)
+                                .padding(.leading, 2)
+                                .fixedSize()
+                        }
                     }
-                    .lineLimit(1)
-                    Text(meta)
-                        .font(Ledger.font(11))
-                        .foregroundStyle(Ledger.ink3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 6) {
+                        MixDot(index: mix)
+                        Text(pill)
+                            .font(Ledger.monoFont(11))
+                            .foregroundStyle(Ledger.ink)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(width: layout.profile, height: 24, alignment: .leading)
+                    .overlay(Rectangle().strokeBorder(picked ? Ledger.ink : Ledger.rule, lineWidth: Ledger.hairline))
+                    Text(effort.isEmpty ? "-" : effort)
+                        .font(Ledger.monoFont(11))
+                        .foregroundStyle(picked ? Ledger.ink : Ledger.ink3)
                         .lineLimit(1)
+                        .frame(width: layout.effort, alignment: .trailing)
                 }
-                Spacer(minLength: 0)
+                .padding(.top, 4)
+                .padding(.bottom, 12)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(picked ? .clear : Ledger.rule).frame(height: Ledger.hairline)
+                }
             }
-            .padding(.leading, CGFloat(depth) * 16 + 8)
-            .padding(.trailing, 8)
-            .padding(.vertical, 4)
-            .frame(minHeight: 36)
+            .padding(.vertical, 10)
+            .padding(.trailing, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(background, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+            .background(background)
+            .overlay(alignment: .leading) { Rectangle().fill(picked ? Ledger.accent : .clear).frame(width: 3) }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(title), \(name), \(meta)")
+        .accessibilityLabel([title, id, pill, effort.isEmpty ? nil : "effort \(effort)", changed ? "changed" : nil]
+            .compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(picked ? .isSelected : [])
+    }
+
+    private var node: some View {
+        Text(initials)
+            .font(Ledger.monoFont(10, .bold))
+            .foregroundStyle(root ? Ledger.paper : Ledger.ink)
+            .frame(width: TreeLayout.node, height: TreeLayout.node)
+            .background(root ? Ledger.ink : Ledger.paper)
+            .overlay(Rectangle().strokeBorder(picked && !root ? Ledger.accent : Ledger.ink, lineWidth: Ledger.ruleStrong))
     }
 
     private var background: Color {
@@ -467,92 +742,69 @@ private struct TreeRowButton: View {
     }
 }
 
-/// Adds a Member under the picked one, or at level 1 under the Orchestrator: the six Actions, then
-/// Custom, which asks for a Profile's name first. `compact` is the "+" on the picked row.
-private struct AddMemberMenu: View {
+/// The row after the last: a dashed node and "Add a Member under …", which opens the Add menu.
+private struct AddRow: View {
     @ObservedObject var teams: TeamSettingsModel
-    var compact = false
+    let layout: TreeLayout
 
     var body: some View {
-        Menu {
-            ForEach(Action.shipped) { action in
-                Button { teams.perform(.add(action.id)) } label: {
-                    Label(action.title, systemImage: ActionLook.symbol(for: action.id))
-                }
-            }
-            Divider()
-            Button { teams.perform(.add(Action.custom)) } label: {
-                Label("Custom…", systemImage: ActionLook.symbol(for: Action.custom))
-            }
-        } label: {
-            if compact {
+        MenuButton(entries: { AddEntries.all(teams) }) {
+            HStack(spacing: 14) {
                 Image(systemName: "plus")
-                    .font(Ledger.font(13, .medium))
-                    .foregroundStyle(Ledger.ink2)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-            } else {
-                Text("Add Member")
-                    .font(Ledger.font(14, .medium))
-                    .foregroundStyle(Ledger.ink)
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: 28)
-                    .background(Ledger.fill, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Ledger.ink3)
+                    .frame(width: TreeLayout.node, height: TreeLayout.node)
+                    .overlay(Rectangle().strokeBorder(Ledger.ink3, style: StrokeStyle(lineWidth: Ledger.ruleStrong, dash: [4, 3])))
+                Text("Add a Member under \(teams.member.map { ActionLook.title(for: $0.action) } ?? "the Orchestrator")")
+                    .font(Ledger.font(14))
+                    .foregroundStyle(Ledger.ink3)
+                Spacer(minLength: 0)
             }
+            .padding(.leading, layout.indent(1))
+            .padding(.top, 8)
+            .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .disabled(teams.readOnly)
+        .buttonStyle(.plain)
         .help("Add a Member under the picked one (a)")
-        .accessibilityLabel(compact ? "Add a Member under this one" : "Add Member")
     }
 }
 
-/// "Move to…": the Members the Member may go under, and level 1, as a menu. It does what a drop on
-/// a Member does, so a move never needs a drag (ui-ux/0008). As a button under the tree it moves
-/// the picked Member; in a row's context menu, that row's.
+/// What the Add menus offer: the six Actions, the six shipped Profiles (each for the Action it
+/// starts), then Custom, which asks for a Profile's name first.
+@MainActor
+enum AddEntries {
+    static func all(_ teams: TeamSettingsModel) -> [MenuEntry] {
+        let chips = Palette.chips()
+        var entries: [MenuEntry] = [.header("Actions")]
+        entries += chips.filter { $0.kind == .action }.map { chip in .item(chip.title) { teams.perform(.add(chip.action)) } }
+        entries += [.separator, .header("Profiles")]
+        entries += chips.filter { $0.kind == .worker }.map { chip in
+            .item("\(chip.title) · \(ActionLook.title(for: chip.action))") { teams.perform(.add(chip.action)) }
+        }
+        entries += [.separator, .item("Custom…") { teams.perform(.add(Action.custom)) }]
+        return entries
+    }
+}
+
+/// "Move to…" in a row's context menu: the Members the Member may go under, and level 1. It does
+/// what a drop on a Member does, so a move never needs a drag (ui-ux/0008); the More menu under the
+/// tree has the same list for the picked Member.
 private struct MoveToMenu: View {
     @ObservedObject var teams: TeamSettingsModel
     let id: String
-    var asButton = false
-
-    private var destinations: [String?] {
-        TeamTreeDrop.moveDestinations(of: id, in: teams.form.members)
-    }
 
     var body: some View {
-        let places = destinations
-        if asButton {
-            Menu { items(places) } label: {
-                Text("Move to…")
-                    .font(Ledger.font(14, .medium))
-                    .foregroundStyle(Ledger.ink)
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: 28)
-                    .background(Ledger.fill, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+        let places = TeamTreeDrop.moveDestinations(of: id, in: teams.form.members)
+        Menu("Move to…") {
+            ForEach(places, id: \.self) { parent in
+                Button(Self.title(of: parent, in: teams.form)) { teams.move(id, under: parent) }
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .disabled(teams.readOnly || places.isEmpty)
-            .help("Move the picked Member under another Member, or to level 1")
-            .accessibilityLabel("Move to")
-        } else {
-            Menu("Move to…") { items(places) }
-                .disabled(teams.readOnly || places.isEmpty)
         }
+        .disabled(teams.readOnly || places.isEmpty)
     }
 
-    @ViewBuilder
-    private func items(_ places: [String?]) -> some View {
-        ForEach(places, id: \.self) { parent in
-            Button(title(of: parent)) { teams.move(id, under: parent) }
-        }
-    }
-
-    private func title(of parent: String?) -> String {
-        guard let parent, let member = teams.form.member(parent) else { return "Level 1, under the Orchestrator" }
+    static func title(of parent: String?, in form: TeamForm) -> String {
+        guard let parent, let member = form.member(parent) else { return "Level 1, under the Orchestrator" }
         return "Under \(ActionLook.title(for: member.action)) \(member.id)"
     }
 }
@@ -560,65 +812,96 @@ private struct MoveToMenu: View {
 /// The one line under the tree: why the last command or drop was refused, else nothing.
 private struct TreeCaption: View {
     @ObservedObject var teams: TeamSettingsModel
+    let pad: CGFloat
 
     var body: some View {
         if let notice = teams.treeNotice {
             Text(notice)
-                .font(Ledger.font(11))
-                .foregroundStyle(.orange)
+                .font(Ledger.font(13))
+                .foregroundStyle(SettingsLook.problem)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.top, 6)
+                .padding(.horizontal, pad)
+                .padding(.vertical, 8)
                 .accessibilityAddTraits(.updatesFrequently)
         }
     }
 }
 
-/// The same moves as the keys, as buttons (ui-ux/0008): add, duplicate, remove, and the four moves.
-private struct TreeButtons: View {
+/// The bar under the tree: Add Member, a line on what it adds, and the More menu with the moves
+/// and the keys (ui-ux/0121); the keys themselves still work wherever the tree has the keyboard.
+private struct TreeBar: View {
     @ObservedObject var teams: TeamSettingsModel
-
-    private var noMember: Bool { teams.member == nil }
+    let layout: TreeLayout
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                // Add Member needs no pick: under the Orchestrator it adds at level 1.
-                AddMemberMenu(teams: teams)
-                Button("Duplicate") { teams.perform(.duplicate) }
-                    .help("Copy the picked Member and the Members under it (d)")
-                    .disabled(teams.readOnly || noMember)
-                Button("Remove") { teams.perform(.remove) }
-                    .help("Remove the picked Member, asking first when it has Members under it (Delete)")
-                    .disabled(teams.readOnly || noMember)
-                Spacer(minLength: 0)
+        HStack(spacing: 10) {
+            MenuButton(entries: { AddEntries.all(teams) }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus").font(.system(size: 10, weight: .heavy))
+                    Text("Add Member")
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .heavy))
+                }
             }
-            .buttonStyle(.ledger)
-            HStack(spacing: 8) {
-                moveButton("arrow.up", "Move up", "Move up among its siblings (Option Up)", .move(-1))
-                moveButton("arrow.down", "Move down", "Move down among its siblings (Option Down)", .move(1))
-                moveButton("increase.indent", "Indent", "Put it under the Member above (Option Right)", .indent)
-                moveButton("decrease.indent", "Outdent", "Put it after its parent (Option Left)", .outdent)
-                MoveToMenu(teams: teams, id: teams.selectedMember ?? "", asButton: true)
-                Spacer(minLength: 0)
+            .buttonStyle(.settings)
+            .disabled(teams.readOnly)
+            .help("Add a Member under the picked one (a)")
+            if !layout.compact {
+                Text("Actions or Profiles, under the picked Member")
+                    .font(Ledger.font(12))
+                    .foregroundStyle(Ledger.ink3)
+                    .lineLimit(1)
             }
-            .buttonStyle(.ledger)
-            .disabled(teams.readOnly || noMember)
-            Text("Up and Down pick a row. Option with an arrow moves, indents or outdents it. Return renames, Delete removes, a adds, d duplicates. Left goes back to the sections. Drag a row onto another to put it under it, between two rows to put it there, or to the left edge to make it level 1. Move to… does the same without a drag.")
-                .font(Ledger.font(11))
-                .foregroundStyle(Ledger.ink3)
-                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            MenuButton(entries: { moreEntries }) {
+                HStack(spacing: 3) {
+                    ForEach(0..<3, id: \.self) { _ in Rectangle().frame(width: 3, height: 3) }
+                }
+                .foregroundStyle(Ledger.ink)
+                .frame(width: 34, height: 34)
+                .overlay(Rectangle().strokeBorder(Ledger.rule, lineWidth: Ledger.ruleStrong))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("More: duplicate, remove, move, and the keys")
+            .accessibilityLabel("More: duplicate, remove, move, and keyboard shortcuts")
         }
-        .padding(12)
+        .padding(.horizontal, layout.pad)
+        .padding(.vertical, 12)
+        .overlay(alignment: .top) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
     }
 
-    private func moveButton(_ symbol: String, _ label: String, _ help: String, _ command: TreeCommand) -> some View {
-        Button { teams.perform(command) } label: {
-            Image(systemName: symbol)
-                .frame(width: 18)
-        }
-        .help(help)
-        .accessibilityLabel(label)
+    /// The moves of ui-ux/0102 with their keys beside them, so a drag or a key is never the only way
+    /// (ui-ux/0008), then the keys that only pick or go.
+    private var moreEntries: [MenuEntry] {
+        let canEdit = !teams.readOnly && teams.member != nil
+        let option: NSEvent.ModifierFlags = [.option]
+        let id = teams.selectedMember ?? ""
+        let places = canEdit ? TeamTreeDrop.moveDestinations(of: id, in: teams.form.members) : []
+        func arrow(_ code: Int) -> String { MenuEntry.functionKey(code) }
+        return [
+            .item("Duplicate", enabled: canEdit, key: "d") { teams.perform(.duplicate) },
+            .item("Remove…", enabled: canEdit, key: "\u{8}") { teams.perform(.remove) },
+            .separator,
+            .item("Move Up", enabled: canEdit, key: arrow(NSUpArrowFunctionKey), modifiers: option) { teams.perform(.move(-1)) },
+            .item("Move Down", enabled: canEdit, key: arrow(NSDownArrowFunctionKey), modifiers: option) { teams.perform(.move(1)) },
+            .item("Indent", enabled: canEdit, key: arrow(NSRightArrowFunctionKey), modifiers: option) { teams.perform(.indent) },
+            .item("Outdent", enabled: canEdit, key: arrow(NSLeftArrowFunctionKey), modifiers: option) { teams.perform(.outdent) },
+            .submenu("Move To", enabled: canEdit, places.map { parent in
+                .item(MoveToMenu.title(of: parent, in: teams.form)) { teams.move(id, under: parent) }
+            }),
+            .separator,
+            .header("Keys, while the tree is picked"),
+            .item("Pick the row above", enabled: false, key: arrow(NSUpArrowFunctionKey)) {},
+            .item("Pick the row below", enabled: false, key: arrow(NSDownArrowFunctionKey)) {},
+            .item("Rename", enabled: false, key: "\r") {},
+            .item("Add a Member", enabled: false, key: "a") {},
+            .item("Back to the sections", enabled: false, key: arrow(NSLeftArrowFunctionKey)) {},
+            .separator,
+            .header("Drag a row"),
+            .item("Onto a Member to put it under it", enabled: false) {},
+            .item("Between rows to put it there", enabled: false) {},
+            .item("To the left edge for level 1", enabled: false) {},
+        ]
     }
 }
