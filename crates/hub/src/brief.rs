@@ -11,6 +11,15 @@ fn first_line(text: &str) -> String {
     }
 }
 
+/// How a Worker's row names what it is: its Profile alone, or `member (profile)` when it started as a Member.
+pub fn who(row: &Value) -> String {
+    let profile = row["profile"].as_str().unwrap_or("");
+    match row["member"].as_str() {
+        Some(member) => format!("{member} ({profile})"),
+        None => profile.to_string(),
+    }
+}
+
 /// The brief for the Workers `worker.list` gives (open ones: running, or settled and not closed) and
 /// the open questions `inbox` gives.
 pub fn brief(workers: &[Value], questions: &[Value]) -> String {
@@ -19,7 +28,7 @@ pub fn brief(workers: &[Value], questions: &[Value]) -> String {
         format!(
             "  {} {} {} {} \"{}\"",
             text(&w["id"]),
-            text(&w["profile"]),
+            who(w),
             text(&w["state"]),
             w["branch"].as_str().unwrap_or("in place"),
             text(&w["title"])
@@ -92,5 +101,21 @@ mod tests {
         assert!(text.contains("#12 from w3: Which color?\n"), "{text}");
         let empty = brief(&[], &[]);
         assert_eq!(empty.matches("  none\n").count(), 3, "{empty}");
+    }
+
+    #[test]
+    fn a_worker_is_named_by_its_profile_or_by_its_member_and_profile() {
+        assert_eq!(who(&json!({ "profile": "lee", "member": null })), "lee");
+        assert_eq!(who(&json!({ "profile": "lee" })), "lee");
+        assert_eq!(
+            who(&json!({ "profile": "naruto", "member": "builder" })),
+            "builder (naruto)"
+        );
+        let workers = [
+            json!({ "id": "w2", "profile": "naruto", "member": "builder", "state": "running",
+                               "branch": null, "title": "t", "quiet_seconds": 1, "blocker": null,
+                               "final_report": null }),
+        ];
+        assert!(brief(&workers, &[]).contains("w2 builder (naruto) running"));
     }
 }

@@ -2129,6 +2129,7 @@ impl Hub {
             &db::NewWorker {
                 repo: &repo_root.display().to_string(),
                 profile: profile_name,
+                member: None,
                 title: &title,
                 spec,
                 cwd: &cwd.display().to_string(),
@@ -2174,7 +2175,7 @@ impl Hub {
             },
         )?;
         let view = json!({ "id": format!("w{id}"), "cwd": cwd, "branch": branch, "session_id": session_id,
-                           "title": title, "verify": worker.verify });
+                           "title": title, "verify": worker.verify, "member": worker.member });
         match started.as_deref() {
             Some(state::EXITED) => {
                 // Its terminal may be gone already; the exit message kept its last screen.
@@ -2599,6 +2600,7 @@ impl Hub {
                 "kind": message.kind,
                 "worker": format!("w{}", worker.id),
                 "profile": worker.profile,
+                "member": worker.member,
                 "title": worker.title,
                 "state": worker.state,
                 "branch": worker.branch,
@@ -2728,6 +2730,7 @@ impl Hub {
         Ok(json!({
             "id": format!("w{}", worker.id),
             "profile": worker.profile,
+            "member": worker.member,
             "title": worker.title,
             "state": worker.state,
             "live": self.live(worker.id).is_ok(),
@@ -2853,6 +2856,7 @@ impl Hub {
             let mut row = json!({
                 "id": format!("w{}", worker.id),
                 "profile": worker.profile,
+                "member": worker.member,
                 "title": worker.title,
                 "state": row_state,
                 "phase": worker.state,
@@ -3979,6 +3983,7 @@ mod tests {
             &db::NewWorker {
                 repo: "/r",
                 profile: "naruto",
+                member: None,
                 title: "t",
                 spec: "Fix the login test.",
                 cwd: "/r",
@@ -4199,6 +4204,7 @@ mod tests {
             id: 4,
             repo: "/r".into(),
             profile: "sasuke".into(),
+            member: None,
             title: "verify w3".into(),
             cwd: "/r".into(),
             branch: None,

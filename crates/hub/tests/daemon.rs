@@ -844,6 +844,24 @@ fn snapshot(hub: &Hub) -> serde_json::Value {
 }
 
 #[test]
+fn a_worker_started_on_a_profile_shows_no_member_beside_its_profile() {
+    let hub = Hub::new("nomember");
+    hub.ok(&["worker", "start", "lee", "--spec", "status then wait"]);
+    let listed = hub.worker("w1");
+    assert_eq!(listed["profile"], "lee");
+    assert!(listed["member"].is_null() && listed.get("member").is_some(), "{listed}");
+    let status = hub.status();
+    assert_eq!(status[0]["profile"], "lee");
+    assert!(
+        status[0]["member"].is_null() && status[0].get("member").is_some(),
+        "{status}"
+    );
+    let row = &snapshot(&hub)["workers"][0];
+    assert!(row["member"].is_null() && row.get("member").is_some(), "{row}");
+    assert!(hub.ok(&["worker", "list"]).contains(" lee "));
+}
+
+#[test]
 fn a_forced_kiro_workers_row_shows_the_model_and_cli_it_ran_with_and_its_profiles_effort() {
     let hub = Hub::new("rowforced");
     let profiles = hub.state.join("profiles");

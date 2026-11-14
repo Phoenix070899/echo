@@ -46,6 +46,8 @@ pub struct Worker {
     pub id: i64,
     pub repo: String,
     pub profile: String,
+    /// The Member of its Team it started as; none for a Worker started on a bare Profile.
+    pub member: Option<String>,
     pub title: String,
     pub cwd: String,
     pub branch: Option<String>,
@@ -189,6 +191,10 @@ pub fn open(path: &Path) -> Result<Connection> {
     if !has_column(&conn, "agents", "team")? {
         conn.execute_batch("alter table agents add column team text")?;
     }
+    // The Member of its Team a Worker started as (features/0084); null for a Worker on a bare Profile.
+    if !has_column(&conn, "workers", "member")? {
+        conn.execute_batch("alter table workers add column member text")?;
+    }
     if !has_column(&conn, "workers", "fanout")? {
         conn.execute_batch("alter table workers add column fanout text")?;
     }
@@ -235,7 +241,7 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
 
 const WORKER_COLUMNS: &str = "id, repo, profile, title, cwd, branch, session_id, state, final_report, \
                               created_at, settled_at, closed_at, last_message_at, agent_id, dismissed_at, fanout, cli, model, \
-                              keep, verify, verifies, retries";
+                              keep, verify, verifies, retries, member";
 
 fn worker_row(row: &Row) -> rusqlite::Result<Worker> {
     Ok(Worker {
@@ -261,6 +267,7 @@ fn worker_row(row: &Row) -> rusqlite::Result<Worker> {
         verify: row.get::<_, i64>(19)? != 0,
         verifies: row.get(20)?,
         retries: row.get(21)?,
+        member: row.get(22)?,
     })
 }
 
@@ -283,6 +290,7 @@ fn message_row(row: &Row) -> rusqlite::Result<Message> {
 pub struct NewWorker<'a> {
     pub repo: &'a str,
     pub profile: &'a str,
+    pub member: Option<&'a str>,
     pub title: &'a str,
     pub spec: &'a str,
     pub cwd: &'a str,
@@ -297,8 +305,8 @@ pub struct NewWorker<'a> {
 pub fn insert_worker(conn: &Connection, w: &NewWorker) -> Result<i64> {
     conn.execute(
         "insert into workers (repo, profile, title, spec, cwd, branch, session_id, state, created_at, agent_id, fanout,
-                              cli, model)
-         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                              cli, model, member)
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             w.repo,
             w.profile,
@@ -312,7 +320,8 @@ pub fn insert_worker(conn: &Connection, w: &NewWorker) -> Result<i64> {
             w.agent,
             w.fanout,
             w.cli,
-            w.model
+            w.model,
+            w.member
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -796,6 +805,7 @@ mod tests {
             &NewWorker {
                 repo: "/r",
                 profile: "naruto",
+                member: None,
                 title: "t",
                 spec: "s",
                 cwd: "/r",
@@ -820,6 +830,7 @@ mod tests {
             &NewWorker {
                 repo: "/r",
                 profile: "naruto",
+                member: None,
                 title: "t",
                 spec: "s",
                 cwd: "/r",
@@ -936,6 +947,7 @@ mod tests {
                 &NewWorker {
                     repo: "/r",
                     profile: "lee",
+                    member: None,
                     title: "t",
                     spec: "s",
                     cwd: "/r",
@@ -1035,6 +1047,57 @@ mod tests {
         let conn = open(&path).unwrap(); // a second open migrates nothing twice
         assert_eq!(agent(&conn, id).unwrap().team.as_deref(), Some("claude-lean"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_database_from_before_members_gains_the_column_and_keeps_its_workers() {
+        let dir = std::env::temp_dir().join(format!("hub-db-member-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.db");
+        let _ = std::fs::remove_file(&path);
+        let first = open(&path).unwrap();
+        let id = insert_test_worker(&first);
+        first.execute_batch("alter table workers drop column member").unwrap();
+        assert!(!has_column(&first, "workers", "member").unwrap());
+        drop(first);
+        let conn = open(&path).unwrap();
+        assert!(has_column(&conn, "workers", "member").unwrap());
+        let old = worker(&conn, id).unwrap();
+        assert_eq!(old.member, None, "an old Worker has no Member");
+        assert_eq!(old.profile, "naruto");
+        drop(conn);
+        let conn = open(&path).unwrap(); // a second open migrates nothing twice
+        assert_eq!(workers(&conn, "/r").unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_worker_reads_back_the_member_it_started_as_or_none() {
+        let conn = open(Path::new(":memory:")).unwrap();
+        let start = |member| {
+            insert_worker(
+                &conn,
+                &NewWorker {
+                    repo: "/r",
+                    profile: "naruto",
+                    member,
+                    title: "t",
+                    spec: "s",
+                    cwd: "/r",
+                    branch: None,
+                    session_id: "sid",
+                    agent: None,
+                    fanout: None,
+                    cli: None,
+                    model: None,
+                },
+            )
+            .unwrap()
+        };
+        let (bare, member) = (start(None), start(Some("builder")));
+        assert_eq!(worker(&conn, bare).unwrap().member, None);
+        let w = worker(&conn, member).unwrap();
+        assert_eq!((w.member.as_deref(), w.profile.as_str()), (Some("builder"), "naruto"));
     }
 
     #[test]

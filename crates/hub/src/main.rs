@@ -665,7 +665,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     println!(
                         "{:<5} {:<8} {:<10} {}",
                         row["id"].as_str().unwrap_or(""),
-                        row["profile"].as_str().unwrap_or(""),
+                        brief::who(row),
                         row["state"].as_str().unwrap_or(""),
                         row["title"].as_str().unwrap_or("")
                     );
@@ -825,7 +825,7 @@ fn print_message(m: &Value) {
     };
     println!(
         "#{id} {kind} from {worker} ({}: {})\n{}",
-        m["profile"].as_str().unwrap_or(""),
+        brief::who(m),
         m["title"].as_str().unwrap_or(""),
         m["body"].as_str().unwrap_or("").trim_end()
     );
@@ -897,7 +897,7 @@ fn worker(command: WorkerCommand) -> Result<ExitCode> {
                 println!(
                     "{:<5} {:<8} {:<8} {:>5}s quiet  {}  {}{}",
                     w["id"].as_str().unwrap_or(""),
-                    w["profile"].as_str().unwrap_or(""),
+                    brief::who(&w),
                     w["state"].as_str().unwrap_or(""),
                     w["quiet_seconds"],
                     w["branch"].as_str().unwrap_or("in place"),
