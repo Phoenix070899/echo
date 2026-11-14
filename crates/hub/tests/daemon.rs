@@ -1286,6 +1286,165 @@ fn a_team_is_saved_listed_started_with_and_deleted_over_the_socket() {
 }
 
 #[test]
+fn team_actions_are_listed_over_the_socket_and_by_echoctl() {
+    let hub = Hub::new("teamactions");
+    hub.ok(&["sessions"]);
+    let got = hub.call("team.actions", serde_json::json!({}));
+    let actions = got["result"]["actions"].as_array().unwrap_or_else(|| panic!("{got}"));
+    let ids: Vec<&str> = actions.iter().map(|a| a["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["scan", "research", "execute", "verify", "run", "scribe"], "{got}");
+    let verify = &actions[3];
+    assert_eq!(
+        (verify["profile"].as_str(), verify["under"].as_str()),
+        (Some("sasuke"), Some("execute"))
+    );
+    assert!(
+        verify["title"].is_string() && verify["description"].is_string(),
+        "{verify}"
+    );
+
+    let printed = hub.ok(&["team", "actions"]);
+    let lines: Vec<&str> = printed.lines().collect();
+    assert_eq!(lines.len(), 6, "{printed}");
+    for (line, action) in lines.iter().zip(actions) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(fields[0], action["id"].as_str().unwrap(), "{line}");
+        assert!(line.contains(action["title"].as_str().unwrap()), "{line}");
+        assert!(line.contains(action["profile"].as_str().unwrap()), "{line}");
+        assert!(line.ends_with(action["description"].as_str().unwrap()), "{line}");
+    }
+}
+
+#[test]
+fn profiles_list_carries_what_the_member_inspector_shows() {
+    let hub = Hub::new("profiledetails");
+    hub.ok(&["sessions"]);
+    let got = hub.call("profiles.list", serde_json::json!({ "repo": hub.repo_key() }));
+    let naruto = got["result"]["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "naruto")
+        .unwrap_or_else(|| panic!("{got}"))
+        .clone();
+    assert_eq!(
+        naruto["tools"],
+        serde_json::json!(["Read", "Grep", "Glob", "Edit", "Write", "Bash"])
+    );
+    assert_eq!(naruto["skills"], serde_json::json!([]));
+    assert_eq!(
+        naruto["context"],
+        serde_json::json!(["CONTEXT.md", "AGENTS.md", "CLAUDE.md"])
+    );
+    assert!(
+        naruto["role"]
+            .as_str()
+            .unwrap()
+            .starts_with("You are Naruto, an implementer"),
+        "{naruto}"
+    );
+    assert_eq!(naruto["ownEffort"], "high", "{naruto}");
+}
+
+#[test]
+fn a_team_with_members_keeps_them_in_order_and_one_on_an_unknown_profile_is_refused() {
+    let hub = Hub::new("teammembers");
+    hub.ok(&["sessions"]);
+    let members = serde_json::json!([
+        { "id": "scan", "action": "scan", "profile": "hinata" },
+        {
+            "id": "build", "action": "execute", "profile": "naruto",
+            "instructions": "Keep diffs small.", "replaceRole": true, "model": "anthropic/claude-sonnet-5-5",
+            "effort": "low", "tools": ["Read", "Edit"], "skills": ["echo"], "context": ["CONTEXT.md"],
+            "lessons": false, "writes": true, "worktree": "new"
+        },
+        { "id": "check", "action": "verify", "profile": "sasuke", "parent": "build" },
+    ]);
+    let saved = hub.call(
+        "team.save",
+        serde_json::json!({ "name": "tree", "level": "user", "team": { "members": members } }),
+    );
+    assert!(saved["error"].is_null(), "{saved}");
+    let got = hub.call("team.get", serde_json::json!({ "name": "tree" }));
+    assert_eq!(got["result"]["members"], members, "{got}");
+
+    let before = std::fs::read_to_string(hub.state.join("teams/tree.json")).unwrap();
+    let refused = hub.call(
+        "team.save",
+        serde_json::json!({
+            "name": "tree", "level": "user",
+            "team": { "members": [
+                { "id": "scan", "action": "scan", "profile": "hinata" },
+                { "id": "ghost", "action": "custom", "profile": "nobody" },
+            ] },
+        }),
+    );
+    let error = refused["error"].as_str().unwrap_or_else(|| panic!("{refused}"));
+    assert!(error.contains("members.ghost") && error.contains("nobody"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(hub.state.join("teams/tree.json")).unwrap(),
+        before
+    );
+
+    let new = hub.call(
+        "team.save",
+        serde_json::json!({
+            "name": "never",
+            "team": { "members": [{ "id": "ghost", "action": "custom", "profile": "nobody" }] },
+        }),
+    );
+    assert!(new["error"].as_str().unwrap().contains("members.ghost"), "{new}");
+    assert!(!hub.state.join("teams/never.json").exists());
+}
+
+#[test]
+fn echoctl_team_show_prints_the_members_as_a_tree() {
+    let hub = Hub::new("teamshow");
+    hub.ok(&["sessions"]);
+    let shown = hub.ok(&["team", "show", "claude-lean"]);
+    let build = shown
+        .lines()
+        .position(|l| l.trim_start().starts_with("build"))
+        .unwrap_or_else(|| panic!("{shown}"));
+    let check = shown
+        .lines()
+        .position(|l| l.trim_start().starts_with("check"))
+        .unwrap_or_else(|| panic!("{shown}"));
+    let indent = |i: usize| shown.lines().nth(i).unwrap().len() - shown.lines().nth(i).unwrap().trim_start().len();
+    assert_eq!(check, build + 1, "{shown}");
+    assert!(indent(check) > indent(build), "{shown}");
+}
+
+#[test]
+fn ui_settings_takes_teams_and_the_old_name_agents_for_it() {
+    let hub = Hub::new("uisettings");
+    hub.ok(&["status"]);
+    let mut stream = UnixStream::connect(hub.state.join("hubd.sock")).unwrap();
+    let request = serde_json::json!({ "method": "events", "params": { "repo": hub.repo_key() } });
+    stream.write_all(format!("{request}\n").as_bytes()).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+    let mut lines = BufReader::new(stream).lines();
+    lines.next();
+    lines.next();
+    hub.ok(&["ui", "settings", "teams"]);
+    hub.ok(&["ui", "settings", "agents"]);
+    hub.ok(&["ui", "settings"]);
+    hub.ok(&["ui", "settings", "memory"]);
+    let refused = hub.fails(&["ui", "settings", "nope"]);
+    assert!(
+        refused.contains("no Settings section") && refused.contains("teams"),
+        "{refused}"
+    );
+    let mut seen = Vec::new();
+    while seen.len() < 4 {
+        let snapshot: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        seen = snapshot["ui"].as_array().cloned().unwrap_or_default();
+    }
+    let sections: Vec<&str> = seen.iter().map(|r| r["text"].as_str().unwrap()).collect();
+    assert_eq!(sections, ["teams", "teams", "teams", "memory"], "{seen:?}");
+}
+
+#[test]
 fn the_orchestrators_own_model_and_effort_are_settings() {
     let hub = Hub::new("orchsettings");
     hub.ok(&["sessions"]);

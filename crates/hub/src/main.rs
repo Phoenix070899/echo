@@ -203,8 +203,10 @@ enum ProfileCommand {
 enum TeamCommand {
     /// Every Team an Orchestrator can start with here, with where it comes from.
     List,
-    /// One Team: where it comes from and every field it sets.
+    /// One Team: where it comes from and every field it sets, its Members as a tree.
     Show { name: String },
+    /// The Actions a Member can be for, with the Profile each starts from.
+    Actions,
 }
 
 #[derive(Subcommand)]
@@ -215,10 +217,10 @@ enum UiCommand {
     Show { target: String },
     /// Show a Worker's diff, ready for review.
     Diff { worker: String },
-    /// Show a part of Settings (window, theme, background, font, multiplexer, agents, worktrees, memory, remote),
+    /// Show a part of Settings (window, theme, background, font, multiplexer, teams, worktrees, memory, remote),
     /// for a change only the human makes there, like which model Profiles run with.
     Settings {
-        #[arg(default_value = "agents")]
+        #[arg(default_value = "teams")]
         section: String,
     },
     /// Post a macOS notification from this agent; clicking it opens Echo on the agent.
@@ -505,6 +507,18 @@ fn team_command(command: TeamCommand) -> Result<()> {
             println!("\nYours: {}", state.join("teams").display());
             if let Some(repo) = &repo {
                 println!("This repo's: {}", repo.join(".echo").join("teams").display());
+            }
+        }
+        TeamCommand::Actions => {
+            let actions = action::list(&hub);
+            let width = actions.iter().map(|a| a.id.len()).max().unwrap_or(0);
+            let title = actions.iter().map(|a| a.title.len()).max().unwrap_or(0);
+            let profile = actions.iter().map(|a| a.profile.len()).max().unwrap_or(0);
+            for a in &actions {
+                println!(
+                    "{:width$}  {:title$}  {:profile$}  {}",
+                    a.id, a.title, a.profile, a.description
+                );
             }
         }
         TeamCommand::Show { name } => {

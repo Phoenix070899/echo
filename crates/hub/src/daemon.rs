@@ -15,6 +15,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
+use crate::action;
 use crate::chat;
 use crate::cli;
 use crate::db::{self, kind, state, Worker};
@@ -346,6 +347,12 @@ fn team_save(hub: &Path, state: &Path, repo: Option<&Path>, p: &Value) -> Result
     let mut team: team::Team = serde_json::from_value(param(p, "team")?.clone())
         .map_err(|e| anyhow::anyhow!("the team's fields are not a Team: {e}"))?;
     team.name = str_param(p, "name")?.to_string();
+    let known: Vec<String> = profile::entries(hub, state, repo)
+        .into_iter()
+        .filter(|entry| entry.profile.is_ok())
+        .map(|entry| entry.name)
+        .collect();
+    team::check_profiles(&team, &known)?;
     let path = team::save(
         &team::level_dir(state, repo, origin)?,
         &team,
@@ -1603,6 +1610,8 @@ impl Hub {
                     };
                     profiles.push(json!({
                         "name": p.name, "description": p.description, "writes": p.writes,
+                        // What the Member inspector shows when a Member leaves a field to its Profile.
+                        "tools": p.tools, "skills": p.skills, "context": p.context, "role": p.role,
                         // What it runs with here, and what its own file says.
                         "cli": cli, "model": model.unwrap_or_else(|| format!("{cli} default")),
                         "ownCli": p.cli, "ownModel": p.model, "effort": effort, "ownEffort": p.effort,
@@ -1631,6 +1640,7 @@ impl Hub {
                     ),
                 }
             }
+            "team.actions" => Ok(json!({ "actions": action::list(&self.hub_dir) })),
             "team.save" => team_save(&self.hub_dir, &paths::state_dir(), repo_param(p)?.as_deref(), p),
             "team.delete" => team_delete(&paths::state_dir(), repo_param(p)?.as_deref(), p),
             "profile.copy" | "profile.new" | "profile.reset" | "profile.set" => {
@@ -3119,15 +3129,18 @@ impl Hub {
                     "background",
                     "font",
                     "multiplexer",
+                    "teams",
                     "agents",
                     "worktrees",
                     "memory",
                     "remote",
                 ];
-                let section = p.get("section").and_then(Value::as_str).unwrap_or("agents");
+                let section = p.get("section").and_then(Value::as_str).unwrap_or("teams");
                 if !SECTIONS.contains(&section) {
                     bail!("no Settings section {section:?}; there are {}", SECTIONS.join(", "));
                 }
+                // `agents` is the old name of `teams`.
+                let section = if section == "agents" { "teams" } else { section };
                 request["text"] = json!(section);
                 repo::root(Path::new(str_param(p, "repo")?))?.display().to_string()
             }
