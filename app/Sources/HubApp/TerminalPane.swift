@@ -630,10 +630,8 @@ final class GhosttyView: NSView, NSTextInputClient {
         super.viewDidMoveToWindow()
         let center = NotificationCenter.default
         center.removeObserver(self, name: NSWindow.didChangeScreenNotification, object: nil)
-        center.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
         guard let window else { return syncOcclusion() }
         center.addObserver(self, selector: #selector(screenChanged), name: NSWindow.didChangeScreenNotification, object: window)
-        center.addObserver(self, selector: #selector(syncOcclusion), name: NSWindow.didChangeOcclusionStateNotification, object: window)
         syncScale()
         syncDisplay()
         syncOcclusion()
@@ -641,11 +639,13 @@ final class GhosttyView: NSView, NSTextInputClient {
         if !isSettled, Self.settledSizes.contains(frame.size) { settleNow() }
     }
 
-    /// The surface draws only while its window can be seen, and redraws as soon as it can again;
-    /// a kept terminal, out of any window, draws nothing.
-    @objc private func syncOcclusion() {
+    /// A surface in a window counts as visible even while other windows cover it; only a kept
+    /// terminal, out of any window, is occluded and draws nothing (ui-ux/0127). libghostty frees
+    /// an occluded surface's frames, so a covered window came back with its terminals empty until
+    /// they drew again: a dark flash on every return to Echo (bugs/0081).
+    private func syncOcclusion() {
         guard let surface else { return }
-        ghostty_surface_set_occlusion(surface, window?.occlusionState.contains(.visible) ?? false)
+        ghostty_surface_set_occlusion(surface, window != nil)
     }
 
     @objc private func screenChanged() {
