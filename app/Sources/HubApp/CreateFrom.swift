@@ -116,7 +116,7 @@ struct CreateFromSection: View {
         .fixedSize()
         .help("New branches start from \(form.base.isEmpty ? "the repo's checkout" : form.base)")
         .accessibilityLabel("Start new branches from \(form.base)")
-        .popover(isPresented: $baseSearch.shown, arrowEdge: .bottom) {
+        .foundryPopover(isPresented: $baseSearch.shown, width: 340) {
             BaseBranchSearch(branches: form.branches.map(\.name), base: form.base, search: baseSearch) { name in
                 form.base = name
                 baseSearch.shown = false
@@ -232,8 +232,8 @@ final class BaseSearch: ObservableObject {
     @Published var picked = 0
 }
 
-/// The base-branch picker's popover: a search field over the repo's branches; ↑ and ↓ move,
-/// Return picks, Escape closes.
+/// The base-branch picker in Foundry's popover (ui-ux/0125): a search field over the repo's
+/// branches; ↑ and ↓ move, Return picks, Escape or a click outside closes.
 private struct BaseBranchSearch: View {
     let branches: [String]
     let base: String
@@ -243,7 +243,8 @@ private struct BaseBranchSearch: View {
 
     var body: some View {
         let shown = matches
-        VStack(spacing: 0) {
+        FoundryPopover(label: "Start new branches from") {
+            FoundryPopoverHead(title: "Branch from", detail: base.isEmpty ? "HEAD" : base)
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(Ledger.ink3)
                 TextField("Find a branch", text: $search.query)
@@ -255,36 +256,36 @@ private struct BaseBranchSearch: View {
                     .onKeyPress(.upArrow) { move(-1, in: shown); return .handled }
             }
             .ledgerField()
-            .padding(8)
-
-            Rectangle().fill(Ledger.rule).frame(height: 1)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .overlay(alignment: .bottom) { Rule() }
 
             if shown.isEmpty {
                 Text(branches.isEmpty ? "Reading branches…" : "No branch matches.")
-                    .font(Ledger.font(12.5))
+                    .font(Ledger.font(13))
                     .foregroundStyle(Ledger.ink3)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
             } else {
                 ScrollViewReader { scroller in
                     ScrollView {
-                        VStack(spacing: 2) {
+                        VStack(spacing: 0) {
                             ForEach(Array(shown.enumerated()), id: \.element) { index, name in
-                                row(name, picked: index == search.picked).id(name)
+                                row(name, picked: index == search.picked)
+                                    .onHover { if $0 { search.picked = index } }
+                                    .id(name)
                             }
                         }
-                        .padding(6)
                     }
                     .frame(maxHeight: 280)
+                    .fixedSize(horizontal: false, vertical: true)
                     .onChange(of: search.picked) {
                         if shown.indices.contains(search.picked) { scroller.scrollTo(shown[search.picked]) }
                     }
                 }
             }
         }
-        .frame(width: 320)
-        .fixedSize(horizontal: false, vertical: true)
-        .background(Ledger.paper)
         .onAppear {
             search.query = ""
             search.picked = max(0, branches.firstIndex(of: base) ?? 0)
@@ -304,25 +305,29 @@ private struct BaseBranchSearch: View {
         search.picked = min(max(search.picked + step, 0), shown.count - 1)
     }
 
+    /// A branch as a compact popover row: its name in mono, "base" at the right of the one new
+    /// branches start from now; the picked row sunk with the accent square.
     private func row(_ name: String, picked: Bool) -> some View {
         Button { pick(name) } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "checkmark")
-                    .font(Ledger.font(11, .semibold))
-                    .opacity(name == base ? 1 : 0)
+            HStack(spacing: 10) {
                 Text(name)
-                    .font(Ledger.monoFont(12.5))
+                    .font(Ledger.monoFont(13, picked ? .bold : .regular))
+                    .foregroundStyle(Ledger.ink)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Spacer(minLength: 0)
+                Spacer(minLength: 8)
+                if name == base { MonoLabel("Base") }
             }
-            .foregroundStyle(Ledger.ink)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(picked ? Ledger.chosen : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
+            .padding(.leading, 18)
+            .padding(.trailing, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(picked ? Ledger.selected : Color.clear)
+            .overlay(alignment: .leading) { if picked { ListMarker(picked: true).padding(.leading, 5) } }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(name)
         .accessibilityAddTraits(name == base ? .isSelected : [])
     }
 }

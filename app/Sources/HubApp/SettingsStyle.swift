@@ -227,34 +227,12 @@ extension ButtonStyle where Self == SettingsButtonStyle {
 
 /// One entry of a menu drawn by AppKit under a square control.
 struct MenuEntry {
-    enum Kind { case item, separator, header }
-
-    var kind = Kind.item
     var title = ""
     var checked = false
-    var enabled = true
-    /// The key shown at the right, like "d" or an arrow's function key; shown only.
-    var key = ""
-    var modifiers: NSEvent.ModifierFlags = []
-    var children: [MenuEntry] = []
-    var action: (() -> Void)?
+    var action: () -> Void
 
-    static let separator = MenuEntry(kind: .separator)
-
-    static func header(_ title: String) -> MenuEntry { MenuEntry(kind: .header, title: title) }
-
-    static func item(_ title: String, checked: Bool = false, enabled: Bool = true, key: String = "",
-                     modifiers: NSEvent.ModifierFlags = [], action: @escaping () -> Void) -> MenuEntry {
-        MenuEntry(title: title, checked: checked, enabled: enabled, key: key, modifiers: modifiers, action: action)
-    }
-
-    static func submenu(_ title: String, enabled: Bool = true, _ children: [MenuEntry]) -> MenuEntry {
-        MenuEntry(title: title, enabled: enabled && !children.isEmpty, children: children)
-    }
-
-    /// A function key's character, for the arrows a menu shows beside its moves.
-    static func functionKey(_ code: Int) -> String {
-        String(Character(UnicodeScalar(UInt32(code))!))
+    static func item(_ title: String, checked: Bool = false, action: @escaping () -> Void) -> MenuEntry {
+        MenuEntry(title: title, checked: checked, action: action)
     }
 }
 
@@ -277,27 +255,13 @@ final class MenuAnchor: ObservableObject {
         menu.autoenablesItems = false
         menu.font = Ledger.nsFont(13)
         for entry in entries {
-            switch entry.kind {
-            case .separator:
-                menu.addItem(.separator())
-            case .header:
-                menu.addItem(NSMenuItem.sectionHeader(title: entry.title))
-            case .item:
-                let item = NSMenuItem(title: entry.title, action: nil, keyEquivalent: entry.key)
-                item.keyEquivalentModifierMask = entry.modifiers
-                item.state = entry.checked ? .on : .off
-                item.isEnabled = entry.enabled
-                if !entry.children.isEmpty {
-                    item.submenu = Self.menu(entry.children)
-                } else if let action = entry.action {
-                    let target = MenuTarget(action)
-                    item.target = target
-                    item.action = #selector(MenuTarget.fire)
-                    // The item keeps its target alive while the menu is up.
-                    item.representedObject = target
-                }
-                menu.addItem(item)
-            }
+            let item = NSMenuItem(title: entry.title, action: #selector(MenuTarget.fire), keyEquivalent: "")
+            item.state = entry.checked ? .on : .off
+            let target = MenuTarget(entry.action)
+            item.target = target
+            // The item keeps its target alive while the menu is up.
+            item.representedObject = target
+            menu.addItem(item)
         }
         return menu
     }

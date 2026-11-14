@@ -739,8 +739,10 @@ private struct AddRow: View {
     @ObservedObject var teams: TeamSettingsModel
     let layout: TreeLayout
 
+    @StateObject private var menu = Flag()
+
     var body: some View {
-        MenuButton(entries: { AddEntries.all(teams) }) {
+        Button { menu.on.toggle() } label: {
             HStack(spacing: 14) {
                 Image(systemName: "plus")
                     .font(.system(size: 12, weight: .bold))
@@ -757,23 +759,36 @@ private struct AddRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .foundryPopover(isPresented: $menu.on, width: AddEntries.width) { AddEntries.menu(teams) }
         .help("Add a Member under the picked one (a)")
     }
 }
 
-/// What the Add menus offer: the six Actions, the six shipped Profiles (each for the Action it
-/// starts), then Custom, which asks for a Profile's name first.
+/// What the Add menus offer, in Foundry's popover (ui-ux/0125): the six Actions, each with its
+/// initials in the framed square as the tree draws its node and what it does; the six shipped
+/// Profiles (each for the Action it starts); then Custom, which asks for a Profile's name first.
 @MainActor
 enum AddEntries {
-    static func all(_ teams: TeamSettingsModel) -> [MenuEntry] {
+    static let width: CGFloat = 500
+
+    static func menu(_ teams: TeamSettingsModel) -> FoundryMenu {
+        let under = teams.member.map { "under \(ActionLook.title(for: $0.action)) \($0.id)" } ?? "under the Orchestrator"
+        return FoundryMenu(label: "Add a Member", head: "Add a Member", detail: under, entries: all(teams))
+    }
+
+    static func all(_ teams: TeamSettingsModel) -> [FoundryMenuEntry] {
         let chips = Palette.chips()
-        var entries: [MenuEntry] = [.header("Actions")]
-        entries += chips.filter { $0.kind == .action }.map { chip in .item(chip.title) { teams.perform(.add(chip.action)) } }
-        entries += [.separator, .header("Profiles")]
-        entries += chips.filter { $0.kind == .worker }.map { chip in
-            .item("\(chip.title) · \(ActionLook.title(for: chip.action))") { teams.perform(.add(chip.action)) }
+        var entries: [FoundryMenuEntry] = chips.filter { $0.kind == .action }.map { chip in
+            .item(chip.title, note: Action.shipped.first { $0.id == chip.action }?.description,
+                  icon: AnyView(Text(ActionLook.initials(chip.title)).font(Ledger.monoFont(11, .bold)))) {
+                teams.perform(.add(chip.action))
+            }
         }
-        entries += [.separator, .item("Custom…") { teams.perform(.add(Action.custom)) }]
+        entries += [.rule, .label("Profiles")]
+        entries += chips.filter { $0.kind == .worker }.map { chip in
+            .item(chip.title, note: "for \(ActionLook.title(for: chip.action))") { teams.perform(.add(chip.action)) }
+        }
+        entries += [.rule, .item("Custom…", note: "names its Profile first") { teams.perform(.add(Action.custom)) }]
         return entries
     }
 }
@@ -798,6 +813,32 @@ private struct MoveToMenu: View {
     static func title(of parent: String?, in form: TeamForm) -> String {
         guard let parent, let member = form.member(parent) else { return "Level 1, under the Orchestrator" }
         return "Under \(ActionLook.title(for: member.action)) \(member.id)"
+    }
+}
+
+/// The keys that only pick or go, and the drags, at the foot of the More menu.
+private struct KeysFoot: View {
+    private static let keys = [("↑ ↓", "Pick the row above or below"), ("↩", "Rename"), ("A", "Add a Member"),
+                               ("←", "Back to the sections")]
+    private static let drags = ["Onto a Member to put it under it", "Between rows to put it there",
+                                "To the left edge for level 1"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            MonoLabel("Keys, while the tree is picked")
+            ForEach(Self.keys, id: \.0) { key, what in
+                HStack(spacing: 10) {
+                    Text(key)
+                        .font(Ledger.monoFont(10, .bold))
+                        .frame(width: 40, height: 22)
+                        .overlay(Rectangle().strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
+                    Text(what)
+                }
+                .accessibilityElement(children: .combine)
+            }
+            MonoLabel("Drag a row").padding(.top, 6)
+            ForEach(Self.drags, id: \.self) { Text($0) }
+        }
     }
 }
 
@@ -826,9 +867,12 @@ private struct TreeBar: View {
     @ObservedObject var teams: TeamSettingsModel
     let layout: TreeLayout
 
+    @StateObject private var addMenu = Flag()
+    @StateObject private var moreMenu = Flag()
+
     var body: some View {
         HStack(spacing: 10) {
-            MenuButton(entries: { AddEntries.all(teams) }) {
+            Button { addMenu.on.toggle() } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "plus").font(.system(size: 10, weight: .heavy))
                     Text("Add Member")
@@ -837,6 +881,7 @@ private struct TreeBar: View {
             }
             .buttonStyle(.settings)
             .disabled(teams.readOnly)
+            .foundryPopover(isPresented: $addMenu.on, width: AddEntries.width) { AddEntries.menu(teams) }
             .help("Add a Member under the picked one (a)")
             if !layout.compact {
                 Text("Actions or Profiles, under the picked Member")
@@ -845,7 +890,7 @@ private struct TreeBar: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            MenuButton(entries: { moreEntries }) {
+            Button { moreMenu.on.toggle() } label: {
                 HStack(spacing: 3) {
                     ForEach(0..<3, id: \.self) { _ in Rectangle().frame(width: 3, height: 3) }
                 }
@@ -855,6 +900,7 @@ private struct TreeBar: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .foundryPopover(isPresented: $moreMenu.on, width: 380, trailing: true) { more }
             .help("More: duplicate, remove, move, and the keys")
             .accessibilityLabel("More: duplicate, remove, move, and keyboard shortcuts")
         }
@@ -864,36 +910,29 @@ private struct TreeBar: View {
     }
 
     /// The moves of ui-ux/0102 with their keys beside them, so a drag or a key is never the only way
-    /// (ui-ux/0008), then the keys that only pick or go.
-    private var moreEntries: [MenuEntry] {
+    /// (ui-ux/0008), the places Move To offers, then the keys that only pick or go and the drags,
+    /// told in the foot.
+    private var more: FoundryMenu {
         let canEdit = !teams.readOnly && teams.member != nil
-        let option: NSEvent.ModifierFlags = [.option]
         let id = teams.selectedMember ?? ""
         let places = canEdit ? TeamTreeDrop.moveDestinations(of: id, in: teams.form.members) : []
-        func arrow(_ code: Int) -> String { MenuEntry.functionKey(code) }
-        return [
-            .item("Duplicate", enabled: canEdit, key: "d") { teams.perform(.duplicate) },
-            .item("Remove…", enabled: canEdit, key: "\u{8}") { teams.perform(.remove) },
-            .separator,
-            .item("Move Up", enabled: canEdit, key: arrow(NSUpArrowFunctionKey), modifiers: option) { teams.perform(.move(-1)) },
-            .item("Move Down", enabled: canEdit, key: arrow(NSDownArrowFunctionKey), modifiers: option) { teams.perform(.move(1)) },
-            .item("Indent", enabled: canEdit, key: arrow(NSRightArrowFunctionKey), modifiers: option) { teams.perform(.indent) },
-            .item("Outdent", enabled: canEdit, key: arrow(NSLeftArrowFunctionKey), modifiers: option) { teams.perform(.outdent) },
-            .submenu("Move To", enabled: canEdit, places.map { parent in
-                .item(MoveToMenu.title(of: parent, in: teams.form)) { teams.move(id, under: parent) }
-            }),
-            .separator,
-            .header("Keys, while the tree is picked"),
-            .item("Pick the row above", enabled: false, key: arrow(NSUpArrowFunctionKey)) {},
-            .item("Pick the row below", enabled: false, key: arrow(NSDownArrowFunctionKey)) {},
-            .item("Rename", enabled: false, key: "\r") {},
-            .item("Add a Member", enabled: false, key: "a") {},
-            .item("Back to the sections", enabled: false, key: arrow(NSLeftArrowFunctionKey)) {},
-            .separator,
-            .header("Drag a row"),
-            .item("Onto a Member to put it under it", enabled: false) {},
-            .item("Between rows to put it there", enabled: false) {},
-            .item("To the left edge for level 1", enabled: false) {},
+        var entries: [FoundryMenuEntry] = [
+            .item("Duplicate", key: "D", enabled: canEdit) { teams.perform(.duplicate) },
+            .item("Remove…", key: "⌫", enabled: canEdit) { teams.perform(.remove) },
+            .rule,
+            .item("Move Up", key: "⌥↑", enabled: canEdit) { teams.perform(.move(-1)) },
+            .item("Move Down", key: "⌥↓", enabled: canEdit) { teams.perform(.move(1)) },
+            .item("Indent", key: "⌥→", enabled: canEdit) { teams.perform(.indent) },
+            .item("Outdent", key: "⌥←", enabled: canEdit) { teams.perform(.outdent) },
         ]
+        if !places.isEmpty {
+            entries += [.rule, .label("Move to")]
+            entries += places.map { parent in
+                .item(MoveToMenu.title(of: parent, in: teams.form)) { teams.move(id, under: parent) }
+            }
+        }
+        return FoundryMenu(label: "More", head: "Member", detail: teams.member.map { ActionLook.title(for: $0.action) },
+                           entries: entries, foot: AnyView(KeysFoot()))
     }
+
 }

@@ -39,13 +39,6 @@ struct ContentView: View {
         .tint(Ledger.run)
         .background(Ledger.desk)
         .ignoresSafeArea(.container, edges: .top)
-        .overlayPreferenceValue(NewSessionAnchor.self) { anchor in
-            GeometryReader { proxy in
-                if model.newSessionMenuShown, let anchor {
-                    NewSessionPopup(anchor: proxy[anchor])
-                }
-            }
-        }
         .overlay {
             ZStack {
                 if model.newSession != nil {
@@ -63,6 +56,8 @@ struct ContentView: View {
                 UnsavedTeamModal(teams: model.teamSettings)
             }
         }
+        // Every floating panel, over the modals too (ui-ux/0125).
+        .foundryPopoverHost(shown: $model.popoverShown)
         .confirmationDialog(closeTitle, isPresented: closingShown, presenting: model.closing) { agent in
             Button("Close \(agent.kindName)", role: .destructive) {
                 model.forgetAgent(agent.id)
@@ -399,17 +394,9 @@ struct NewSessionMenu: View {
             }
         }
         .buttonStyle(.plain)
-        .anchorPreference(key: NewSessionAnchor.self, value: .bounds) { $0 }
+        .foundryPopover(isPresented: $model.newSessionMenuShown, width: 432, gap: 16) { NewSessionPopup() }
         .help("New session")
         .accessibilityLabel("New session")
-    }
-}
-
-/// Where the New session button sits, so the menu opens under it.
-struct NewSessionAnchor: PreferenceKey {
-    static let defaultValue: Anchor<CGRect>? = nil
-    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
-        value = value ?? nextValue()
     }
 }
 
@@ -1453,53 +1440,59 @@ struct StatsInline: View {
             .buttonStyle(.plain)
             .help("Workers, last 7 days")
             .accessibilityLabel("Workers, last 7 days")
-            .popover(isPresented: $shown.on, arrowEdge: .bottom) { StatsReport(stats: stats) }
+            .foundryPopover(isPresented: $shown.on, width: 520, trailing: true) { StatsReport(stats: stats) }
         }
     }
 }
 
-/// `echoctl stats` for the last 7 days: where Workers' tokens went and how much they read.
+/// `echoctl stats` for the last 7 days, in Foundry's popover (ui-ux/0125): the Profiles as a ruled
+/// table with mono figures lined up at the right, then where Workers' tokens went and how much they
+/// read.
 struct StatsReport: View {
     let stats: WorkerStats
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            // Foundry's head: a mono label, the title in the display face (ui-ux/0110).
-            VStack(alignment: .leading, spacing: 6) {
-                MonoLabel("Worker statistics")
-                Text("Workers, last 7 days")
-                    .font(Ledger.display(26))
-                    .textCase(.uppercase)
-                    .foregroundStyle(Ledger.ink)
-                    .accessibilityAddTraits(.isHeader)
-                Text("\(stats.withTranscript) Workers, \(stats.turns) turns")
-                    .font(Ledger.monoFont(12))
-                    .foregroundStyle(Ledger.ink3)
-            }
-            VStack(spacing: 0) {
-                row("Start context", "\(tokenCount(stats.startContext)), re-read on every turn")
-                row("Context per turn", tokenCount(stats.contextPerTurn))
-                row("Token cost", "cache reads \(percent(stats.share.cacheReads)), cache writes \(percent(stats.share.cacheWrites)), output \(percent(stats.share.output))")
-                row("Cold starts", "\(percent(stats.share.coldStarts)) of token cost")
-                row("Per Worker", "\(number(stats.perWorker.reads)) Reads, \(number(stats.perWorker.shellReads)) cat, head, or sed, \(number(stats.perWorker.searches)) searches")
-                row("Repeated reads", "\(percent(stats.repeatReads)) of Reads")
-            }
-            .overlay(alignment: .top) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
-            // The profiles as a ruled table: mono figures that line up in their columns.
-            Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 0) {
-                GridRow {
-                    MonoLabel("Profile").gridColumnAlignment(.leading)
-                    MonoLabel("Workers")
-                    MonoLabel("Turns")
-                    MonoLabel("Start")
-                    MonoLabel("Per turn")
-                    MonoLabel("Cost")
+        FoundryPopover(label: "Workers, last 7 days") {
+            FoundryPopoverHead(title: "Workers, last 7 days", detail: "\(stats.withTranscript) Workers, \(stats.turns) turns")
+            FoundryPopoverBody {
+                VStack(alignment: .leading, spacing: 14) {
+                    table
+                    VStack(spacing: 0) {
+                        row("Start context", "\(tokenCount(stats.startContext)), re-read on every turn")
+                        row("Context per turn", tokenCount(stats.contextPerTurn))
+                        row("Token cost", "cache reads \(percent(stats.share.cacheReads)), cache writes \(percent(stats.share.cacheWrites)), output \(percent(stats.share.output))")
+                        row("Cold starts", "\(percent(stats.share.coldStarts)) of token cost")
+                        row("Per Worker", "\(number(stats.perWorker.reads)) Reads, \(number(stats.perWorker.shellReads)) cat, head, or sed, \(number(stats.perWorker.searches)) searches")
+                        row("Repeated reads", "\(percent(stats.repeatReads)) of Reads", last: true)
+                    }
+                    .overlay(alignment: .top) { Rule() }
                 }
-                .padding(.vertical, 8)
-                Rectangle().fill(Ledger.ink).frame(height: Ledger.hairline).gridCellUnsizedAxes(.horizontal)
-                ForEach(stats.profiles) { p in
-                    GridRow {
-                        Text(p.profile).font(Ledger.font(13, .semibold)).foregroundStyle(Ledger.ink)
+            }
+            FoundryPopoverFoot {
+                Text("From Claude Code transcripts; Codex and Kiro Workers are not counted. Token cost weighs a cache read 0.1, a write 1.25 to 2, and output 5 against fresh input.")
+            }
+        }
+        .textSelection(.enabled)
+    }
+
+    /// Foundry's ruled table: mono capital heads, the Profile in the sans, the figures in mono
+    /// tabular digits at the right of their columns, a 1 pt rule under every row but the last.
+    private var table: some View {
+        Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 0) {
+            GridRow {
+                MonoLabel("Profile").frame(maxWidth: .infinity, alignment: .leading).gridColumnAlignment(.leading)
+                MonoLabel("Workers")
+                MonoLabel("Turns each")
+                MonoLabel("Start")
+                MonoLabel("Per turn")
+                MonoLabel("Cost")
+            }
+            .padding(.vertical, 8)
+            Rule().gridCellUnsizedAxes(.horizontal)
+            ForEach(Array(stats.profiles.enumerated()), id: \.element.id) { index, p in
+                GridRow {
+                    Text(p.profile).font(Ledger.font(13, .semibold)).foregroundStyle(Ledger.ink).frame(maxWidth: .infinity, alignment: .leading)
+                    Group {
                         Text("\(p.workers)")
                         Text("\(p.turnsPerWorker)")
                         Text(tokenCount(p.startContext))
@@ -1508,25 +1501,16 @@ struct StatsReport: View {
                     }
                     .font(Ledger.monoFont(12))
                     .monospacedDigit()
-                    .foregroundStyle(Ledger.ink)
-                    .padding(.vertical, 7)
-                    Rule().gridCellUnsizedAxes(.horizontal)
+                    .foregroundStyle(Ledger.ink3)
                 }
+                .padding(.vertical, 8)
+                if index < stats.profiles.count - 1 { Rule().gridCellUnsizedAxes(.horizontal) }
             }
-            .overlay(alignment: .top) { Rule() }
-            Text("From Claude Code transcripts; Codex and Kiro Workers are not counted. Token cost weighs a cache read 0.1, a write 1.25 to 2, and output 5 against fresh input.")
-                .font(Ledger.font(12))
-                .foregroundStyle(Ledger.ink3)
-                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(20)
-        .frame(width: 480)
-        .background(Ledger.paper)
-        .textSelection(.enabled)
     }
 
     /// A fact of the week: its mono label, then its value, between 1 pt rules.
-    private func row(_ label: String, _ value: String) -> some View {
+    private func row(_ label: String, _ value: String, last: Bool = false) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
             MonoLabel(label).frame(width: 140, alignment: .leading)
             Text(value)
@@ -1537,7 +1521,7 @@ struct StatsReport: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 8)
-        .overlay(alignment: .bottom) { Rule() }
+        .overlay(alignment: .bottom) { if !last { Rule() } }
     }
 
     private func percent(_ value: Double) -> String { "\(Int(value.rounded()))%" }

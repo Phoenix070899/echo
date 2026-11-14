@@ -131,6 +131,8 @@ final class AppModel: ObservableObject {
     @Published var quickOpenShown = false
     /// The New session menu under the ledger's button is open (ui-ux/0113).
     @Published var newSessionMenuShown = false
+    /// A Foundry popover is open over the window (ui-ux/0125), so the terminal lets go of the keyboard.
+    @Published var popoverShown = false
     /// The ledger lists the stopped repos under the live ones.
     @Published var stoppedShown = false
     /// The Settings section filling the window; nil shows the agents.
@@ -141,7 +143,7 @@ final class AppModel: ObservableObject {
     /// The New Team sheet is up, over the Teams section.
     @Published var newTeamShown = false
     /// While a modal is up, terminals hand it the keyboard.
-    var modalShown: Bool { teamSettings.asking || newTeamShown || newSession != nil || renaming != nil || closing != nil || quickOpenShown || fanOutShown || newSessionMenuShown }
+    var modalShown: Bool { teamSettings.asking || newTeamShown || newSession != nil || renaming != nil || closing != nil || quickOpenShown || fanOutShown || newSessionMenuShown || popoverShown }
     /// Shrinks the ledger to a strip of status marks so the terminal takes almost the whole window.
     @Published var ledgerCollapsed = false
 
