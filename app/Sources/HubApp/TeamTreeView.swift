@@ -206,7 +206,7 @@ struct TreeDropDelegate: DropDelegate {
 }
 
 /// The Team's tree (ui-ux/0121): the Team's head with its Members and models, then the Orchestrator
-/// at the root and its Members hanging from a spine, one row each in fixed columns (Member and id,
+/// at the root and its Members stepped in under it, one row each in fixed columns (Member and id,
 /// Profile and model, effort), then the bar with Add Member and the More menu. The keys and drags of
 /// ui-ux/0102 work as before. The rows are drawn from `TeamTree.rows`; the operations are
 /// `TeamTreeEditing`'s.
@@ -260,7 +260,6 @@ struct TeamTreeColumn: View {
                                 .padding(.top, 10)
                         }
                     }
-                    .background(alignment: .topLeading) { TreeSpine() }
                     .padding(.horizontal, layout.pad)
                     .padding(.bottom, 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -512,20 +511,6 @@ private struct TreeColumnHeads: View {
     }
 }
 
-/// The 2 pt rule the rows hang from, from the Orchestrator's node down to the last row.
-private struct TreeSpine: View {
-    var body: some View {
-        GeometryReader { proxy in
-            Rectangle()
-                .fill(Ledger.rule)
-                .frame(width: Ledger.ruleStrong, height: max(0, proxy.size.height - 56))
-                .offset(x: TreeLayout.node / 2 - 1, y: 26)
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
 /// The Orchestrator, at the root: picking it shows the Team's own fields. A drop on it is level 1.
 private struct OrchestratorRow: View {
     @ObservedObject var teams: TeamSettingsModel
@@ -627,8 +612,9 @@ private struct DropLine: ViewModifier {
 }
 
 /// One row of the tree: a square node with two capitals, stepped in by depth, then the text columns
-/// over a 1 pt rule. The picked row is the sunk grey with a 3 pt accent edge and an accent node frame
-/// (ui-ux/0109); while the tree has the keyboard its fill is the soft accent instead, so the
+/// over a 1 pt rule. A Member's row starts with a small square under its parent's node, centred on
+/// its own node: the accent when picked, grey otherwise; there is no spine (ui-ux/0124). The picked
+/// row is the sunk grey with an accent node frame; while the tree has the keyboard its fill is the soft accent instead, so the
 /// keyboard's place shows without an outline. A drag over it fills it with where the drop lands.
 private struct TeamTreeRow: View {
     let initials: String
@@ -717,7 +703,13 @@ private struct TeamTreeRow: View {
             .padding(.trailing, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(background)
-            .overlay(alignment: .leading) { Rectangle().fill(picked ? Ledger.accent : .clear).frame(width: 3) }
+            .overlay(alignment: .topLeading) {
+                if !root {
+                    ListMarker(picked: picked)
+                        .offset(x: layout.indent(depth - 1) + (TreeLayout.node - ListMarker.size) / 2,
+                                y: 10 + (TreeLayout.node - ListMarker.size) / 2)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

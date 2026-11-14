@@ -130,7 +130,8 @@ struct SettingsPage: View {
 }
 
 /// A section in the list (ui-ux/0120): its number in mono and its name, 44 pt tall over a 1 pt rule;
-/// the picked one in ink and bold on the sheet's grey, with a 3 pt accent bar at its leading edge.
+/// the picked one in ink and bold on the sheet's grey. A small square at its leading edge marks it:
+/// the accent on the picked one, grey on the others (ui-ux/0124).
 private struct SectionRow: View {
     let item: SettingsSection
     let picked: Bool
@@ -151,14 +152,12 @@ private struct SectionRow: View {
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
-            .padding(.leading, 9)
+            .padding(.leading, 15)
             .padding(.trailing, 12)
             .frame(minHeight: 44)
             .frame(maxWidth: .infinity)
             .background(picked || hover.on ? Ledger.paper : .clear)
-            .overlay(alignment: .leading) {
-                Rectangle().fill(picked ? Ledger.accent : .clear).frame(width: 3)
-            }
+            .overlay(alignment: .leading) { ListMarker(picked: picked).padding(.leading, 4) }
             .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
             .contentShape(Rectangle())
         }

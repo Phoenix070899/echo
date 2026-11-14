@@ -353,8 +353,9 @@ struct DiffLineRow: View {
         .padding(.vertical, 2)
         .padding(.trailing, 12)
         .background(background)
-        .overlay(alignment: .leading) {
-            if marked { Rectangle().fill(Ledger.accent).frame(width: 3) }
+        // The cursor's line is marked by the accent square on its first line (ui-ux/0124).
+        .overlay(alignment: .topLeading) {
+            if marked { ListMarker(picked: true).padding(.leading, 3).padding(.top, 7) }
         }
         .contentShape(Rectangle())
         .onHover { hover.on = $0 }

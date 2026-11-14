@@ -124,8 +124,9 @@ private struct TeamsList: View {
 }
 
 /// An entry in the list: the name in bold over its one line of description, over a 1 pt rule; the
-/// picked one on the sheet's grey with a 3 pt accent edge, a square accent dot while it has edits
-/// not saved, and its problem in red under it where it has one.
+/// picked one on the sheet's grey, a small square beside its name (the accent when picked, grey
+/// otherwise; ui-ux/0124), a square accent dot while it has edits not saved, and its problem in red
+/// under it where it has one.
 private struct TeamRow: View {
     let name: String
     let about: String?
@@ -149,6 +150,8 @@ private struct TeamRow: View {
                     }
                     Spacer(minLength: 0)
                 }
+                // Centred on the name's line, 4 pt in from the row's edge.
+                .overlay(alignment: .leading) { ListMarker(picked: picked).offset(x: -11) }
                 if let about, !about.isEmpty {
                     Text(about)
                         .font(Ledger.font(12))
@@ -165,12 +168,11 @@ private struct TeamRow: View {
                         .multilineTextAlignment(.leading)
                 }
             }
-            .padding(.leading, 9)
+            .padding(.leading, 15)
             .padding(.trailing, 12)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(picked || hover.on ? Ledger.paper : .clear)
-            .overlay(alignment: .leading) { Rectangle().fill(picked ? Ledger.accent : .clear).frame(width: 3) }
             .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
             .contentShape(Rectangle())
         }

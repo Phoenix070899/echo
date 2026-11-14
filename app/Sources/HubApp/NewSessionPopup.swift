@@ -112,9 +112,7 @@ struct NewSessionPopup: View {
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(on && option.enabled ? Ledger.selected : Color.clear)
-            .overlay(alignment: .leading) {
-                if on && option.enabled { Rectangle().fill(Ledger.accent).frame(width: 3) }
-            }
+            .overlay(alignment: .leading) { ListMarker(picked: on && option.enabled).padding(.leading, 4) }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

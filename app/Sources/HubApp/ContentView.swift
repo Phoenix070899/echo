@@ -1360,8 +1360,8 @@ struct LedgerRow: View {
             model.select(.worker(repo: repo, id: worker.id))
         } label: {
             // A small square starts the row, under the agent's mark: the accent when picked, grey
-            // otherwise; the title lines up with the agent's (ui-ux/0111).
-            Rectangle().fill(selected ? Ledger.accent : Ledger.rule).frame(width: 6, height: 6)
+            // otherwise; the title lines up with the agent's (ui-ux/0111, ui-ux/0124).
+            ListMarker(picked: selected)
             Text(worker.title)
                 .fontWeight(worker.state == .needsYou && worker.isActive ? .semibold : .regular)
                 .foregroundStyle(selected || worker.state == .needsYou && worker.isActive ? Ledger.ink : Ledger.ink2)

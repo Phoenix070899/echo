@@ -162,9 +162,7 @@ struct CreateFromSection: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(form.pickedBranch == branch.name ? Ledger.selected : Color.clear)
-                    .overlay(alignment: .leading) {
-                        if form.pickedBranch == branch.name { Rectangle().fill(Ledger.accent).frame(width: 3) }
-                    }
+                    .overlay(alignment: .leading) { ListMarker(picked: form.pickedBranch == branch.name).padding(.leading, 2) }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

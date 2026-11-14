@@ -218,6 +218,20 @@ struct StateMark: View {
     }
 }
 
+/// A list row's marker (ui-ux/0124): a 6 pt square at the row's leading edge, the accent on the
+/// picked row and the rule's grey on the others. Lists never draw a vertical line.
+struct ListMarker: View {
+    static let size: CGFloat = 6
+    let picked: Bool
+
+    var body: some View {
+        Rectangle()
+            .fill(picked ? Ledger.accent : Ledger.rule)
+            .frame(width: Self.size, height: Self.size)
+            .accessibilityHidden(true)
+    }
+}
+
 /// Something in progress: an arc turning once a second (slower for work only waiting in the
 /// background), in the colour of what it stands for. Under Reduce Motion it stands still.
 /// Core Animation turns it, off the main thread: a SwiftUI animation laid the whole window out

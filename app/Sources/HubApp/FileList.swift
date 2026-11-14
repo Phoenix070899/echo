@@ -68,7 +68,7 @@ final class FileListView: NSView, NSViewToolTipOwner {
     private var hovered: Int?
     private var pressed: (row: Int, at: NSPoint)?
 
-    private let picked = RowFill(color: Ledger.selected, edge: true)
+    private let picked = RowFill(color: Ledger.selected)
     private let hover = RowFill(color: Ledger.wash)
     /// Draws the rows' icons and text, over the fills.
     private lazy var text = RowsText(list: self)
@@ -92,13 +92,19 @@ final class FileListView: NSView, NSViewToolTipOwner {
         self.typeable = typeable
         guard changed || moved else { return }
         if root != self.root { hovered = nil }
+        let before = cursorIndex
         self.rows = rows
         self.root = root
         self.cursor = cursor
         self.look = look
         fit(width: frame.width)
         placeFills()
-        if changed { text.needsDisplay = true }
+        if changed {
+            text.needsDisplay = true
+        } else {
+            // Only the marker moved: redraw the rows it left and reached.
+            for index in [before, cursorIndex].compactMap({ $0 }) { text.setNeedsDisplay(rect(of: index)) }
+        }
         if moved, let index = cursorIndex { scrollToVisible(rect(of: index)) }
         accessibilityRows = nil
     }
@@ -151,6 +157,10 @@ final class FileListView: NSView, NSViewToolTipOwner {
     private func draw(_ row: FileListRow, in rect: NSRect) {
         let entry = row.entry
         let ink3 = NSColor(Ledger.ink3)
+        // A small square at the row's leading edge: the accent on the cursor's row, grey on the
+        // others; no vertical line (ui-ux/0124).
+        NSColor(entry.path == cursor ? Ledger.accent : Ledger.rule).setFill()
+        NSRect(x: rect.minX + 3, y: rect.midY - 3, width: 6, height: 6).fill()
         // Foundry's tree: a mono ▸ or ▾ before a folder, no icons, 14 pt more for each level.
         var x = rect.minX + Self.inset + CGFloat(entry.depth) * 14
         if entry.isFolder {
@@ -296,18 +306,14 @@ final class FileListView: NSView, NSViewToolTipOwner {
     }
 }
 
-/// Claude's rounded fill behind a row, in a colour that follows the light or dark look.
+/// The fill behind a row, in a colour that follows the light or dark look.
 private final class RowFill: NSView {
     private let color: Color
-    /// The picked row's 3 pt accent bar at its leading edge (ui-ux/0109).
-    private let edge: CALayer?
 
-    init(color: Color, edge: Bool = false) {
+    init(color: Color) {
         self.color = color
-        self.edge = edge ? CALayer() : nil
         super.init(frame: .zero)
         wantsLayer = true
-        if let line = self.edge { layer?.addSublayer(line) }
         isHidden = true
     }
 
@@ -317,15 +323,6 @@ private final class RowFill: NSView {
 
     override func updateLayer() {
         layer?.backgroundColor = NSColor(color).cgColor
-        edge?.backgroundColor = NSColor(Ledger.accent).cgColor
-    }
-
-    override func setFrameSize(_ size: NSSize) {
-        super.setFrameSize(size)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        edge?.frame = CGRect(x: 0, y: 0, width: 3, height: size.height)
-        CATransaction.commit()
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }

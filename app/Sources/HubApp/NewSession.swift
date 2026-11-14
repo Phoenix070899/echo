@@ -502,7 +502,7 @@ struct ModeCard: View {
 }
 
 /// A repo to start in: its name and what runs there, a 40 pt row between 1 pt rules; picked, the
-/// sunk fill with the accent's edge.
+/// sunk fill; a small square at its leading edge, the accent when picked (ui-ux/0124).
 struct RepoChoice: View {
     let repo: String
     let status: String?
@@ -524,7 +524,7 @@ struct RepoChoice: View {
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
             .background(picked ? Ledger.selected : Color.clear)
-            .overlay(alignment: .leading) { if picked { Rectangle().fill(Ledger.accent).frame(width: 3) } }
+            .overlay(alignment: .leading) { ListMarker(picked: picked).padding(.leading, 3) }
             .overlay(alignment: .bottom) { Rule() }
             .contentShape(Rectangle())
         }
