@@ -141,7 +141,7 @@ impl Team {
         self.children(id).into_iter().find(|member| member.action == "verify")
     }
 
-    /// What the Team names for a Worker for a Worker of `profile`: first for all its Workers, then for that
+    /// What the Team names for a Worker of `profile`: first for all its Workers, then for that
     /// Profile alone, which is the higher of the two (features/0081).
     pub fn worker_levels(&self, profile: &str) -> (Choice, Choice) {
         let Some(workers) = &self.workers else {
@@ -797,35 +797,136 @@ mod tests {
     fn each_shipped_seed_parses_to_what_the_plan_lists() {
         let hub = crate::paths::hub_dir();
         let opus = read("claude-opus", &hub.join("teams/claude-opus.json")).unwrap();
-        let orchestrator = opus.orchestrator.unwrap();
+        let orchestrator = opus.orchestrator.clone().unwrap();
         assert_eq!(orchestrator.cli.as_deref(), Some("claude"));
         assert_eq!(orchestrator.model.as_deref(), Some("anthropic/claude-opus-5-5"));
         assert_eq!(orchestrator.effort.as_deref(), Some("high"));
         assert_eq!(orchestrator.rotate_at, None);
         assert_eq!(opus.workers, None);
+        assert_eq!(shipped_tree(&opus), SHIPPED_TREE);
 
         let lean = read("claude-lean", &hub.join("teams/claude-lean.json")).unwrap();
-        let orchestrator = lean.orchestrator.unwrap();
+        let orchestrator = lean.orchestrator.clone().unwrap();
         assert_eq!(orchestrator.model.as_deref(), Some("anthropic/claude-sonnet-5-5"));
         assert_eq!(orchestrator.effort.as_deref(), Some("medium"));
         assert_eq!(orchestrator.rotate_at, Some(150_000));
         assert_eq!(lean.workers, None);
+        assert_eq!(shipped_tree(&lean), SHIPPED_TREE);
 
         let kiro = read("kiro-lean", &hub.join("teams/kiro-lean.json")).unwrap();
-        let orchestrator = kiro.orchestrator.unwrap();
+        let orchestrator = kiro.orchestrator.clone().unwrap();
         assert_eq!(orchestrator.cli.as_deref(), Some("kiro"));
         assert_eq!(orchestrator.model.as_deref(), Some("claude-sonnet-5.5"));
         assert_eq!(orchestrator.effort.as_deref(), Some("medium"));
-        let workers = kiro.workers.unwrap();
+        let workers = kiro.workers.clone().unwrap();
         assert_eq!(workers.all.cli.as_deref(), Some("kiro"));
         assert_eq!(workers.all.model.as_deref(), Some("claude-haiku-5.5"));
         assert_eq!(workers.all.effort.as_deref(), Some("low"));
-        let keys: Vec<&str> = workers.profiles.keys().map(String::as_str).collect();
-        assert_eq!(keys, ["naruto", "sasuke"]);
-        assert_eq!(workers.profiles["naruto"].model.as_deref(), Some("claude-sonnet-5.5"));
-        assert_eq!(workers.profiles["naruto"].effort.as_deref(), Some("high"));
-        assert_eq!(workers.profiles["sasuke"].model.as_deref(), Some("claude-sonnet-5.5"));
-        assert_eq!(workers.profiles["sasuke"].effort.as_deref(), Some("medium"));
+        assert!(workers.profiles.is_empty(), "the per-Profile picks live in the Members");
+        assert_eq!(shipped_tree(&kiro), SHIPPED_TREE);
+        let picks: Vec<(&str, Option<&str>, Option<&str>)> = kiro
+            .members
+            .iter()
+            .map(|member| (member.id.as_str(), member.model.as_deref(), member.effort.as_deref()))
+            .collect();
+        assert_eq!(
+            picks,
+            [
+                ("scan", None, None),
+                ("research", None, None),
+                ("build", Some("claude-sonnet-5.5"), Some("high")),
+                ("check", Some("claude-sonnet-5.5"), Some("medium")),
+                ("run", None, None),
+                ("scribe", None, None),
+            ]
+        );
+        for member in &kiro.members {
+            assert_eq!(member.cli, None, "{}", member.id);
+        }
+        for member in opus.members.iter().chain(&lean.members) {
+            assert_eq!(
+                (&member.cli, &member.model, &member.effort),
+                (&None, &None, &None),
+                "{}",
+                member.id
+            );
+        }
+    }
+
+    /// Every shipped Team's tree: Member id, Action, Profile and parent, in tree order.
+    const SHIPPED_TREE: [(&str, &str, &str, Option<&str>); 6] = [
+        ("scan", "scan", "hinata", None),
+        ("research", "research", "jiraiya", None),
+        ("build", "execute", "naruto", None),
+        ("check", "verify", "sasuke", Some("build")),
+        ("run", "run", "lee", None),
+        ("scribe", "scribe", "ino", None),
+    ];
+
+    fn shipped_tree(team: &Team) -> Vec<(&str, &str, &str, Option<&str>)> {
+        team.members
+            .iter()
+            .map(|m| {
+                (
+                    m.id.as_str(),
+                    m.action.as_str(),
+                    m.profile.as_str(),
+                    m.parent.as_deref(),
+                )
+            })
+            .collect()
+    }
+
+    /// What each shipped Team gave a Worker of each Profile before it had Members: CLI, model and
+    /// effort, written out from the old seed files.
+    const BEFORE_MEMBERS: [(&str, [(&str, Cli, &str, &str); 6]); 3] = [
+        ("claude-opus", CLAUDE_PROFILES),
+        ("claude-lean", CLAUDE_PROFILES),
+        (
+            "kiro-lean",
+            [
+                ("hinata", Cli::Kiro, "claude-haiku-5.5", "low"),
+                ("jiraiya", Cli::Kiro, "claude-haiku-5.5", "low"),
+                ("naruto", Cli::Kiro, "claude-sonnet-5.5", "high"),
+                ("sasuke", Cli::Kiro, "claude-sonnet-5.5", "medium"),
+                ("lee", Cli::Kiro, "claude-haiku-5.5", "low"),
+                ("ino", Cli::Kiro, "claude-haiku-5.5", "low"),
+            ],
+        ),
+    ];
+
+    /// The six Profiles as Echo ships them, which the two Claude Teams leave alone.
+    const CLAUDE_PROFILES: [(&str, Cli, &str, &str); 6] = [
+        ("hinata", Cli::Claude, "anthropic/claude-sonnet-5-5", "high"),
+        ("jiraiya", Cli::Claude, "anthropic/claude-sonnet-5-5", "medium"),
+        ("naruto", Cli::Claude, "anthropic/claude-sonnet-5-5", "high"),
+        ("sasuke", Cli::Claude, "anthropic/claude-opus-5-5", "high"),
+        ("lee", Cli::Claude, "anthropic/claude-haiku-5-5", "low"),
+        ("ino", Cli::Claude, "anthropic/claude-haiku-5-5", "low"),
+    ];
+
+    #[test]
+    fn a_shipped_teams_members_give_every_worker_what_its_profile_name_gave_before() {
+        let hub = crate::paths::hub_dir();
+        let state = scratch("seed-picks");
+        let none = crate::cli::Choice::default();
+        for (name, expected) in BEFORE_MEMBERS {
+            let team = load(&hub, &state, None, name).unwrap();
+            validate(&team, Cli::Claude).unwrap();
+            for (profile, cli, model, effort) in expected {
+                let loaded = crate::profile::load(&hub, &state, None, profile).unwrap();
+                let want = (cli, Some(model.to_string()), Some(effort.to_string()));
+                let by_profile = team.member_for(profile).unwrap();
+                assert_eq!(by_profile.profile, profile, "{name}");
+                let got = crate::profile::resolve(&state, None, &loaded, Some(&team), Some(by_profile), &none).unwrap();
+                assert_eq!(got, want, "{name} {profile} by its Profile name");
+                let by_id = team.members.iter().find(|m| m.profile == profile).unwrap();
+                let by_id = team.member_for(&by_id.id).unwrap();
+                let got = crate::profile::resolve(&state, None, &loaded, Some(&team), Some(by_id), &none).unwrap();
+                assert_eq!(got, want, "{name} {profile} by its Member id");
+            }
+        }
+        let _ = std::fs::remove_dir_all(state);
     }
 
     #[test]
@@ -1168,15 +1269,17 @@ mod tests {
     }
 
     #[test]
-    fn a_team_without_members_serializes_as_before() {
+    fn a_shipped_team_serializes_back_to_its_seed_file() {
         let hub = crate::paths::hub_dir();
         for name in ["claude-lean", "claude-opus", "kiro-lean"] {
             let text = std::fs::read_to_string(hub.join(format!("teams/{name}.json"))).unwrap();
             let team = parse(&text).unwrap();
-            assert!(team.members.is_empty());
+            assert_eq!(team.members.len(), 6, "{name}");
             assert_eq!(serde_json::to_string_pretty(&team).unwrap() + "\n", text, "{name}");
         }
         assert_eq!(serde_json::to_string(&Team::default()).unwrap(), "{}");
+        let before = r#"{"description":"d","workers":{"cli":"kiro"}}"#;
+        assert_eq!(serde_json::to_string(&parse(before).unwrap()).unwrap(), before);
     }
 
     #[test]

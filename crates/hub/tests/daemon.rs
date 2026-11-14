@@ -1193,6 +1193,26 @@ fn a_team_is_saved_listed_started_with_and_deleted_over_the_socket() {
         .map(|t| t["name"].as_str().unwrap())
         .collect();
     assert_eq!(shipped, ["claude-lean", "claude-opus", "kiro-lean"], "{listed}");
+    for team in listed["result"]["teams"].as_array().unwrap() {
+        let tree: Vec<(&str, Option<&str>)> = team["members"]
+            .as_array()
+            .unwrap_or_else(|| panic!("a shipped Team is a tree of Members: {team}"))
+            .iter()
+            .map(|m| (m["id"].as_str().unwrap(), m["parent"].as_str()))
+            .collect();
+        assert_eq!(
+            tree,
+            [
+                ("scan", None),
+                ("research", None),
+                ("build", None),
+                ("check", Some("build")),
+                ("run", None),
+                ("scribe", None)
+            ],
+            "{team}"
+        );
+    }
     let saved = hub.call(
         "team.save",
         serde_json::json!({

@@ -4,5 +4,38 @@
     "cli": "claude",
     "model": "anthropic/claude-opus-5-5",
     "effort": "high"
-  }
+  },
+  "members": [
+    {
+      "id": "scan",
+      "action": "scan",
+      "profile": "hinata"
+    },
+    {
+      "id": "research",
+      "action": "research",
+      "profile": "jiraiya"
+    },
+    {
+      "id": "build",
+      "action": "execute",
+      "profile": "naruto"
+    },
+    {
+      "id": "check",
+      "action": "verify",
+      "profile": "sasuke",
+      "parent": "build"
+    },
+    {
+      "id": "run",
+      "action": "run",
+      "profile": "lee"
+    },
+    {
+      "id": "scribe",
+      "action": "scribe",
+      "profile": "ino"
+    }
+  ]
 }

@@ -8,18 +8,43 @@
   "workers": {
     "cli": "kiro",
     "model": "claude-haiku-5.5",
-    "effort": "low",
-    "profiles": {
-      "naruto": {
-        "cli": "kiro",
-        "model": "claude-sonnet-5.5",
-        "effort": "high"
-      },
-      "sasuke": {
-        "cli": "kiro",
-        "model": "claude-sonnet-5.5",
-        "effort": "medium"
-      }
+    "effort": "low"
+  },
+  "members": [
+    {
+      "id": "scan",
+      "action": "scan",
+      "profile": "hinata"
+    },
+    {
+      "id": "research",
+      "action": "research",
+      "profile": "jiraiya"
+    },
+    {
+      "id": "build",
+      "action": "execute",
+      "profile": "naruto",
+      "model": "claude-sonnet-5.5",
+      "effort": "high"
+    },
+    {
+      "id": "check",
+      "action": "verify",
+      "profile": "sasuke",
+      "parent": "build",
+      "model": "claude-sonnet-5.5",
+      "effort": "medium"
+    },
+    {
+      "id": "run",
+      "action": "run",
+      "profile": "lee"
+    },
+    {
+      "id": "scribe",
+      "action": "scribe",
+      "profile": "ino"
     }
-  }
+  ]
 }
