@@ -157,7 +157,8 @@ private struct SectionRow: View {
             .frame(minHeight: 44)
             .frame(maxWidth: .infinity)
             .background(picked || hover.on ? Ledger.paper : .clear)
-            .overlay(alignment: .leading) { ListMarker(picked: picked).padding(.leading, 4) }
+            // Only the picked section is marked (ui-ux/0126).
+            .overlay(alignment: .leading) { if picked { ListMarker(picked: true).padding(.leading, 4) } }
             .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
             .contentShape(Rectangle())
         }

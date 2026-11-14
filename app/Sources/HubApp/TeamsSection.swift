@@ -151,7 +151,8 @@ private struct TeamRow: View {
                     Spacer(minLength: 0)
                 }
                 // Centred on the name's line, 4 pt in from the row's edge.
-                .overlay(alignment: .leading) { ListMarker(picked: picked).offset(x: -11) }
+                // Only the picked Team is marked (ui-ux/0126).
+                .overlay(alignment: .leading) { if picked { ListMarker(picked: true).offset(x: -11) } }
                 if let about, !about.isEmpty {
                     Text(about)
                         .font(Ledger.font(12))
