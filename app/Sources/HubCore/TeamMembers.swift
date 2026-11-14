@@ -119,12 +119,13 @@ extension TeamForm {
         return profile
     }
 
-    /// Adds a `custom` Member on `profile` at level 1, named after the Profile, and returns its
-    /// id; nil when the Team already holds as many Members as it can, or `profile` is empty.
-    public mutating func addCustomMember(profile: String) -> String? {
+    /// Adds a `custom` Member on `profile` as the last child of `parent` (level 1 when nil), named
+    /// after the Profile, and returns its id; nil when the Team already holds as many Members as
+    /// it can, the tree has no room under `parent`, or `profile` is empty.
+    public mutating func addCustomMember(profile: String, under parent: String? = nil) -> String? {
         let profile = profile.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !profile.isEmpty,
-              let added = TeamTree.add(action: Action.custom, profile: profile, to: members) else { return nil }
+              let added = TeamTree.add(action: Action.custom, profile: profile, under: parent, to: members) else { return nil }
         members = added.members
         let id = TeamTree.uniqueID(from: profile, taking: Set(members.map(\.id)))
         return renameMember(added.id, to: id) == nil ? id : added.id

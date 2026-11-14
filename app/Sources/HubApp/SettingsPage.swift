@@ -101,12 +101,28 @@ struct SettingsPage: View {
             model.hideSettings()
             return .handled
         }
+        // The Team's tree takes the keyboard back from the page, and gives it back on Left.
+        .onReceive(model.teamSettings.$pageFocusRequest.dropFirst()) { _ in focused = true }
+        // SwiftUI hands a key to the focused view first, so a focused tree acts on Up and Down and
+        // the page never sees them; the guard keeps the page out even if one is ignored (ui-ux/0102).
         .onKeyPress(keys: [.upArrow, .downArrow]) { press in
-            guard press.modifiers.isEmpty, !model.teamSettings.asking else { return .ignored }
+            let teams = model.teamSettings
+            guard SettingsKeys.pageTakesUpDown(treeFocused: teams.treeFocused, asking: teams.asking,
+                                               hasModifiers: !press.modifiers.isEmpty) else { return .ignored }
             let all = SettingsSection.allCases
             let at = all.firstIndex(of: section) ?? 0
             let next = press.key == .downArrow ? min(at + 1, all.count - 1) : max(at - 1, 0)
             model.showSettingsSection(all[next])
+            return .handled
+        }
+        // Right goes from the list of sections into the Team's tree, which has its own keys. Only
+        // while the page itself has the keyboard: Right in a text field moves its caret.
+        .onKeyPress(keys: [.rightArrow]) { press in
+            let teams = model.teamSettings
+            guard focused, SettingsKeys.pageEntersTree(treeShown: section == .teams && teams.pane == .team,
+                                              treeFocused: teams.treeFocused, asking: teams.asking,
+                                              hasModifiers: !press.modifiers.isEmpty) else { return .ignored }
+            teams.treeFocusRequest += 1
             return .handled
         }
     }

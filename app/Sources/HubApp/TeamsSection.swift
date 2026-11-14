@@ -16,6 +16,15 @@ struct TeamsSection: View {
                 .fill(Ledger.rule)
                 .frame(width: Ledger.hairline)
                 .frame(maxHeight: .infinity)
+            if teams.pane == .team {
+                TeamTreeColumn(teams: teams)
+                    .frame(width: 330)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                Rectangle()
+                    .fill(Ledger.rule)
+                    .frame(width: Ledger.hairline)
+                    .frame(maxHeight: .infinity)
+            }
             Form {
                 switch teams.pane {
                 case .defaults:

@@ -147,6 +147,16 @@ private func profile(_ name: String, cli: String? = nil, model: String? = nil, e
     #expect(form.addCustomMember(profile: "  ") == nil)
 }
 
+@Test func aCustomMemberCanGoUnderAMember() {
+    var form = TeamForm()
+    form.name = "tree"
+    form.members = [Team.Member(id: "build", action: "execute", profile: "naruto")]
+    #expect(form.addCustomMember(profile: "code-reviewer", under: "build") == "code-reviewer")
+    #expect(form.members.last?.parent == "build")
+    #expect(form.addCustomMember(profile: "lost", under: "ghost") == nil)
+    #expect(form.blocker == nil)
+}
+
 @Test func aFullTeamTakesNoCustomMember() {
     var form = TeamForm()
     form.name = "full"

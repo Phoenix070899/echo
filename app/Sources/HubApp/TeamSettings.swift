@@ -25,6 +25,15 @@ final class TeamSettingsModel: ObservableObject {
     @Published var selectedMember: String?
     /// Why the last Member edit was refused, until the next edit or pick.
     @Published var memberNotice: String?
+    /// Why the last command on the tree was refused: the one line under the tree (ui-ux/0102).
+    @Published var treeNotice: String?
+    /// The tree has the keyboard, so the page leaves Up and Down to it, and Save gives up Return.
+    @Published var treeFocused = false
+    /// Each change asks the view that owns that focus to take it: the tree, the Member's name
+    /// field, and the settings page's own keys.
+    @Published var treeFocusRequest = 0
+    @Published var nameFocusRequest = 0
+    @Published var pageFocusRequest = 0
     /// The human's Orchestrator settings: what a rule the Team leaves out falls back to.
     @Published var fallbackRules: AgentSettings.OrchestratorRules?
     @Published var fallbackCli = "claude"
@@ -140,6 +149,7 @@ final class TeamSettingsModel: ObservableObject {
         failure = nil
         selectedMember = nil
         memberNotice = nil
+        treeNotice = nil
         form = name.flatMap { name in teams.first { $0.name == name } }.map(TeamForm.init(team:)) ?? TeamForm()
         saved = form
     }
@@ -151,6 +161,7 @@ final class TeamSettingsModel: ObservableObject {
             self.failure = nil
             self.selectedMember = nil
             self.memberNotice = nil
+            self.treeNotice = nil
             self.form = TeamForm()
             self.saved = self.form
         }
@@ -164,6 +175,7 @@ final class TeamSettingsModel: ObservableObject {
             self.failure = nil
             self.selectedMember = nil
             self.memberNotice = nil
+            self.treeNotice = nil
             self.form = TeamForm(copying: team, taking: self.teams.map(\.name))
             self.saved = TeamForm()
         }
@@ -182,9 +194,14 @@ final class TeamSettingsModel: ObservableObject {
         }
         let (client, params) = (client, form.saveParams(repo: repo))
         saving = true
+        let keep = selectedMember
         run({ try client.saveTeam(params) }, then: { name in
             self.saving = false
-            self.refresh(select: name) { done?(true) }
+            self.refresh(select: name) {
+                // The Team is read again from its file, which drops the pick; the tree keeps it.
+                if let keep, self.form.member(keep) != nil { self.selectedMember = keep }
+                done?(true)
+            }
         }, otherwise: {
             self.saving = false
             done?(false)
@@ -194,7 +211,10 @@ final class TeamSettingsModel: ObservableObject {
     func revert() {
         failure = nil
         memberNotice = nil
+        treeNotice = nil
         form = saved
+        // A Member the draft had added is gone; the Orchestrator is shown when the picked one is.
+        if let id = selectedMember, form.member(id) == nil { selectedMember = nil }
     }
 
     func delete() {
@@ -220,6 +240,7 @@ final class TeamSettingsModel: ObservableObject {
     func selectMember(_ id: String?) {
         selectedMember = id
         memberNotice = nil
+        treeNotice = nil
     }
 
     /// Renames the picked Member in the draft and keeps it picked; a refusal shows as the notice.
@@ -252,9 +273,9 @@ final class TeamSettingsModel: ObservableObject {
     }
 
     /// Asks for a name, creates a Profile of that name and opens its file to fill in, then adds a
-    /// `custom` Member on it to the draft and picks it. The Profile's file is written at once; the
-    /// Member is held in the draft until Save.
-    func newCustomWorker() {
+    /// `custom` Member on it to the draft, under `parent` or at level 1, and picks it. The Profile's
+    /// file is written at once; the Member is held in the draft until Save.
+    func newCustomWorker(under parent: String? = nil) {
         let alert = NSAlert()
         alert.messageText = "New custom Worker"
         alert.informativeText = "Name its Profile with lowercase letters, digits, and -, like code-reviewer. "
@@ -270,10 +291,11 @@ final class TeamSettingsModel: ObservableObject {
         let (client, repo) = (client, repo)
         run({ try client.profile("new", name: name, repo: repo) }) { path in
             if !path.isEmpty { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
-            if let id = self.form.addCustomMember(profile: name) {
+            if let id = self.form.addCustomMember(profile: name, under: parent) {
                 self.selectMember(id)
             } else {
-                self.memberNotice = "A Team holds at most \(TeamForm.maxMembers) Members. The Profile \(name) is made; remove a Member to add it."
+                self.treeNotice = "The Profile \(name) is made, but no Member could be added for it: a Team holds at most "
+                    + "\(TeamForm.maxMembers) Members and the tree goes \(TeamForm.maxDepth) deep."
             }
             self.refreshProfiles()
         }
@@ -314,23 +336,25 @@ final class TeamSettingsModel: ObservableObject {
     }
 }
 
-/// The picked Team's fields: what it is, the Orchestrator, the Workers, the rules and the
-/// instructions, then Save and Revert.
+/// The inspector of what is picked in the tree (ui-ux/0101): the Orchestrator's fields, the Team's
+/// name and rules among them, or the picked Member's; then Save and Revert.
 struct TeamEditor: View {
     @ObservedObject var teams: TeamSettingsModel
 
     var body: some View {
-        TeamAbout(teams: teams)
-        Group {
-            TeamOrchestrator(teams: teams)
-            TeamWorkers(teams: teams)
-            TeamRules(teams: teams)
-            TeamInstructions(teams: teams)
-        }
-        .disabled(teams.readOnly)
-        MembersSection(teams: teams)
         if let member = teams.member {
+            // One inspector per Member, so a field half typed for one never lands on the next.
             MemberInspector(teams: teams, member: member)
+                .id(member.id)
+        } else {
+            TeamAbout(teams: teams)
+            Group {
+                TeamOrchestrator(teams: teams)
+                TeamWorkers(teams: teams)
+                TeamRules(teams: teams)
+                TeamInstructions(teams: teams)
+            }
+            .disabled(teams.readOnly)
         }
         TeamSave(teams: teams)
     }
@@ -531,8 +555,9 @@ private struct TeamSave: View {
                     Spacer()
                     Button("Revert", action: teams.revert)
                         .disabled(!teams.changed)
+                    // Return renames in the tree, so Save gives up the key while the tree has it.
                     Button("Save") { teams.save() }
-                        .keyboardShortcut(.defaultAction)
+                        .keyboardShortcut(teams.treeFocused ? nil : .defaultAction)
                         .disabled(!teams.canSave)
                 }
             }

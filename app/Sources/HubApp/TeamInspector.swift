@@ -1,72 +1,6 @@
 import HubCore
 import SwiftUI
 
-/// The Team's Members as an indented list, one row each, and the button that adds a custom Worker.
-/// The tree view takes this over (ui-ux/0102); until then the list is how a Member is picked.
-struct MembersSection: View {
-    @ObservedObject var teams: TeamSettingsModel
-
-    var body: some View {
-        Section("Members") {
-            if teams.form.members.isEmpty {
-                Text("This Team has no Members yet. A Worker can still be started by its Profile's name.")
-                    .font(Ledger.font(11))
-                    .foregroundStyle(Ledger.ink3)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(TeamTree.rows(teams.form.members), id: \.member.id) { row in
-                    MemberRow(row: row, picked: row.member.id == teams.selectedMember) {
-                        teams.selectMember(row.member.id)
-                    }
-                }
-            }
-            HStack {
-                Button("New custom Worker…", action: teams.newCustomWorker)
-                    .disabled(teams.readOnly)
-                    .help("Makes a Profile of your own and adds a Member on it")
-                Spacer()
-            }
-            if let notice = teams.memberNotice {
-                Text(notice)
-                    .font(Ledger.font(11))
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-}
-
-/// A Member in the list: its id, then its Action and Profile in grey; the picked one is filled.
-private struct MemberRow: View {
-    let row: TeamTree.Row
-    let picked: Bool
-    let pick: () -> Void
-
-    var body: some View {
-        Button(action: pick) {
-            HStack(spacing: 8) {
-                Text(row.member.id)
-                    .fontWeight(picked ? .medium : .regular)
-                    .foregroundStyle(Ledger.ink)
-                Text("\(row.member.action), \(row.member.profile)")
-                    .font(Ledger.font(11))
-                    .foregroundStyle(Ledger.ink3)
-                Spacer(minLength: 0)
-            }
-            .padding(.leading, CGFloat(row.depth - 1) * 18 + 8)
-            .padding(.trailing, 8)
-            .padding(.vertical, 5)
-            .frame(minHeight: 30)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(picked ? Ledger.selected : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(picked ? .isSelected : [])
-    }
-}
-
 /// The picked Member's fields. Each says where its value comes from, and Reset takes the Member's
 /// own value out so the field follows the level below again. Every edit is in the Team's draft
 /// until Save; only "Edit shared role…" reaches a file, the Profile's.
@@ -101,7 +35,10 @@ private struct MemberIdentity: View {
 
     var body: some View {
         Section("Member") {
-            CommitField(title: "Name", value: member.id, prompt: "lowercase letters, digits and -") { text in
+            CommitField(title: "Name", value: member.id, prompt: "lowercase letters, digits and -",
+                        focusRequest: teams.nameFocusRequest,
+                        // Return in the name goes back to the tree, so the keys carry on from there.
+                        done: { teams.treeFocusRequest += 1 }) { text in
                 teams.renameMember(member.id, to: text)
                 return teams.memberNotice == nil
             }
@@ -356,6 +293,10 @@ private struct CommitField: View {
     let title: String
     let value: String
     var prompt = ""
+    /// Counts up each time something outside asks for this field to take the keyboard.
+    var focusRequest = 0
+    /// Runs after Return when the text was taken.
+    var done: (() -> Void)?
     let commit: (String) -> Bool
     @StateObject private var draft = Draft()
     @FocusState private var focused: Bool
@@ -363,7 +304,7 @@ private struct CommitField: View {
     var body: some View {
         TextField(title, text: $draft.text, prompt: Text(prompt))
             .focused($focused)
-            .onSubmit(save)
+            .onSubmit { if save() { done?() } }
             .onChange(of: focused) {
                 if !focused {
                     save()
@@ -371,12 +312,16 @@ private struct CommitField: View {
                 }
             }
             .onChange(of: value) { if !focused { draft.text = value } }
+            .onChange(of: focusRequest) { focused = true }
             .onAppear { draft.text = value }
     }
 
-    private func save() {
-        guard draft.text != value else { return }
-        if commit(draft.text) { return }
+    /// Whether the text is taken: it already is the value, or `commit` accepted it.
+    @discardableResult
+    private func save() -> Bool {
+        guard draft.text != value else { return true }
+        if commit(draft.text) { return true }
         if !focused { draft.text = value }
+        return false
     }
 }

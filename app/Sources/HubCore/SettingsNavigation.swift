@@ -50,3 +50,18 @@ public enum UnsavedChanges {
         succeeded ? .goOn : .stay
     }
 }
+
+/// Which of the settings page's own keys act, so a focused tree keeps its keys (ui-ux/0102). SwiftUI
+/// hands a key to the focused view first and to the page only when that ignores it; these rules
+/// guard the page as well, so the page never moves between sections while the tree has the keyboard.
+public enum SettingsKeys {
+    /// Plain Up and Down switch sections, unless the tree has the keyboard or a card is asking.
+    public static func pageTakesUpDown(treeFocused: Bool, asking: Bool, hasModifiers: Bool) -> Bool {
+        !treeFocused && !asking && !hasModifiers
+    }
+
+    /// Plain Right hands the keyboard to the Team's tree, from the page, when the tree is showing.
+    public static func pageEntersTree(treeShown: Bool, treeFocused: Bool, asking: Bool, hasModifiers: Bool) -> Bool {
+        treeShown && !treeFocused && !asking && !hasModifiers
+    }
+}
