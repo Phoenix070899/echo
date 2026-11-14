@@ -228,7 +228,7 @@ struct TeamTreeColumn: View {
 
     private func column(width: CGFloat) -> some View {
         let rows = TeamTree.rows(teams.form.members)
-        let layout = TreeLayout(deepest: rows.map(\.depth).max() ?? 1, width: width)
+        let layout = TreeLayout(width: width)
         let mix = TreeMix(teams: teams)
         return VStack(alignment: .leading, spacing: 0) {
             TeamHead(teams: teams, mix: mix, layout: layout)
@@ -321,14 +321,12 @@ struct TeamTreeColumn: View {
     }
 }
 
-/// Where the parts of a row sit: a node steps 30 pt right per level, and the text columns start at
-/// one place for every row, after the deepest node. Under 600 pt wide the margins and the Profile
-/// and effort columns narrow, so the Member's name keeps its room.
+/// Where the parts of a row sit: every Member's node sits 30 pt in from the Orchestrator's, whatever its
+/// level, and the text columns start at one place for every row (ui-ux/0130). Under 600 pt wide the
+/// margins and the Profile and effort columns narrow, so the Member's name keeps its room.
 struct TreeLayout {
     static let node: CGFloat = 32
     static let gap: CGFloat = 12
-    /// The deepest level shown; the columns make room for its node.
-    let deepest: Int
     let width: CGFloat
 
     var compact: Bool { width < 600 }
@@ -337,10 +335,11 @@ struct TreeLayout {
     var effort: CGFloat { compact ? 48 : 74 }
     var step: CGFloat { compact ? 22 : 30 }
 
-    /// Where the text columns start: 106 pt, as Foundry's tree has it, until a third level needs more.
-    var body: CGFloat { Self.node + (compact ? 10 : 14) + step * CGFloat(max(2, deepest)) }
+    /// Where the text columns start: 106 pt, as Foundry's tree has it.
+    var body: CGFloat { Self.node + (compact ? 10 : 14) + step * 2 }
 
-    func indent(_ depth: Int) -> CGFloat { step * CGFloat(depth) }
+    /// The Orchestrator's node sits at the edge; every Member's one step in, whatever its level.
+    func indent(_ depth: Int) -> CGFloat { depth > 0 ? step : 0 }
 }
 
 /// The models the Orchestrator and the Members run on, by family, and the mark of each family.
@@ -611,10 +610,11 @@ private struct DropLine: ViewModifier {
     }
 }
 
-/// One row of the tree: a square node with two capitals, stepped in by depth, then the text columns
-/// over a 1 pt rule. A Member's row starts with a small square under its parent's node, centred on
-/// its own node: the accent when picked or hovered, grey otherwise; there is no spine (ui-ux/0124,
-/// ui-ux/0127). The picked
+/// One row of the tree: a square node with two capitals, every Member's at one step in (ui-ux/0130),
+/// then the text columns over a 1 pt rule. A Member's row starts with a small square under the
+/// Orchestrator's node, centred on its own node: the accent when picked or hovered, grey otherwise;
+/// there is no spine (ui-ux/0124, ui-ux/0127). The Orchestrator's row has no square, so hovered it
+/// only turns the sunk grey. The picked
 /// row is the sunk grey with an accent node frame; while the tree has the keyboard its fill is the soft accent instead, so the
 /// keyboard's place shows without an outline. A drag over it fills it with where the drop lands.
 private struct TeamTreeRow: View {
@@ -634,7 +634,9 @@ private struct TeamTreeRow: View {
     var marked: Color?
     let pick: () -> Void
 
-    /// A Member's square sits 12 pt in from its parent's node, centred on its own node's line.
+    @StateObject private var hover = Flag()
+
+    /// A Member's square sits 12 pt in from the Orchestrator's node, centred on its own node's line.
     static let markerInset: CGFloat = 12
 
     /// A model without its provider and Claude's prefix: "sonnet-5-5".
@@ -652,17 +654,21 @@ private struct TeamTreeRow: View {
                     .frame(width: layout.body, alignment: .leading)
                 HStack(spacing: TreeLayout.gap) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(title)
-                            .font(Ledger.font(15, .bold))
-                            .foregroundStyle(Ledger.ink)
-                            .lineLimit(1)
-                            .layoutPriority(2)
-                        if let id {
-                            Text(id)
-                                .font(Ledger.monoFont(11))
-                                .foregroundStyle(Ledger.ink3)
-                                .lineLimit(1)
+                        // The id gives way whole before the name is cut.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                titleText
+                                if let id {
+                                    Text(id)
+                                        .font(Ledger.monoFont(11))
+                                        .foregroundStyle(Ledger.ink3)
+                                        .lineLimit(1)
+                                        .fixedSize()
+                                }
+                            }
+                            titleText
                         }
+                        .layoutPriority(2)
                         if changed && layout.compact {
                             Rectangle().fill(Ledger.accent).frame(width: 7, height: 7)
                                 .layoutPriority(2)
@@ -710,7 +716,7 @@ private struct TeamTreeRow: View {
             .overlay(alignment: .topLeading) {
                 if !root {
                     ListMarker(picked: picked)
-                        .offset(x: layout.indent(depth - 1) + Self.markerInset,
+                        .offset(x: Self.markerInset,
                                 y: 10 + (TreeLayout.node - ListMarker.size) / 2)
                 }
             }
@@ -718,9 +724,17 @@ private struct TeamTreeRow: View {
         }
         .buttonStyle(.plain)
         .listRowHover()
+        .onHover { hover.on = $0 }
         .accessibilityLabel([title, id, pill, effort.isEmpty ? nil : "effort \(effort)", changed ? "changed" : nil]
             .compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(picked ? .isSelected : [])
+    }
+
+    private var titleText: some View {
+        Text(title)
+            .font(Ledger.font(15, .bold))
+            .foregroundStyle(Ledger.ink)
+            .lineLimit(1)
     }
 
     private var node: some View {
@@ -734,7 +748,7 @@ private struct TeamTreeRow: View {
 
     private var background: Color {
         if let marked { return marked }
-        guard picked else { return .clear }
+        guard picked else { return root && hover.on ? Ledger.selected : .clear }
         return focused ? Ledger.chosen : Ledger.selected
     }
 }
