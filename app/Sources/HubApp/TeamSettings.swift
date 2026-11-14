@@ -4,7 +4,7 @@ import SwiftUI
 
 /// What the Teams section's right side shows.
 enum TeamsPane: Equatable {
-    case defaults, profiles, team
+    case defaults, team
 }
 
 /// Settings' Teams section: the Teams to pick from, and the editor for the one picked. The Teams
@@ -13,10 +13,18 @@ enum TeamsPane: Equatable {
 /// them (ui-ux/0103).
 @MainActor
 final class TeamSettingsModel: ObservableObject {
-    /// What is picked in the list: Defaults, Profiles, or a Team (`picked`, or the new one).
+    /// What is picked in the list: Defaults, or a Team (`picked`, or the new one).
     @Published var pane = TeamsPane.team
     @Published var teams: [Team] = []
     @Published var profileNames: [String] = []
+    /// The Profiles with what each holds, which a Member's fields fall back to.
+    @Published var profiles: [WorkerProfile] = []
+    /// Your default CLI and model, the bottom of what a Member runs with.
+    @Published var defaults = MemberDefaults()
+    /// The Member whose inspector shows, by id; nil when none is picked.
+    @Published var selectedMember: String?
+    /// Why the last Member edit was refused, until the next edit or pick.
+    @Published var memberNotice: String?
     /// The human's Orchestrator settings: what a rule the Team leaves out falls back to.
     @Published var fallbackRules: AgentSettings.OrchestratorRules?
     @Published var fallbackCli = "claude"
@@ -30,6 +38,12 @@ final class TeamSettingsModel: ObservableObject {
     var repo: String?
 
     var team: Team? { teams.first { $0.name == picked } }
+
+    /// The picked Member, in the draft; nil when none is picked or an edit took it away.
+    var member: Team.Member? { selectedMember.flatMap(form.member) }
+
+    /// The Profile of that name; nil when none exists here.
+    func profile(named name: String) -> WorkerProfile? { profiles.first { $0.name == name } }
 
     /// Echo's own Teams are not written; duplicate one to change it.
     var readOnly: Bool { !form.isNew && team?.origin == "shipped" }
@@ -55,8 +69,10 @@ final class TeamSettingsModel: ObservableObject {
         run({ (try client.teams(repo: repo), try client.profiles(repo: repo), try client.agentSettings()) }) { teams, profiles, settings in
             self.teams = teams
             self.profileNames = profiles.map(\.name)
+            self.profiles = profiles
             self.fallbackRules = settings.orchestrator
             self.fallbackCli = settings.cli ?? "claude"
+            self.defaults = MemberDefaults(settings: settings)
             if let name, teams.contains(where: { $0.name == name }) {
                 self.pick(name)
             } else if !self.started, !self.changed {
@@ -122,6 +138,8 @@ final class TeamSettingsModel: ObservableObject {
     func pick(_ name: String?) {
         picked = name
         failure = nil
+        selectedMember = nil
+        memberNotice = nil
         form = name.flatMap { name in teams.first { $0.name == name } }.map(TeamForm.init(team:)) ?? TeamForm()
         saved = form
     }
@@ -131,6 +149,8 @@ final class TeamSettingsModel: ObservableObject {
             self.pane = .team
             self.picked = nil
             self.failure = nil
+            self.selectedMember = nil
+            self.memberNotice = nil
             self.form = TeamForm()
             self.saved = self.form
         }
@@ -142,6 +162,8 @@ final class TeamSettingsModel: ObservableObject {
             self.pane = .team
             self.picked = nil
             self.failure = nil
+            self.selectedMember = nil
+            self.memberNotice = nil
             self.form = TeamForm(copying: team, taking: self.teams.map(\.name))
             self.saved = TeamForm()
         }
@@ -171,6 +193,7 @@ final class TeamSettingsModel: ObservableObject {
 
     func revert() {
         failure = nil
+        memberNotice = nil
         form = saved
     }
 
@@ -188,6 +211,80 @@ final class TeamSettingsModel: ObservableObject {
         run({ try client.deleteTeam(name: team.name, level: team.origin, repo: repo) }) { _ in
             self.pick(nil)
             self.refresh()
+        }
+    }
+
+    // MARK: Members
+
+    /// Shows the Member's inspector.
+    func selectMember(_ id: String?) {
+        selectedMember = id
+        memberNotice = nil
+    }
+
+    /// Renames the picked Member in the draft and keeps it picked; a refusal shows as the notice.
+    func renameMember(_ id: String, to name: String) {
+        memberNotice = form.renameMember(id, to: name)
+        if memberNotice == nil, selectedMember == id {
+            selectedMember = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    /// Changes the Member's Action in the draft; a refusal shows as the notice.
+    func changeAction(_ id: String, to action: String) {
+        memberNotice = form.changeMemberAction(id, to: action)
+    }
+
+    /// Opens the Profile's file in the human's editor, copying Echo's own into yours first. The
+    /// file is shared by every Team, so this is not a Member edit and not held in the draft.
+    func editRole(of name: String) {
+        guard let profile = profile(named: name) else { return }
+        let (client, repo) = (client, repo)
+        run({ () -> String in
+            if profile.level == "built-in" {
+                return try client.profile("copy", name: profile.name, repo: repo)
+            }
+            return profile.path ?? ""
+        }) { path in
+            if !path.isEmpty { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+            self.refreshProfiles()
+        }
+    }
+
+    /// Asks for a name, creates a Profile of that name and opens its file to fill in, then adds a
+    /// `custom` Member on it to the draft and picks it. The Profile's file is written at once; the
+    /// Member is held in the draft until Save.
+    func newCustomWorker() {
+        let alert = NSAlert()
+        alert.messageText = "New custom Worker"
+        alert.informativeText = "Name its Profile with lowercase letters, digits, and -, like code-reviewer. "
+            + "The file opens in your editor to fill in, and the Worker is added to this Team."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = "code-reviewer"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        let (client, repo) = (client, repo)
+        run({ try client.profile("new", name: name, repo: repo) }) { path in
+            if !path.isEmpty { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+            if let id = self.form.addCustomMember(profile: name) {
+                self.selectMember(id)
+            } else {
+                self.memberNotice = "A Team holds at most \(TeamForm.maxMembers) Members. The Profile \(name) is made; remove a Member to add it."
+            }
+            self.refreshProfiles()
+        }
+    }
+
+    /// Reads the Profiles again, leaving the Team's draft alone.
+    private func refreshProfiles() {
+        let (client, repo) = (client, repo)
+        run({ try client.profiles(repo: repo) }) { profiles in
+            self.profiles = profiles
+            self.profileNames = profiles.map(\.name)
         }
     }
 
@@ -231,6 +328,10 @@ struct TeamEditor: View {
             TeamInstructions(teams: teams)
         }
         .disabled(teams.readOnly)
+        MembersSection(teams: teams)
+        if let member = teams.member {
+            MemberInspector(teams: teams, member: member)
+        }
         TeamSave(teams: teams)
     }
 }
@@ -440,25 +541,28 @@ private struct TeamSave: View {
 }
 
 /// A CLI, or the settings' own when none is picked.
-private struct CliPicker: View {
+struct CliPicker: View {
     let title: String
     @Binding var selection: String
+    /// What the empty choice is called; a Member says "Not set" and its line says what follows.
+    var unset = "The default"
 
     var body: some View {
         Picker(title, selection: $selection) {
-            Text("The default").tag("")
+            Text(unset).tag("")
             ForEach(agentCLIs, id: \.self) { Text($0).tag($0) }
         }
     }
 }
 
-private struct EffortPicker: View {
+struct EffortPicker: View {
     let title: String
     @Binding var selection: String
+    var unset = "The CLI's own"
 
     var body: some View {
         Picker(title, selection: $selection) {
-            Text("The CLI's own").tag("")
+            Text(unset).tag("")
             ForEach(TeamForm.efforts, id: \.self) { Text($0).tag($0) }
         }
     }

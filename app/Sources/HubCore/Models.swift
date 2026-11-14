@@ -594,6 +594,8 @@ public struct WorkerProfile: Decodable, Equatable, Identifiable, Sendable {
     public var ownCli: String? = nil
     public var ownModel: String? = nil
     public var effort: String? = nil
+    /// What its own file says for effort; `effort` is what it runs with after the settings.
+    public var ownEffort: String? = nil
     /// Where it comes from: "built-in", "yours", or "repo".
     public var level: String? = nil
     public var path: String? = nil

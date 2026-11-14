@@ -192,6 +192,14 @@ public struct TeamForm: Equatable, Sendable {
         return nil
     }
 
+    /// Why `members` cannot be a Team's tree, in the words of `blocker`; nil when they can.
+    public static func problem(with members: [Team.Member]) -> String? {
+        var form = TeamForm()
+        form.name = "team"
+        form.members = members
+        return form.blocker
+    }
+
     /// 1 to 32 lowercase letters, digits and `-`, not starting with `-`, as for a Profile's name.
     public static func validID(_ id: String) -> Bool {
         !id.isEmpty && id.utf8.count <= 32 && !id.hasPrefix("-")

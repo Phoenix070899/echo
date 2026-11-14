@@ -22,9 +22,6 @@ struct TeamsSection: View {
                     DefaultsSettings(agents: agents)
                     OrchestratorSettings(agents: agents)
                     AgentFailure(agents: agents)
-                case .profiles:
-                    ProfileSettings(agents: agents)
-                    AgentFailure(agents: agents)
                 case .team:
                     TeamEditor(teams: teams)
                 }
@@ -40,7 +37,7 @@ struct TeamsSection: View {
     }
 }
 
-/// Defaults and Profiles at the top, then the Teams the selected repo can use, each with where it
+/// Defaults at the top, then the Teams the selected repo can use, each with where it
 /// comes from; New, Duplicate and Delete sit under the list.
 private struct TeamsList: View {
     @ObservedObject var teams: TeamSettingsModel
@@ -50,8 +47,6 @@ private struct TeamsList: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     TeamRow(name: "Defaults", label: nil, problem: nil, picked: teams.pane == .defaults) { teams.show(.defaults) }
-                    // The single-Profile editor stays here until the Member inspector holds it.
-                    TeamRow(name: "Profiles", label: nil, problem: nil, picked: teams.pane == .profiles) { teams.show(.profiles) }
                     Rectangle()
                         .fill(Ledger.rule)
                         .frame(height: Ledger.hairline)
