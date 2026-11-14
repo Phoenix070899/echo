@@ -156,7 +156,7 @@ A Worker's CLI, model and effort come from the first of these that sets them: wh
 Settings has one section for all of this, Teams, in place of the old Agents and Teams tabs.
 Its list holds a Defaults entry (the default CLI and model, "Use for every agent", and the Orchestrators' default rules) and every Team, with where each comes from.
 Picking a Team shows its tree: the Orchestrator at the root and its Members below it.
-Drag a Member to move it, or drag a chip from the palette to add one; with the tree focused, ↑ and ↓ select, ⌥↑ and ⌥↓ move among siblings, ⌥→ indents, ⌥← outdents, Return renames, Delete removes, `a` adds and `d` duplicates. The same moves are buttons and menu items.
+Drag a Member to move it, or add one from Add Member under the tree; with the tree focused, ↑ and ↓ select, ⌥↑ and ⌥↓ move among siblings, ⌥→ indents, ⌥← outdents, Return renames, Delete removes, `a` adds and `d` duplicates. The same moves, with their keys, are in the ⋯ menu under the tree.
 Picking a Member opens its inspector: name, Action, Profile, instruction, CLI, model and effort, tools, skills, context, Lessons, writes and worktree, with "Edit shared role..." for the Profile's own file and "New custom Worker..." for a Profile of your own.
 "New Team" asks for a starting point and a provider.
 Unsaved edits ask before they are lost.

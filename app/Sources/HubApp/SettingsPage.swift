@@ -55,38 +55,34 @@ struct SettingsPage: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("Settings")
-                        .font(Ledger.font(13, .semibold))
+                HStack(alignment: .firstTextBaseline) {
+                    SettingsLabel("Settings", color: Ledger.ink)
+                        .accessibilityAddTraits(.isHeader)
                     Spacer()
                     Button("Done") { model.hideSettings() }
-                        .buttonStyle(.ledgerLink)
+                        .buttonStyle(DoneLinkStyle())
                         .help("Back to your agents (Esc)")
                 }
-                .padding(.horizontal, 16)
-                .frame(height: 44)
+                .padding(.leading, 12)
+                .padding(.trailing, 12)
+                .padding(.top, 6)
+                .padding(.bottom, 14)
+                .overlay(alignment: .bottom) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
                 ForEach(SettingsSection.allCases) { item in
                     SectionRow(item: item, picked: item == section) { model.showSettingsSection(item) }
                 }
                 Spacer(minLength: 0)
             }
-            // As wide as the ledger, so the panel beside it stays put when Settings open.
-            .frame(width: model.ledgerWidth)
+            // Foundry's 260 pt list (ui-ux/0120), narrower when the ledger is, so the Teams section's
+            // three columns have room beside it.
+            .frame(width: min(model.ledgerWidth, 260))
             .frame(maxHeight: .infinity)
-            // The section's column sits in the middle of the space beside the list.
-            VStack(alignment: .leading, spacing: 0) {
-                Text(section.title)
-                    .font(Ledger.font(20, .semibold))
-                    .padding(.horizontal, 20)
-                    .padding(.top, 24)
-                    .padding(.bottom, 4)
-                SettingsView(section: section)
-                    .id(section)
-            }
-            .frame(maxWidth: section.fillsWidth ? .infinity : 680)
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .ledgerSheet()
+            // Teams lay out their own head across the sheet (ui-ux/0101); every other section is a
+            // page centred in the sheet (ui-ux/0045, ui-ux/0120).
+            SettingsView(section: section)
+                .id(section)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .ledgerSheet()
         }
         .focusable()
         .focusEffectDisabled()
@@ -133,33 +129,54 @@ struct SettingsPage: View {
     }
 }
 
-/// A section in the list: flat and full width, the picked one on the selected fill.
+/// A section in the list (ui-ux/0120): its number in mono and its name, 44 pt tall over a 1 pt rule;
+/// the picked one in ink and bold on the sheet's grey, with a 3 pt accent bar at its leading edge.
 private struct SectionRow: View {
     let item: SettingsSection
     let picked: Bool
     let pick: () -> Void
+    @StateObject private var hover = Flag()
 
     var body: some View {
         Button(action: pick) {
-            HStack(spacing: 10) {
-                Image(systemName: item.icon)
-                    .font(Ledger.font(13))
-                    .foregroundStyle(picked ? Ledger.ink : Ledger.ink2)
-                    .frame(width: 20)
+            HStack(spacing: 12) {
+                Text(SettingsLook.number(item))
+                    .font(Ledger.monoFont(11, .bold))
+                    .tracking(0.66)
+                    .foregroundStyle(picked ? Ledger.ink : Ledger.ink3)
+                    .frame(width: 28, alignment: .leading)
                 Text(item.title)
-                    .fontWeight(picked ? .medium : .regular)
-                    .foregroundStyle(Ledger.ink)
+                    .font(Ledger.font(15, picked ? .bold : .regular))
+                    .foregroundStyle(picked || hover.on ? Ledger.ink : Ledger.ink3)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 16)
-            .frame(height: 36)
+            .padding(.leading, 9)
+            .padding(.trailing, 12)
+            .frame(minHeight: 44)
             .frame(maxWidth: .infinity)
-            // Claude's rows: a rounded fill inset from the column's edges, no bar.
-            .background(picked ? Ledger.selected : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
-            .padding(.horizontal, 8)
+            .background(picked || hover.on ? Ledger.paper : .clear)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(picked ? Ledger.accent : .clear).frame(width: 3)
+            }
+            .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hover.on = $0 }
+        .accessibilityLabel(item.title)
         .accessibilityAddTraits(picked ? .isSelected : [])
+    }
+}
+
+/// Done: Archivo semibold in ink, underlined 2 pt in the accent, 4 pt below the text.
+private struct DoneLinkStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(Ledger.font(14, .semibold))
+            .foregroundStyle(configuration.isPressed ? Ledger.ink3 : Ledger.ink)
+            .padding(.bottom, 3)
+            .overlay(alignment: .bottom) { Rectangle().fill(Ledger.accent).frame(height: 2) }
+            .contentShape(Rectangle())
     }
 }

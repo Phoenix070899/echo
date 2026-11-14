@@ -59,6 +59,12 @@ final class TeamSettingsModel: ObservableObject {
 
     var changed: Bool { form != saved }
 
+    /// How many edits are not saved, for the bar under the Team (ui-ux/0121).
+    var changeCount: Int { form.changeCount(from: saved) }
+
+    /// Whether the Member is new or edited since the Team was saved.
+    func memberChanged(_ id: String) -> Bool { changed && form.memberChanged(id, from: saved) }
+
     var canSave: Bool { !readOnly && changed && !saving }
 
     /// Only the human's and the repo's own Teams can be deleted.
@@ -341,8 +347,68 @@ final class TeamSettingsModel: ObservableObject {
     }
 }
 
-/// The inspector of what is picked in the tree (ui-ux/0101): the Orchestrator's fields, the Team's
-/// name and rules among them, or the picked Member's; then Save and Revert.
+/// The inspector of what is picked in the tree (ui-ux/0101, ui-ux/0121): a head naming the picked
+/// row, then the Orchestrator's fields (the Team's name and rules among them) or the picked
+/// Member's, as Foundry fields: a mono capital label over a square control.
+struct TeamInspectorColumn: View {
+    @ObservedObject var teams: TeamSettingsModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                SettingsLabel(teams.member == nil ? "Orchestrator" : "Picked Member", size: 11)
+                Text(title)
+                    .font(Ledger.display(30))
+                    .textCase(.uppercase)
+                    .foregroundStyle(Ledger.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .accessibilityAddTraits(.isHeader)
+                Text(subtitle)
+                    .font(Ledger.font(13))
+                    .lineSpacing(3)
+                    .foregroundStyle(Ledger.ink3)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 24)
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .bottom) { Rectangle().fill(Ledger.ink).frame(height: Ledger.ruleStrong) }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    TeamEditor(teams: teams)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.never)
+        }
+        .background(Ledger.paper)
+    }
+
+    private var title: String {
+        guard let member = teams.member else { return "Orchestrator" }
+        return ActionLook.title(for: member.action)
+    }
+
+    /// "Under Write code · what Verify does", or the Team's name and where it comes from.
+    private var subtitle: String {
+        guard let member = teams.member else {
+            let name = teams.form.name.isEmpty ? "New Team" : teams.form.name
+            guard !teams.form.isNew, let team = teams.team else { return "\(name) · not saved yet" }
+            let from = team.replaces.isEmpty ? team.origin : "\(team.origin), replaces \(team.replaces.joined(separator: ", "))"
+            return "\(name) · \(from)"
+        }
+        let above = member.parent.flatMap(teams.form.member).map { "Under \(ActionLook.title(for: $0.action))" }
+            ?? "Under the Orchestrator"
+        let about = Action.shipped.first { $0.id == member.action }?.description ?? "On a Profile of your own."
+        return "\(above) · \(about)"
+    }
+}
+
+/// What the inspector holds: the picked Member's fields, else the Orchestrator's.
 struct TeamEditor: View {
     @ObservedObject var teams: TeamSettingsModel
 
@@ -361,42 +427,39 @@ struct TeamEditor: View {
             }
             .disabled(teams.readOnly)
         }
-        TeamSave(teams: teams)
     }
 }
 
-/// The Team's name, where it comes from, and its description.
+/// The Team's name, where it is kept, its problem, and its description.
 private struct TeamAbout: View {
     @ObservedObject var teams: TeamSettingsModel
 
     var body: some View {
-        Section {
-            if teams.form.isNew {
+        if teams.form.isNew {
+            InspectorField("Name") {
                 TextField("Name", text: $teams.form.name, prompt: Text("lowercase letters, digits and -"))
-                if teams.repo != nil {
-                    Picker("Keep in", selection: $teams.form.level) {
-                        Text("Yours, in ~/.echo/teams").tag(TeamForm.userLevel)
-                        Text("This repo, in .echo/teams").tag(TeamForm.repoLevel)
-                    }
+                    .labelsHidden()
+                    .squareField(.inspector)
+            }
+            if teams.repo != nil {
+                InspectorField("Keep in") {
+                    SquarePicker(selection: $teams.form.level, options: [
+                        (TeamForm.userLevel, "Yours, in ~/.echo/teams"),
+                        (TeamForm.repoLevel, "This repo, in .echo/teams"),
+                    ], weight: .inspector, label: "Keep in")
                 }
-            } else if let team = teams.team {
-                LabeledContent("From", value: origin(team))
             }
-            if let problem = teams.team?.problem, !teams.form.isNew {
-                Text(problem)
-                    .font(Ledger.font(11))
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            TextField("Description", text: $teams.form.description, prompt: Text("what this Team is for"), axis: .vertical)
-                .lineLimit(1...3)
-                .disabled(teams.readOnly)
         }
-    }
-
-    /// "user, replaces shipped"
-    private func origin(_ team: Team) -> String {
-        team.replaces.isEmpty ? team.origin : "\(team.origin), replaces \(team.replaces.joined(separator: ", "))"
+        if let problem = teams.team?.problem, !teams.form.isNew {
+            InspectorNote(problem, problem: true)
+        }
+        InspectorField("Description") {
+            TextField("Description", text: $teams.form.description, prompt: Text("what this Team is for"), axis: .vertical)
+                .labelsHidden()
+                .lineLimit(1...3)
+                .squareField(.inspector)
+        }
+        .disabled(teams.readOnly)
     }
 }
 
@@ -405,18 +468,23 @@ private struct TeamOrchestrator: View {
     @ObservedObject var teams: TeamSettingsModel
 
     var body: some View {
-        Section("Orchestrator") {
-            CliPicker(title: "CLI", selection: $teams.form.orchestratorCli)
-            TextField("Model", text: $teams.form.orchestratorModel,
-                      prompt: Text(TeamForm.modelHint(cli: teams.effectiveCli(teams.form.orchestratorCli))))
-            EffortPicker(title: "Effort", selection: $teams.form.orchestratorEffort)
-            TextField("Renew at", text: $teams.form.rotateAt, prompt: Text("tokens of context, like 150000"))
-            Text(teams.effectiveCli(teams.form.orchestratorCli) == "kiro"
-                 ? "Kiro does not support renewal yet, so this is not used with it."
-                 : "A running Orchestrator is renewed with a fresh context once it holds this many tokens. Empty leaves it to your settings.")
-                .font(Ledger.font(11))
-                .foregroundStyle(Ledger.ink3)
-                .fixedSize(horizontal: false, vertical: true)
+        InspectorGroup("Runs with") {
+            InspectorField("CLI") { CliPicker(title: "CLI", selection: $teams.form.orchestratorCli) }
+            InspectorField("Model") {
+                TextField("Model", text: $teams.form.orchestratorModel,
+                          prompt: Text(TeamForm.modelHint(cli: teams.effectiveCli(teams.form.orchestratorCli))))
+                    .labelsHidden()
+                    .squareField(.inspector)
+            }
+            InspectorField("Effort") { EffortPicker(title: "Effort", selection: $teams.form.orchestratorEffort) }
+            InspectorField("Renew at") {
+                TextField("Renew at", text: $teams.form.rotateAt, prompt: Text("tokens of context, like 150000"))
+                    .labelsHidden()
+                    .squareField(.inspector)
+                InspectorNote(teams.effectiveCli(teams.form.orchestratorCli) == "kiro"
+                              ? "Kiro does not support renewal yet, so this is not used with it."
+                              : "A running Orchestrator is renewed with a fresh context once it holds this many tokens. Empty leaves it to your settings.")
+            }
         }
     }
 }
@@ -426,43 +494,41 @@ private struct TeamWorkers: View {
     @ObservedObject var teams: TeamSettingsModel
 
     var body: some View {
-        Section("Workers") {
-            CliPicker(title: "CLI", selection: $teams.form.workersCli)
-            TextField("Model", text: $teams.form.workersModel,
-                      prompt: Text(TeamForm.modelHint(cli: teams.effectiveCli(teams.form.workersCli))))
-            EffortPicker(title: "Effort", selection: $teams.form.workersEffort)
-            Text("Set for every Worker, over what its Profile says. Empty leaves it to the Profile.")
-                .font(Ledger.font(11))
-                .foregroundStyle(Ledger.ink3)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        Section("Profiles set apart") {
-            ForEach($teams.form.overrides) { $row in
-                HStack(spacing: 8) {
-                    Picker("Profile", selection: $row.profile) {
-                        ForEach(teams.profileOptions(including: row.profile), id: \.self) { Text($0).tag($0) }
-                    }
+        InspectorGroup("Workers") {
+            InspectorField("CLI") { CliPicker(title: "CLI", selection: $teams.form.workersCli) }
+            InspectorField("Model") {
+                TextField("Model", text: $teams.form.workersModel,
+                          prompt: Text(TeamForm.modelHint(cli: teams.effectiveCli(teams.form.workersCli))))
                     .labelsHidden()
-                    .fixedSize()
-                    CliPicker(title: "CLI", selection: $row.cli).labelsHidden().fixedSize()
+                    .squareField(.inspector)
+            }
+            InspectorField("Effort") { EffortPicker(title: "Effort", selection: $teams.form.workersEffort) }
+            InspectorNote("Set for every Worker, over what its Profile says. Empty leaves it to the Profile.")
+        }
+        InspectorGroup("Profiles set apart") {
+            ForEach($teams.form.overrides) { $row in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) {
+                        SquarePicker(selection: $row.profile,
+                                     options: teams.profileOptions(including: row.profile).map { ($0, $0) },
+                                     weight: .inspector, label: "Profile")
+                        Button("Remove") { teams.form.removeOverride(row.id) }
+                            .buttonStyle(.ledgerLink)
+                            .help("Take this Profile out of the Team's own settings")
+                    }
+                    CliPicker(title: "CLI", selection: $row.cli)
                     TextField("Model", text: $row.model,
                               prompt: Text(TeamForm.modelHint(cli: teams.effectiveCli(row.cli.isEmpty ? teams.form.workersCli : row.cli))))
                         .labelsHidden()
-                    EffortPicker(title: "Effort", selection: $row.effort).labelsHidden().fixedSize()
-                    Button("Remove") { teams.form.removeOverride(row.id) }
-                        .buttonStyle(.ledgerLink)
-                        .help("Take this Profile out of the Team's own settings")
+                        .squareField(.inspector)
+                    EffortPicker(title: "Effort", selection: $row.effort)
                 }
+                .padding(.bottom, 8)
             }
-            HStack {
-                Button("Add a Profile") { teams.form.addOverride(from: teams.profileNames) }
-                    .disabled(teams.form.overrides.count >= teams.profileNames.count)
-                Spacer()
-            }
-            Text("Each row sets one Profile's CLI, model and effort, over the Team's Workers above.")
-                .font(Ledger.font(11))
-                .foregroundStyle(Ledger.ink3)
-                .fixedSize(horizontal: false, vertical: true)
+            Button("Add a Profile") { teams.form.addOverride(from: teams.profileNames) }
+                .buttonStyle(.settings)
+                .disabled(teams.form.overrides.count >= teams.profileNames.count)
+            InspectorNote("Each sets one Profile's CLI, model and effort, over the Team's Workers above.")
         }
     }
 }
@@ -472,20 +538,23 @@ private struct TeamRules: View {
     @ObservedObject var teams: TeamSettingsModel
 
     var body: some View {
-        Section("Rules") {
-            Stepper("At most \(maxWorkers) Workers at once", value: Binding(
-                get: { maxWorkers }, set: { teams.form.maxWorkers = $0 }), in: 1...16)
-            Toggle("Wait for my go before Tasks that write code", isOn: rule(\.planApproval, \.planApproval))
-            Toggle("Have sasuke review each writing Worker", isOn: rule(\.review, \.review))
-            Toggle("Merge verified branches without asking", isOn: rule(\.mergeWithoutAsking, \.mergeWithoutAsking))
-            HStack {
-                Text(isSet ? "These rules are the Team's own." : "Not set here: your Orchestrator settings apply.")
-                    .font(Ledger.font(11))
-                    .foregroundStyle(Ledger.ink3)
-                Spacer()
+        InspectorGroup("Rules") {
+            SquareStepper(text: "At most \(maxWorkers) Workers at once",
+                          minus: maxWorkers > 1 ? { teams.form.maxWorkers = maxWorkers - 1 } : nil,
+                          plus: maxWorkers < 16 ? { teams.form.maxWorkers = maxWorkers + 1 } : nil,
+                          label: "Workers at once")
+            Group {
+                Toggle("Wait for my go before Tasks that write code", isOn: rule(\.planApproval, \.planApproval))
+                Toggle("Have sasuke review each writing Worker", isOn: rule(\.review, \.review))
+                Toggle("Merge verified branches without asking", isOn: rule(\.mergeWithoutAsking, \.mergeWithoutAsking))
+            }
+            .toggleStyle(SquareToggleStyle(size: 14))
+            HStack(alignment: .firstTextBaseline) {
+                InspectorNote(isSet ? "These rules are the Team's own." : "Not set here: your Orchestrator settings apply.")
                 if isSet {
                     Button("Use my settings", action: clear)
                         .buttonStyle(.ledgerLink)
+                        .fixedSize()
                         .disabled(teams.readOnly)
                 }
             }
@@ -519,54 +588,29 @@ private struct TeamInstructions: View {
     @ObservedObject var teams: TeamSettingsModel
 
     var body: some View {
-        Section("Instructions") {
+        InspectorGroup("Instructions") {
             TextField("Instructions", text: $teams.form.instructions,
                       prompt: Text("Anything this Team's Orchestrator should do or avoid"), axis: .vertical)
                 .labelsHidden()
                 .lineLimit(4...14)
-            Text("Added to the end of the Orchestrator's prompt, after its rules.")
-                .font(Ledger.font(11))
-                .foregroundStyle(Ledger.ink3)
+                .squareField(.inspector)
+            InspectorNote("Added to the end of the Orchestrator's prompt, after its rules.")
         }
     }
 }
 
-/// Save and Revert, and the daemon's message when it refused the Team.
-private struct TeamSave: View {
-    @ObservedObject var teams: TeamSettingsModel
+/// A grey line in an inspector; a problem is in the failed red.
+struct InspectorNote: View {
+    let text: String
+    var problem = false
+
+    init(_ text: String, problem: Bool = false) {
+        self.text = text
+        self.problem = problem
+    }
 
     var body: some View {
-        Section {
-            if let failure = teams.failure {
-                Text(failure)
-                    .font(Ledger.font(11))
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
-            if teams.readOnly {
-                HStack {
-                    Text("Echo's own Team. Duplicate it to change it.")
-                        .font(Ledger.font(11))
-                        .foregroundStyle(Ledger.ink3)
-                    Spacer()
-                    Button("Duplicate", action: teams.duplicate)
-                }
-            } else {
-                HStack {
-                    Text(teams.changed ? "Not saved yet." : "Saved.")
-                        .font(Ledger.font(11))
-                        .foregroundStyle(Ledger.ink3)
-                    Spacer()
-                    Button("Revert", action: teams.revert)
-                        .disabled(!teams.changed)
-                    // Return renames in the tree, so Save gives up the key while the tree has it.
-                    Button("Save") { teams.save() }
-                        .keyboardShortcut(teams.treeFocused ? nil : .defaultAction)
-                        .disabled(!teams.canSave)
-                }
-            }
-        }
+        SettingsNote(text, problem: problem, size: 12)
     }
 }
 
@@ -578,22 +622,24 @@ struct CliPicker: View {
     var unset = "The default"
 
     var body: some View {
-        Picker(title, selection: $selection) {
-            Text(unset).tag("")
-            ForEach(agentCLIs, id: \.self) { Text($0).tag($0) }
-        }
+        SquarePicker(selection: $selection, options: [("", unset)] + agentCLIs.map { ($0, $0) },
+                     weight: .inspector, label: title)
     }
 }
 
+/// An effort as Foundry's segmented track. Clicking the picked effort again leaves it unset, so it
+/// follows the level below; `inherited` is that level's, framed dashed while nothing is picked.
 struct EffortPicker: View {
     let title: String
     @Binding var selection: String
-    var unset = "The CLI's own"
+    var inherited: String?
 
     var body: some View {
-        Picker(title, selection: $selection) {
-            Text(unset).tag("")
-            ForEach(TeamForm.efforts, id: \.self) { Text($0).tag($0) }
+        FillSegmented(options: TeamForm.efforts, picked: selection.isEmpty ? nil : selection, inherited: inherited) { effort in
+            selection = effort == selection ? "" : effort
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+        .help("Click the picked effort again to leave it unset")
     }
 }
