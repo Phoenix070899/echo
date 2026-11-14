@@ -67,53 +67,51 @@ struct WorktreeSettings: View {
     @StateObject private var worktrees = WorktreeSettingsModel()
 
     var body: some View {
-        Section {
-            Picker("Repo", selection: $worktrees.repo) {
-                ForEach(model.sessions) { session in
-                    Text(URL(fileURLWithPath: session.repo).lastPathComponent).tag(Optional(session.repo))
-                }
+        SettingsGroup {
+            SettingsRow("Repo") {
+                SquarePicker(selection: $worktrees.repo, options: model.sessions.map {
+                    (Optional($0.repo), URL(fileURLWithPath: $0.repo).lastPathComponent)
+                }, label: "Repo")
             }
-            TextField(text: $worktrees.setup, prompt: Text("pnpm install")) { Text("Setup").font(Ledger.font(13)) }
-                .font(Ledger.monoFont(12))
-            Text("Runs in each new worktree before its agent starts, in your login shell, where you can watch it. When it fails, the agent does not start.")
-                .font(Ledger.font(11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            TextField(text: $worktrees.copy, prompt: Text(".env"), axis: .vertical) { Text("Copy").font(Ledger.font(13)) }
-                .font(Ledger.monoFont(12))
-                .lineLimit(1...6)
-            Text("Files git ignores, one per line, copied from the main checkout into each new worktree that lacks them; a folder is copied whole.")
-                .font(Ledger.font(11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                if let path = worktrees.saved?.path {
-                    Text(worktrees.changed ? "Not saved yet." : "Saved in \(URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent)/settings.json; commit it to share with your team.")
-                        .font(Ledger.font(11))
-                        .foregroundStyle(.secondary)
+            SettingsRow("Setup") {
+                TextField("Setup", text: $worktrees.setup, prompt: Text("pnpm install"))
+                    .labelsHidden()
+                    .squareField(mono: true)
+                SettingsNote("Runs in each new worktree before its agent starts, in your login shell, where you can watch it. When it fails, the agent does not start.")
+            }
+            SettingsRow("Copy") {
+                TextField("Copy", text: $worktrees.copy, prompt: Text(".env"), axis: .vertical)
+                    .labelsHidden()
+                    .lineLimit(1...6)
+                    .squareField(mono: true)
+                SettingsNote("Files git ignores, one per line, copied from the main checkout into each new worktree that lacks them; a folder is copied whole.")
+            }
+            SettingsRow {
+                HStack(spacing: 10) {
+                    if let path = worktrees.saved?.path {
+                        SettingsNote(worktrees.changed ? "Not saved yet." : "Saved in \(URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent)/settings.json; commit it to share with your team.")
+                    } else {
+                        Spacer(minLength: 0)
+                    }
+                    Button("Revert", action: worktrees.revert)
+                        .buttonStyle(.settings)
+                        .disabled(!worktrees.changed)
+                    Button("Save", action: worktrees.save)
+                        .buttonStyle(.settingsPrimary)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!worktrees.changed)
                 }
-                Spacer()
-                Button("Revert", action: worktrees.revert)
-                    .disabled(!worktrees.changed)
-                Button("Save", action: worktrees.save)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!worktrees.changed)
+                if let failure = worktrees.failure {
+                    SettingsNote(failure, problem: true)
+                        .textSelection(.enabled)
+                }
             }
         }
-        // On the section, which always shows: an empty view never appears, so it would never load.
+        // On the group, which always shows: an empty view never appears, so it would never load.
         .onAppear {
             worktrees.repo = worktrees.repo ?? model.selectedRepo ?? model.sessions.first?.repo
             worktrees.load()
         }
         .onChange(of: worktrees.repo) { worktrees.load() }
-        if let failure = worktrees.failure {
-            Section {
-                Text(failure)
-                    .font(Ledger.font(11))
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
-        }
     }
 }

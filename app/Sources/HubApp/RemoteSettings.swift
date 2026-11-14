@@ -8,46 +8,44 @@ struct RemoteSettings: View {
     @StateObject private var remote = RemoteModel()
 
     var body: some View {
-        Section {
-            Toggle("Echo Remote", isOn: Binding(get: { remote.status?.enabled ?? false }, set: remote.turn))
-                .disabled(remote.status == nil || remote.busy)
-            if let line = remote.line {
-                Text(line.text)
-                    .font(Ledger.font(11))
-                    .foregroundStyle(line.problem ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
-            if remote.status?.tailscale == "missing" {
-                Link("Get Tailscale for this Mac and your phone", destination: URL(string: "https://tailscale.com/download")!)
-                    .font(Ledger.font(11))
+        SettingsGroup {
+            SettingsRow("Echo Remote") {
+                Toggle("On", isOn: Binding(get: { remote.status?.enabled ?? false }, set: remote.turn))
+                    .toggleStyle(.square)
+                    .disabled(remote.status == nil || remote.busy)
+                if let line = remote.line {
+                    SettingsNote(line.text, problem: line.problem)
+                        .textSelection(.enabled)
+                }
+                if remote.status?.tailscale == "missing" {
+                    Link("Get Tailscale for this Mac and your phone", destination: URL(string: "https://tailscale.com/download")!)
+                        .font(Ledger.font(14, .semibold))
+                        .foregroundStyle(Ledger.ink)
+                        .underline(true, color: Ledger.accent)
+                }
             }
             if let status = remote.status, status.enabled, status.url != nil || status.tailscale == "test", let link = status.pairLink {
-                HStack(alignment: .top, spacing: 16) {
+                SettingsRow("Pair") {
                     QRCode(text: link)
-                        .frame(width: 148, height: 148)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Scan with your phone's camera to pair it.")
-                        Text("Then tap Share, Add to Home Screen, open Echo from there, and turn on notifications in its Settings.")
-                            .font(Ledger.font(11))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        HStack(spacing: 8) {
-                            Button("Copy Link") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(link, forType: .string)
-                            }
-                            Button("New Pairing Link…", action: remote.confirmNewPairing)
+                        .frame(width: 168, height: 168)
+                        .alignmentGuide(.firstTextBaseline) { $0[.top] + 19 }
+                    Text("Scan with your phone's camera to pair it.")
+                        .font(Ledger.font(15))
+                        .foregroundStyle(Ledger.ink)
+                    SettingsNote("Then tap Share, Add to Home Screen, open Echo from there, and turn on notifications in its Settings.")
+                    HStack(spacing: 10) {
+                        Button("Copy Link") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(link, forType: .string)
                         }
-                        .padding(.top, 2)
+                        Button("New Pairing Link…", action: remote.confirmNewPairing)
                     }
+                    .buttonStyle(.settings)
                 }
-                .padding(.vertical, 4)
             }
-            Text("Your agents' ledger, Needs, and screens on your phone, through Tailscale only. Whoever has the pairing link can drive your agents; keep it private.")
-                .font(Ledger.font(11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            SettingsRow("Why") {
+                SettingsNote("Your agents' ledger, Needs, and screens on your phone, through Tailscale only. Whoever has the pairing link can drive your agents; keep it private.", size: 17)
+            }
         }
         .task {
             // Tailscale may be installed or logged in while Settings is open.
@@ -126,8 +124,9 @@ struct QRCode: View {
             Image(nsImage: image)
                 .interpolation(.none)
                 .resizable()
-                .padding(8)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+                .padding(10)
+                .background(Color.white)
+                .overlay(Rectangle().strokeBorder(Ledger.ink, lineWidth: Ledger.ruleStrong))
         }
     }
 

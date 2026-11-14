@@ -15,196 +15,199 @@ struct SettingsView: View {
 
     var body: some View {
         switch section {
-            case .window:
+        case .window:
             page {
-                Section {
-                    Picker("Appearance", selection: $model.windowLook) {
-                        ForEach(WindowLook.allCases) { look in
-                            Text(look.title).tag(look)
+                SettingsGroup {
+                    SettingsRow("Appearance") {
+                        SquarePicker(selection: $model.windowLook, options: WindowLook.allCases.map { ($0, $0.title) }, label: "Appearance")
+                        if model.windowLook == .matchTerminal {
+                            SettingsNote(model.appearance.theme.isDark
+                                         ? "Dark, because the terminal theme is dark."
+                                         : "Light, because the terminal theme is light.")
                         }
-                    }
-                    if model.windowLook == .matchTerminal {
-                        Text(model.appearance.theme.isDark
-                             ? "Dark, because the terminal theme is dark."
-                             : "Light, because the terminal theme is light.")
-                            .font(Ledger.font(11))
-                            .foregroundStyle(.secondary)
                     }
                 }
                 if model.windowLook == .custom {
-                    Section {
-                        Picker("Preset", selection: lookPresetBinding) {
-                            ForEach(CustomLook.presets) { look in
-                                Text(look.name).tag(look.name)
-                            }
-                            if !isLookPreset {
-                                Text("Custom").tag("Custom")
-                            }
+                    SettingsGroup("Custom") {
+                        SettingsRow("Preset") {
+                            SquarePicker(selection: lookPresetBinding, options: lookPresetOptions, label: "Preset")
                         }
-                        LedgerSegmented(selection: lookBinding(\.dark), options: [(value: false, title: "Light"), (value: true, title: "Dark")])
-                        ColorPicker("Background", selection: lookColour(\.background), supportsOpacity: false)
-                        ColorPicker("Surface", selection: lookColour(\.surface), supportsOpacity: false)
-                        ColorPicker("Text", selection: lookColour(\.text), supportsOpacity: false)
-                        ColorPicker("Accent", selection: lookColour(\.accent), supportsOpacity: false)
-                        ColorPicker("Highlighter", selection: lookColour(\.highlighter), supportsOpacity: false)
-                        Text("Lines, fields, and cards are mixed from these. Mode sets the system controls and the done, failed, and changed colours.")
-                            .font(Ledger.font(11))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Section {
-                        Button("Match the Terminal Theme (\(model.appearance.theme.name))") {
-                            draft.look = CustomLook.from(model.appearance.theme)
+                        SettingsRow("Mode") {
+                            LedgerSegmented(selection: lookBinding(\.dark), options: [(value: false, title: "Light"), (value: true, title: "Dark")])
+                            SettingsNote("Mode sets the system controls and the done, failed, and changed colours.")
                         }
-                    }
-                    Section {
-                        HStack {
-                            Text(draft.look == model.customLook ? "Applied." : "Not applied yet.")
-                                .font(Ledger.font(11))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Revert") { draft.look = model.customLook }
-                                .disabled(draft.look == model.customLook)
-                            Button("Apply") { model.customLook = draft.look }
-                                .keyboardShortcut(.defaultAction)
-                                .disabled(draft.look == model.customLook)
+                        SettingsRow("Background") { SquareColorWell(selection: lookColour(\.background), label: "Background") }
+                        SettingsRow("Surface") { SquareColorWell(selection: lookColour(\.surface), label: "Surface") }
+                        SettingsRow("Text") { SquareColorWell(selection: lookColour(\.text), label: "Text") }
+                        SettingsRow("Accent") { SquareColorWell(selection: lookColour(\.accent), label: "Accent") }
+                        SettingsRow("Highlighter") {
+                            SquareColorWell(selection: lookColour(\.highlighter), label: "Highlighter")
+                            SettingsNote("Lines, fields, and cards are mixed from these.")
+                        }
+                        SettingsRow("Match") {
+                            Button("Match the Terminal Theme (\(model.appearance.theme.name))") {
+                                draft.look = CustomLook.from(model.appearance.theme)
+                            }
+                            .buttonStyle(.settings)
+                        }
+                        SettingsRow {
+                            HStack(spacing: 10) {
+                                SettingsNote(draft.look == model.customLook ? "Applied." : "Not applied yet.")
+                                Button("Revert") { draft.look = model.customLook }
+                                    .buttonStyle(.settings)
+                                    .disabled(draft.look == model.customLook)
+                                Button("Apply") { model.customLook = draft.look }
+                                    .buttonStyle(.settingsPrimary)
+                                    .keyboardShortcut(.defaultAction)
+                                    .disabled(draft.look == model.customLook)
+                            }
                         }
                     }
                 }
             }
             .onAppear { draft.look = model.customLook }
-            case .theme:
+        case .theme:
             page {
-                Section {
-                    Picker("Preset", selection: presetBinding) {
-                        ForEach(TerminalTheme.presets) { theme in
-                            Text(theme.name).tag(theme.name)
-                        }
-                        if !isPreset {
-                            Text("Custom").tag("Custom")
-                        }
+                SettingsGroup {
+                    SettingsRow("Preset") {
+                        SquarePicker(selection: presetBinding, options: presetOptions, label: "Preset")
                     }
-                    ColorPicker("Background", selection: colour(\.background), supportsOpacity: false)
-                    ColorPicker("Text", selection: colour(\.foreground), supportsOpacity: false)
-                    ColorPicker("Cursor", selection: colour(\.cursor), supportsOpacity: false)
-                    ColorPicker("Selection", selection: colour(\.selection), supportsOpacity: false)
-                    LabeledContent("Palette") { Swatches(theme: model.appearance.theme) }
-                }
-                Section {
-                    Button("Match Orca (Ayu Dark, JetBrainsMono Nerd Font 14)") { model.appearance = .orca }
+                    SettingsRow("Background") { SquareColorWell(selection: colour(\.background), label: "Background") }
+                    SettingsRow("Text") { SquareColorWell(selection: colour(\.foreground), label: "Text") }
+                    SettingsRow("Cursor") { SquareColorWell(selection: colour(\.cursor), label: "Cursor") }
+                    SettingsRow("Selection") { SquareColorWell(selection: colour(\.selection), label: "Selection") }
+                    SettingsRow("Palette") {
+                        Swatches(theme: model.appearance.theme)
+                            .alignmentGuide(.firstTextBaseline) { $0[.top] + 19 }
+                    }
+                    SettingsRow("Orca") {
+                        Button("Match Orca") { model.appearance = .orca }
+                            .buttonStyle(.settings)
+                        SettingsNote("Ayu Dark, JetBrainsMono Nerd Font 14.")
+                    }
                 }
             }
-            case .background:
+        case .background:
             page {
-                Section {
-                    LabeledContent("Image") {
-                        HStack(spacing: 8) {
-                            Text(model.appearance.backgroundImage.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "None")
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                SettingsGroup {
+                    SettingsRow("Image") {
+                        Text(model.appearance.backgroundImage.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "None")
+                            .font(Ledger.font(17))
+                            .foregroundStyle(Ledger.ink3)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        HStack(spacing: 10) {
                             Button("Choose…", action: chooseImage)
+                                .buttonStyle(.settings)
                             if model.appearance.backgroundImage != nil {
                                 Button("Remove") { model.appearance.backgroundImage = nil }
+                                    .buttonStyle(.settings)
                             }
+                        }
+                        if let path = model.appearance.backgroundImage, !FileManager.default.fileExists(atPath: path) {
+                            SettingsNote("The image is gone; terminals show the theme background.", problem: true)
                         }
                     }
                     // Always shown, so the controls can be found before an image is chosen.
                     Group {
-                        LabeledContent {
-                            HStack(spacing: 10) {
-                                Slider(value: $model.appearance.backgroundImageDim, in: 0.3...0.95)
-                                Text("\(Int((model.appearance.backgroundImageDim * 100).rounded()))%")
-                                    .monospacedDigit()
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 40, alignment: .trailing)
+                        SettingsRow("Dim") {
+                            HStack(spacing: 14) {
+                                SquareSlider(value: $model.appearance.backgroundImageDim, range: 0.3...0.95, label: "Dim")
+                                readout("\(Int((model.appearance.backgroundImageDim * 100).rounded()))%")
                             }
-                        } label: {
-                            Text("Dim")
                         }
-                        LabeledContent {
-                            HStack(spacing: 10) {
-                                Slider(value: $model.appearance.backgroundImageBlur, in: 0...30)
-                                Text("\(Int(model.appearance.backgroundImageBlur.rounded())) pt")
-                                    .monospacedDigit()
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 40, alignment: .trailing)
+                        SettingsRow("Blur") {
+                            HStack(spacing: 14) {
+                                SquareSlider(value: $model.appearance.backgroundImageBlur, range: 0...30, label: "Blur")
+                                readout("\(Int(model.appearance.backgroundImageBlur.rounded())) pt")
                             }
-                        } label: {
-                            Text("Blur")
                         }
                     }
                     .disabled(model.appearance.backgroundImage == nil)
-                    if let path = model.appearance.backgroundImage {
-                        if !FileManager.default.fileExists(atPath: path) {
-                            Text("The image is gone; terminals show the theme background.")
-                                .font(Ledger.font(11))
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                    Text("Choose an image to show behind every terminal. Text and coloured cells stay solid; dim or blur the image until the text reads easily.")
-                        .font(Ledger.font(11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            case .font:
-            page {
-                Section {
-                    TextField("Family", text: $model.appearance.fontName)
-                    Stepper(value: $model.appearance.fontSize, in: 9...28, step: 0.5) {
-                        LabeledContent("Size", value: "\(model.appearance.fontSize.formatted()) pt")
-                    }
-                    if NSFont(name: model.appearance.fontName, size: 12) == nil {
-                        Text("Not installed; the system monospaced font is used.")
-                            .font(Ledger.font(11))
-                            .foregroundStyle(.orange)
+                    SettingsRow("About") {
+                        SettingsNote("Choose an image to show behind every terminal. Text and coloured cells stay solid; dim or blur the image until the text reads easily.", size: 17)
                     }
                 }
             }
-            case .multiplexer:
+        case .font:
             page {
-                Section {
-                    Picker("Show agents and Workers inside", selection: $model.multiplexer.kind) {
-                        ForEach(Multiplexer.allCases) { kind in
-                            Text(kind.title).tag(kind)
+                SettingsGroup {
+                    SettingsRow("Family") {
+                        TextField("Family", text: $model.appearance.fontName)
+                            .labelsHidden()
+                            .squareField()
+                        if NSFont(name: model.appearance.fontName, size: 12) == nil {
+                            SettingsNote("Not installed; the system monospaced font is used.", problem: true)
                         }
+                    }
+                    SettingsRow("Size") {
+                        let size = model.appearance.fontSize
+                        SquareStepper(text: "\(size.formatted()) pt",
+                                      minus: size > 9 ? { model.appearance.fontSize = max(9, size - 0.5) } : nil,
+                                      plus: size < 28 ? { model.appearance.fontSize = min(28, size + 0.5) } : nil,
+                                      label: "Size")
+                    }
+                }
+            }
+        case .multiplexer:
+            page {
+                SettingsGroup {
+                    SettingsRow("Show agents and Workers inside") {
+                        SquarePicker(selection: $model.multiplexer.kind, options: Multiplexer.allCases.map { ($0, $0.title) },
+                                     label: "Show agents and Workers inside")
                     }
                     if model.multiplexer.kind == .custom {
-                        TextField("Command", text: $model.multiplexer.command, axis: .vertical)
-                            .font(Ledger.monoFont(12))
-                            .lineLimit(1...3)
+                        SettingsRow("Command") {
+                            TextField("Command", text: $model.multiplexer.command, axis: .vertical)
+                                .labelsHidden()
+                                .lineLimit(1...3)
+                                .squareField(mono: true)
+                        }
                     } else if model.multiplexer.enabled {
-                        LabeledContent("Command") {
+                        SettingsRow("Command") {
                             Text(model.multiplexer.command)
-                                .font(Ledger.monoFont(12))
-                                .foregroundStyle(.secondary)
+                                .font(Ledger.monoFont(13))
+                                .foregroundStyle(Ledger.ink3)
                                 .textSelection(.enabled)
-                                .multilineTextAlignment(.trailing)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    Text(help)
-                        .font(Ledger.font(11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("A change applies to terminals opened after it.")
-                        .font(Ledger.font(11))
-                        .foregroundStyle(.secondary)
+                    SettingsRow("How") {
+                        SettingsNote(help, size: 17)
+                        SettingsNote("A change applies to terminals opened after it.")
+                    }
                 }
             }
-            case .teams:
+        case .teams:
             TeamsSection(teams: model.teamSettings, agents: agents)
             .onAppear {
                 agents.refresh()
                 refreshTeams()
             }
-            case .worktrees:
+        case .worktrees:
             page { WorktreeSettings() }
-            case .memory:
+        case .memory:
             page { MemorySettings() }
-            case .remote:
+        case .remote:
             page { RemoteSettings() }
         }
+    }
+
+    /// A slider's value, in mono at its right.
+    private func readout(_ text: String) -> some View {
+        Text(text)
+            .font(Ledger.monoFont(13))
+            .foregroundStyle(Ledger.ink3)
+            .monospacedDigit()
+            .frame(width: 48, alignment: .trailing)
+    }
+
+    private var presetOptions: [(value: String, title: String)] {
+        TerminalTheme.presets.map { ($0.name, $0.name) } + (isPreset ? [] : [("Custom", "Custom")])
+    }
+
+    private var lookPresetOptions: [(value: String, title: String)] {
+        CustomLook.presets.map { ($0.name, $0.name) } + (isLookPreset ? [] : [("Custom", "Custom")])
     }
 
     /// Teams are the selected repo's, its own included.
@@ -213,11 +216,9 @@ struct SettingsView: View {
         model.teamSettings.refresh()
     }
 
-    /// One section's page: its groups, scrolling when taller than the window.
-    private func page<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        Form(content: content)
-            .formStyle(.grouped)
-            .scrollContentBackground(.hidden)
+    /// One section's page: its head and groups, scrolling when taller than the window.
+    private func page<Content: View>(@ViewBuilder _ content: @escaping () -> Content) -> some View {
+        SettingsSheetPage(section: section, content: content)
     }
 
     private func chooseImage() {
@@ -316,15 +317,16 @@ struct Swatches: View {
             ForEach([0, 8], id: \.self) { start in
                 HStack(spacing: 3) {
                     ForEach(start..<start + 8, id: \.self) { index in
-                        RoundedRectangle(cornerRadius: 3)
+                        Rectangle()
                             .fill(TerminalTheme.color(theme.ansi[index]))
-                            .frame(width: 16, height: 16)
+                            .frame(width: 18, height: 18)
                     }
                 }
             }
         }
-        .padding(4)
-        .background(TerminalTheme.color(theme.background), in: RoundedRectangle(cornerRadius: Ledger.radiusInner))
+        .padding(6)
+        .background(TerminalTheme.color(theme.background))
+        .overlay(Rectangle().strokeBorder(Ledger.ink, lineWidth: Ledger.ruleStrong))
     }
 }
 
