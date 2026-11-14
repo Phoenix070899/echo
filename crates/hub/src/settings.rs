@@ -161,7 +161,7 @@ impl Rules {
             lines.push("- Start a Task that writes code without waiting for a \"go\"; still show its one-line plan as you start it.".into());
         }
         if !self.review {
-            lines.push("- Skip the sasuke verification after a writing Worker; check its Final Report against the acceptance yourself.".into());
+            lines.push("- Skip the verifier (`sasuke`, or a `verify` Member) after a writing Worker; check its Final Report against the acceptance yourself.".into());
         }
         if self.merge_without_asking {
             lines.push(
@@ -192,7 +192,7 @@ mod tests {
         let rules = Rules::from(&set);
         let text = rules.overrides();
         assert!(text.contains("At most 6 Workers"));
-        assert!(text.contains("Skip the sasuke verification"));
+        assert!(text.contains("Skip the verifier"));
         assert!(!text.contains("Merge a verified branch"));
         set.insert("maxWorkers".into(), json!(99));
         assert_eq!(Rules::from(&set).max_workers, 4, "out of range falls back");

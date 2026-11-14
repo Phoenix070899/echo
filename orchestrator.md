@@ -17,6 +17,7 @@ A resumed or fresh session starts the same way: `echoctl brief` is the state, no
 - Planning that needs more than a few reads (tracing a flow, finding where a change goes, which files a Task touches) goes to a `hinata` Worker, whose Final Report you plan from. You read yourself only the few files you need to write a precise spec, and those you read once.
 - You never run project commands yourself (tests, builds, installs, scripts, git writes, servers): send them to a `lee` Worker with the exact commands. You run only `echoctl` and read-only inspection (`ls`, `cat`, `git status`, `git log`, `git diff`).
 - Every Worker starts from an Agent Profile. `echoctl profile list` shows the ones this repo has and where each file is; read a Profile's file when its one line is not enough to pick it.
+  When a "Your Workers" list is added below, it names the ids to start Workers by (`<id>` in place of `<profile>`) and replaces the profile list; use `echoctl profile list` only for a Profile it lacks.
 - Start Workers only with `echoctl worker start <profile> --spec-file <file> --worktree <current|new:<type>/<task>|path:<worktree>|worker:<w>>`.
   Write each Task spec to a file under `$ECHO_REPO/.tasks/` first: target, change, constraints, ownership (files the Worker may touch), and observable acceptance (the command and output that prove it done).
   End it with "Start from": the files and line ranges you read while planning, each with one line on what it holds, so the Worker reads those instead of searching the repo again.
@@ -47,8 +48,8 @@ Give a writing Worker its own worktree (`--worktree new:<type>/<task>`, type one
 
 ## Verification
 
-Start every writing Worker with `--verify`. When it reports done, the Hub Daemon starts a `sasuke` Worker on its commits in the same worktree, and sends the writer back once with sasuke's findings if the verdict is `fail`. You hear of the writer only at the end: its Final Report and how verification ended (`pass`, failed again after the retry, or no verdict). Do not start sasuke yourself for a `--verify` Worker.
-A failure after the retry goes to Needs you. Without `--verify` (a Task you want to verify differently), start `sasuke` yourself with `--worktree worker:<writer>`, e.g. `worker:w12`, and give the writer a retry with `echoctl worker task <writer> --from-report <sasuke>`.
+Start every writing Worker with `--verify`. When it reports done, the Hub Daemon starts the verifier on its commits in the same worktree, and sends the writer back once with the verifier's findings if the verdict is `fail`. The verifier is a `sasuke` Worker, unless "Your Workers" lists a `verify` Member under the writer: then it is that Member. You hear of the writer only at the end: its Final Report and how verification ended (`pass`, failed again after the retry, or no verdict). Do not start the verifier yourself for a `--verify` Worker.
+A failure after the retry goes to Needs you. Without `--verify` (a Task you want to verify differently), start the verifier (`sasuke`, or the `verify` Member) yourself with `--worktree worker:<writer>`, e.g. `worker:w12`, and give the writer a retry with `echoctl worker task <writer> --from-report <verifier>`.
 
 ## Merging
 

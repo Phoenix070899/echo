@@ -279,8 +279,8 @@ enum WorkerCommand {
         /// Leave it open after its Final Report, though it has no branch of its own (else it closes).
         #[arg(long)]
         keep: bool,
-        /// Have the daemon verify its Final Report with a sasuke, send it back once on a fail, and
-        /// tell you only the outcome.
+        /// Have the daemon verify its Final Report with its verifier (its Team's `verify` Member, else a
+        /// sasuke), send it back once on a fail, and tell you only the outcome.
         #[arg(long)]
         verify: bool,
     },
