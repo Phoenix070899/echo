@@ -3917,3 +3917,92 @@ fn a_teams_review_rule_decides_whether_verify_verifies_over_the_humans_setting()
     let told = hub.wait();
     assert!(told.contains("from w4") && !told.contains("Verified"), "{told}");
 }
+
+/// The Team of the smoke run: a scanner, a writer with a verify child, and a runner.
+fn smoke_members(scan_model: &str, with_runner: bool) -> serde_json::Value {
+    let mut members = vec![
+        serde_json::json!({ "id": "scan", "action": "scan", "profile": "hinata", "model": scan_model }),
+        serde_json::json!({ "id": "build", "action": "execute", "profile": "naruto" }),
+        serde_json::json!({
+            "id": "check", "action": "verify", "profile": "sasuke", "parent": "build",
+            "model": "claude-haiku-5-5"
+        }),
+    ];
+    if with_runner {
+        members.push(serde_json::json!({ "id": "run", "action": "run", "profile": "lee" }));
+    }
+    serde_json::json!(members)
+}
+
+fn save_smoke_team(hub: &Hub, members: serde_json::Value) {
+    let saved = hub.call(
+        "team.save",
+        serde_json::json!({ "name": "smoke", "level": "user", "team": { "members": members } }),
+    );
+    assert!(saved["error"].is_null(), "{saved}");
+}
+
+#[test]
+fn a_team_of_members_is_built_used_edited_and_resumed_end_to_end() {
+    let hub = Hub::new("smoke-team");
+    hub.ok(&["status"]);
+    save_smoke_team(&hub, smoke_members("claude-haiku-5-5", true));
+    let shown = hub.ok(&["team", "show", "smoke"]);
+    let line_of = |shown: &str, id: &str| {
+        shown
+            .lines()
+            .position(|l| l.trim_start().starts_with(id))
+            .unwrap_or_else(|| panic!("no {id} in {shown}"))
+    };
+    let indent = |shown: &str, i: usize| {
+        let line = shown.lines().nth(i).unwrap();
+        line.len() - line.trim_start().len()
+    };
+    let (build, check) = (line_of(&shown, "build"), line_of(&shown, "check"));
+    assert_eq!(check, build + 1, "{shown}");
+    assert!(indent(&shown, check) > indent(&shown, build), "{shown}");
+    assert!(
+        indent(&shown, line_of(&shown, "scan")) == indent(&shown, build)
+            && indent(&shown, line_of(&shown, "run")) == indent(&shown, build),
+        "{shown}"
+    );
+
+    let agent = open_orchestrator(&hub, Some("smoke"));
+
+    // A writer started with --verify is verified by its `check` Member: w2 fails it, w1 takes the
+    // retry, w3 passes it.
+    let by_id = start_under(&hub, agent, &["build", "--spec", "next FAILME", "--verify"]);
+    assert!(by_id.contains("(build from naruto:"), "{by_id}");
+    let told = hub.wait();
+    assert!(told.contains("Verified by w3 (check): pass."), "{told}");
+    assert!(!told.contains("sasuke"), "{told}");
+    assert_eq!(row_of(&hub, 2)["member"], "check");
+    assert_eq!(row_of(&hub, 3)["model"], "claude-haiku-5-5");
+
+    // A Member id, and a Profile name that the `run` Member stands for.
+    start_under(&hub, agent, &["scan", "--spec", "exit"]);
+    start_under(&hub, agent, &["lee", "--spec", "exit"]);
+    hub.eventually("both Workers to give up", || {
+        row_of(&hub, 4)["phase"] == "exited" && row_of(&hub, 5)["phase"] == "exited"
+    });
+    let who = |n: u32| {
+        let row = row_of(&hub, n);
+        (row["member"].clone(), row["profile"].clone(), row["model"].clone())
+    };
+    assert_eq!(who(4), ("scan".into(), "hinata".into(), "claude-haiku-5-5".into()));
+    assert_eq!(who(5).0, "run");
+    assert_eq!(who(5).1, "lee");
+    let lees_own = who(5).2;
+
+    // The Team file is edited: `scan` changes its model and `run` is removed. Both Workers
+    // resume without error, `scan` on its new model and `run` on its Profile's own.
+    save_smoke_team(&hub, smoke_members("claude-sonnet-5-5", false));
+    let shown = hub.ok(&["team", "show", "smoke"]);
+    assert!(!shown.lines().any(|l| l.trim_start().starts_with("run")), "{shown}");
+    assert!(hub.ok(&["worker", "resume", "w4"]).contains("Resumed w4"));
+    assert!(hub.ok(&["worker", "resume", "w5"]).contains("Resumed w5"));
+    assert_eq!(who(4).2, "claude-sonnet-5-5");
+    let fallen = row_of(&hub, 5);
+    assert_eq!((&fallen["member"], &fallen["profile"]), (&"run".into(), &"lee".into()));
+    assert_eq!(fallen["model"], lees_own, "the Profile's own choices: {fallen}");
+}
