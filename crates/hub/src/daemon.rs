@@ -2099,9 +2099,17 @@ impl Hub {
             None => db::first_orchestrator(&self.db(), &repo_root.display().to_string())?.map(|a| a.id),
         };
         // The name is a Member of its Orchestrator's Team (its id, else the first one using that
-        // Profile), else a Profile (features/0085).
+        // Profile), else a Profile (features/0085). The daemon's own verifier says which: a named
+        // Member (`member`), or the bare Profile (`bare`) when the Team has no verifier for the writer.
         let team = self.worker_team(&self.db(), agent)?;
-        let member = team.as_ref().and_then(|team| team.member_for(name));
+        let member = if p.get("bare").and_then(Value::as_bool).unwrap_or(false) {
+            None
+        } else if let Some(id) = picked("member") {
+            let found = team.as_ref().and_then(|team| team.members.iter().find(|m| m.id == id));
+            Some(found.with_context(|| format!("the Team has no Member {id}"))?)
+        } else {
+            team.as_ref().and_then(|team| team.member_for(name))
+        };
         let profile_name = member.map_or(name, |member| member.profile.as_str());
         let profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(&repo_root), profile_name)?;
         // A CLI or model that cannot run (the Orchestrator's Team and its Member included), or a Kiro
@@ -2177,9 +2185,14 @@ impl Hub {
                 model: runs.model.as_deref(),
             },
         )?;
-        // Verifying by the daemon only happens while the human's Settings have a review on.
+        // Verifying by the daemon only happens while the review rule is on: the Team's when it sets
+        // one, else the human's Settings (features/0086).
         let flag = |key: &str| p.get(key).and_then(Value::as_bool).unwrap_or(false);
-        let review = settings::Rules::from(&settings::read(&paths::state_dir()).unwrap_or_default()).review;
+        let mut rules = settings::Rules::from(&settings::read(&paths::state_dir()).unwrap_or_default());
+        if let Some(setup) = team.as_ref().and_then(|team| team.rules.as_ref()) {
+            rules = rules.with_team(setup);
+        }
+        let review = rules.review;
         db::set_worker_role(
             &self.db(),
             id,
@@ -2652,8 +2665,8 @@ impl Hub {
         Ok(json!({ "messages": out }))
     }
 
-    /// A writer started `--verify` reported done: a `sasuke` checks it in the same worktree before
-    /// the Orchestrator hears of it.
+    /// A writer started `--verify` reported done: its Team's `verify` Member, else a `sasuke`, checks
+    /// it in the same worktree before the Orchestrator hears of it.
     fn verify(self: &Arc<Self>, writer: i64) {
         if let Err(error) = self.start_verifier(writer) {
             self.deliver(writer, &format!("Verification did not start: {error:#}"), "");
@@ -2674,16 +2687,27 @@ impl Hub {
             task.trim_end(),
             writer.final_report.as_deref().unwrap_or("").trim_end()
         );
-        self.start_worker(&json!({
+        // The Team as it is now: a writer whose Member is gone, or that has no `verify` child, gets
+        // the bare `sasuke` Profile, never a Member that merely uses it (features/0086).
+        let team = self.worker_team(&self.db(), writer.agent_id)?;
+        let verifier = team
+            .as_ref()
+            .and_then(|team| team.verifier_of(&stored_member(Some(team), &writer)?.id));
+        let who = match verifier {
+            Some(member) => json!({ "profile": member.profile, "member": member.id }),
+            None => json!({ "profile": "sasuke", "bare": true }),
+        };
+        let mut params = json!({
             "repo": writer.repo,
-            "profile": "sasuke",
             "spec": spec,
             "worktree": format!("worker:w{writer_id}"),
             "agent": writer.agent_id,
             "title": format!("verify w{writer_id}: {}", writer.title),
             "verifies": writer_id,
             "origin": "echo",
-        }))?;
+        });
+        params.as_object_mut().unwrap().extend(who.as_object().unwrap().clone());
+        self.start_worker(&params)?;
         Ok(())
     }
 
@@ -2697,32 +2721,38 @@ impl Hub {
             } else {
                 None
             };
+            // The verifier that ran: its Member id, else its Profile.
+            let ran = db::worker(&self.db(), verifier)?;
+            let named = ran.member.clone().unwrap_or(ran.profile.clone());
+            let who = match &ran.member {
+                Some(member) => format!("w{verifier} ({member})"),
+                None => format!("w{verifier}"),
+            };
             match verdict {
-                Some(true) => self.deliver(writer_id, &format!("Verified by w{verifier}: pass."), report),
+                Some(true) => self.deliver(writer_id, &format!("Verified by {who}: pass."), report),
                 Some(false) if writer.retries < MAX_RETRIES => {
                     db::add_retry(&self.db(), writer_id)?;
                     let task = format!(
-                        "w{verifier} (sasuke) verified your change and it failed. Fix every P0 and P1 finding \
+                        "w{verifier} ({named}) verified your change and it failed. Fix every P0 and P1 finding \
                          within this Task and its scope, run the verify command again, and finish with \
                          `echoctl done` as before.\n\n{}",
                         report.trim_end()
                     );
                     if let Err(error) = self.next_task(writer_id, &task, db::origin::ECHO) {
                         let note = format!(
-                            "Verification by w{verifier} failed and w{writer_id} could not take the retry: {error:#}"
+                            "Verification by {who} failed and w{writer_id} could not take the retry: {error:#}"
                         );
                         self.deliver(writer_id, &note, report);
                     }
                 }
                 Some(false) => {
                     let note =
-                        format!("Verification by w{verifier} failed again after {MAX_RETRIES} retry: needs the human.");
+                        format!("Verification by {who} failed again after {MAX_RETRIES} retry: needs the human.");
                     self.deliver(writer_id, &note, report)
                 }
                 None => {
-                    let note = format!(
-                        "w{verifier} ended {final_state} without a `Verdict:` line: judge its report yourself."
-                    );
+                    let note =
+                        format!("{who} ended {final_state} without a `Verdict:` line: judge its report yourself.");
                     self.deliver(writer_id, &note, report)
                 }
             }

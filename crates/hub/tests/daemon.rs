@@ -3616,3 +3616,125 @@ fn a_member_that_cannot_run_stops_the_start_before_its_worktree() {
     refused(start(sonnet, "pick"), "sonnet");
     assert!(!hub.ok(&["worker", "list"]).contains("w1"), "no Worker row was made");
 }
+
+/// A Team whose `build` writer is checked by its `verify` child `check`, a sasuke on its own model;
+/// `plain` is a writer with no verifier, and `check` is no child of it.
+const CHECKED: &str = r#"{"members": [
+    {"id": "build", "action": "execute", "profile": "naruto"},
+    {"id": "check", "action": "verify", "profile": "sasuke", "parent": "build", "model": "claude-haiku-5-5"},
+    {"id": "plain", "action": "execute", "profile": "naruto"}]}"#;
+
+#[test]
+fn a_writer_is_verified_by_its_verify_member_and_the_retry_names_it() {
+    let hub = Hub::new("verify-member");
+    hub.ok(&["status"]);
+    put_team(&hub, "checked", CHECKED);
+    let agent = open_orchestrator(&hub, Some("checked"));
+    start_under(&hub, agent, &["build", "--spec", "next FAILME", "--verify"]);
+    // w2 (check) fails it, w1 takes the retry, w3 (check) passes it.
+    let told = hub.wait();
+    assert!(told.contains("done (done) from w1"), "{told}");
+    assert!(told.contains("Verified by w3 (check): pass."), "{told}");
+    assert!(
+        told.contains("next: w2 (check) verified your change and it failed"),
+        "{told}"
+    );
+    assert!(!told.contains("sasuke"), "{told}");
+    for n in [2, 3] {
+        let row = row_of(&hub, n);
+        assert_eq!(row["member"], "check", "{row}");
+        assert_eq!(row["profile"], "sasuke", "{row}");
+        assert_eq!(row["model"], "claude-haiku-5-5", "{row}");
+        assert_eq!(row["agent"], agent, "{row}");
+    }
+}
+
+#[test]
+fn a_verify_member_that_is_not_the_writers_child_is_not_its_verifier() {
+    let hub = Hub::new("verify-plain");
+    hub.ok(&["status"]);
+    put_team(&hub, "checked", CHECKED);
+    let agent = open_orchestrator(&hub, Some("checked"));
+    // A writer with no verify child, though `check` is a sasuke Member of the Team, and a writer
+    // from no Member (a bare Profile) both get the bare sasuke Profile, never a Member.
+    start_under(&hub, agent, &["plain", "--spec", "next FAILME", "--verify"]);
+    let told = hub.wait();
+    assert!(told.contains("Verified by w3: pass."), "{told}");
+    assert!(
+        told.contains("next: w2 (sasuke) verified your change and it failed"),
+        "{told}"
+    );
+    for n in [2, 3] {
+        let row = row_of(&hub, n);
+        assert!(row["member"].is_null(), "{row}");
+        assert_eq!(row["profile"], "sasuke", "{row}");
+        assert_eq!(row["model"], "claude-opus-5-5", "sasuke's own, not the Member's");
+    }
+    start_under(&hub, agent, &["hinata", "--spec", "done NOVERDICT", "--verify"]);
+    let told = hub.wait();
+    assert!(told.contains("w5 ended done without a `Verdict:` line"), "{told}");
+    let row = row_of(&hub, 5);
+    assert!(row["member"].is_null() && row["profile"] == "sasuke", "{row}");
+}
+
+#[test]
+fn a_verify_member_that_gives_no_verdict_or_always_fails_is_reported_by_its_id() {
+    let hub = Hub::new("verify-member-bad");
+    hub.ok(&["status"]);
+    put_team(&hub, "checked", CHECKED);
+    let agent = open_orchestrator(&hub, Some("checked"));
+    start_under(&hub, agent, &["build", "--spec", "done NOVERDICT", "--verify"]);
+    let told = hub.wait();
+    assert!(
+        told.contains("w2 (check) ended done without a `Verdict:` line"),
+        "{told}"
+    );
+    start_under(
+        &hub,
+        agent,
+        &["build", "--spec", "next ALWAYSFAIL", "--verify", "--keep"],
+    );
+    let told = hub.wait();
+    assert!(
+        told.contains("Verification by w5 (check) failed again after 1 retry"),
+        "{told}"
+    );
+}
+
+/// A Team that sets the review rule and nothing else.
+fn review_team(hub: &Hub, name: &str, review: bool) -> i64 {
+    put_team(hub, name, &format!(r#"{{"rules": {{"review": {review}}}}}"#));
+    open_orchestrator(hub, Some(name))
+}
+
+#[test]
+fn a_teams_review_rule_decides_whether_verify_verifies_over_the_humans_setting() {
+    let hub = Hub::new("verify-rule");
+    hub.ok(&["status"]);
+    // The human's review is on: a Team that turns it off verifies nothing.
+    let off = review_team(&hub, "off", false);
+    start_under(&hub, off, &["lee", "--spec", "done", "--verify"]);
+    let told = hub.wait();
+    assert!(
+        told.contains("done (done) from w1") && !told.contains("Verified"),
+        "{told}"
+    );
+    assert!(
+        hub.fails(&["worker", "read", "w2"]).contains("w2"),
+        "no verifier was started"
+    );
+
+    // The human's review is off: a Team that turns it on verifies.
+    hub.call("settings.set", serde_json::json!({ "settings": { "review": false } }));
+    let on = review_team(&hub, "on", true);
+    start_under(&hub, on, &["lee", "--spec", "done", "--verify"]);
+    let told = hub.wait();
+    assert!(told.contains("Verified by w3: pass."), "{told}");
+
+    // A Team that leaves the rule out follows the human's setting, which is off.
+    put_team(&hub, "silent", r#"{"instructions": "x"}"#);
+    let silent = open_orchestrator(&hub, Some("silent"));
+    start_under(&hub, silent, &["lee", "--spec", "done", "--verify"]);
+    let told = hub.wait();
+    assert!(told.contains("from w4") && !told.contains("Verified"), "{told}");
+}
