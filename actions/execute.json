@@ -1,0 +1,9 @@
+{
+  "id": "execute",
+  "title": "Write code",
+  "description": "Do one coding Task and report whether it is done.",
+  "profile": "naruto",
+  "routing": "Send one coding Task that changes files here, with the command that checks it.",
+  "writes": true,
+  "worktree": "new"
+}

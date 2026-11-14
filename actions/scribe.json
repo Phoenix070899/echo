@@ -1,0 +1,9 @@
+{
+  "id": "scribe",
+  "title": "Keep notes",
+  "description": "Merge stated preferences and lessons into the files that keep them.",
+  "profile": "ino",
+  "routing": "Send a preference the human stated, or lessons a Worker learned, to be merged into the right file.",
+  "writes": false,
+  "worktree": "current"
+}

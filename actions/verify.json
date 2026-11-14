@@ -1,0 +1,10 @@
+{
+  "id": "verify",
+  "title": "Verify",
+  "description": "Review the commits of the Member above it and run its check.",
+  "profile": "sasuke",
+  "routing": "Reviews the commits of the writer above it; the daemon sends the work here, so do not send it yourself.",
+  "writes": false,
+  "worktree": "current",
+  "under": "execute"
+}

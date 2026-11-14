@@ -1,0 +1,9 @@
+{
+  "id": "scan",
+  "title": "Scan code",
+  "description": "Read the code and explain how it works, without changing anything.",
+  "profile": "hinata",
+  "routing": "Send questions about how existing code works here.",
+  "writes": false,
+  "worktree": "current"
+}

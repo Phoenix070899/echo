@@ -1,5 +1,6 @@
 //! `echoctl`: the Echo CLI. With no command it starts the Orchestrator for the repo here.
 
+mod action;
 mod attach;
 mod brief;
 mod chat;

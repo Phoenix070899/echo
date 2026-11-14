@@ -1,0 +1,9 @@
+{
+  "id": "research",
+  "title": "Research",
+  "description": "Search the web and answer a question with cited sources.",
+  "profile": "jiraiya",
+  "routing": "Send questions that need information from the web or from documentation here.",
+  "writes": false,
+  "worktree": "current"
+}
