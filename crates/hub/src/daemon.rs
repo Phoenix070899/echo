@@ -1955,10 +1955,12 @@ impl Hub {
 
     /// A Worker's Profile, with the effort picked for it, and the CLI and model picked for it. Its
     /// Orchestrator's Team is read now, so an edited Team applies at a resume (features/0081); a
-    /// Member the Team no longer has leaves the Profile's own resolution (features/0085).
+    /// Member the Team no longer has leaves the Profile's own resolution (features/0085). A Member
+    /// is laid over the Profile (features/0084), so its instructions, tools, skills and context
+    /// reach the Worker's prompt.
     fn pick_for(&self, worker: &Worker) -> Result<(profile::Profile, cli::Cli, Option<String>)> {
         let repo = Path::new(&worker.repo);
-        let mut profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(repo), &worker.profile)?;
+        let profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(repo), &worker.profile)?;
         let team = self.worker_team(&self.db(), worker.agent_id)?;
         let picked = cli::Choice {
             cli: worker.cli.clone(),
@@ -1973,6 +1975,10 @@ impl Hub {
             member,
             &picked,
         )?;
+        let mut profile = match member {
+            Some(member) => profile.with_member(member),
+            None => profile,
+        };
         profile.effort = effort;
         Ok((profile, worker_cli, model))
     }

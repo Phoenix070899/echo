@@ -1144,6 +1144,70 @@ mod tests {
         std::fs::read_to_string(home.join("agents").join(format!("{}.md", args[at + 1]))).unwrap()
     }
 
+    /// A Worker's Start as the Member `fields` of naruto's Profile gives it, on a Claude-style
+    /// tool list; the prompt is the Profile's role alone, so no state or Lessons are read.
+    fn member_worker(fields: &str) -> Start {
+        let team = format!(r#"{{"members": [{{"id": "build", "action": "execute", "profile": "naruto"{fields}}}]}}"#);
+        let team = crate::team::parse(&team).unwrap();
+        let profile = crate::profile::Profile {
+            name: "naruto".into(),
+            cli: None,
+            model: None,
+            effort: None,
+            tools: vec!["Bash".into(), "Read".into(), "Edit".into()],
+            skills: Vec::new(),
+            context: Vec::new(),
+            role: "You implement.".into(),
+            description: String::new(),
+            writes: true,
+            lessons: true,
+        }
+        .with_member(&team.members[0]);
+        Start {
+            prompt: format!("# Your role: naruto\n\n{}", profile.role),
+            tools: profile.tools,
+            model: None,
+            ..kiro_worker()
+        }
+    }
+
+    #[test]
+    fn a_members_tools_reach_claudes_flag_and_kiros_agent_file_and_codex_ignores_them() {
+        let overlay = r#", "tools": ["Read", "Grep", "WebFetch"], "instructions": "Only touch src/api.""#;
+        let (plain, laid) = (member_worker(""), member_worker(overlay));
+
+        let claude_args = |start: &Start| Cli::Claude.args(Path::new("/echo"), start).unwrap();
+        let at = |args: &[String], flag: &str| args.iter().position(|a| a == flag).unwrap();
+        let args = claude_args(&laid);
+        assert_eq!(args[at(&args, "--tools") + 1], "Read,Grep,WebFetch,ToolSearch");
+        let args = claude_args(&plain);
+        assert_eq!(args[at(&args, "--tools") + 1], "Bash,Read,Edit,ToolSearch");
+
+        let home = scratch("member-kiro");
+        let (plain_args, laid_args) = (kiro(&home, &plain).unwrap(), kiro(&home, &laid).unwrap());
+        let file = agent_file(&home, &laid_args);
+        assert!(
+            file.contains("tools: [\"read\", \"web\"]\n"),
+            "Grep has no Kiro tool: {file}"
+        );
+        assert!(
+            file.ends_with("You implement.\n\n# This Team's instructions for you\n\nOnly touch src/api.\n"),
+            "{file}"
+        );
+        assert!(agent_file(&home, &plain_args).contains("tools: [\"shell\", \"read\", \"write\"]\n"));
+        assert_ne!(plain_args[3], laid_args[3], "another overlay is another agent file");
+        let only_tools = member_worker(r#", "tools": ["Read", "Grep", "WebFetch"]"#);
+        assert_ne!(kiro(&home, &only_tools).unwrap()[3], laid_args[3]);
+        assert_eq!(
+            kiro(&home, &laid).unwrap()[3],
+            laid_args[3],
+            "the same overlay is the same file"
+        );
+
+        let codex = Cli::Codex.args(Path::new("/echo"), &laid).unwrap();
+        assert!(!codex.iter().any(|a| a.contains("--tools") || a == "Grep"), "{codex:?}");
+    }
+
     #[test]
     fn kiro_is_named_kiro_and_run_as_kiro_cli() {
         assert_eq!(Cli::parse("kiro").unwrap(), Cli::Kiro);

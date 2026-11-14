@@ -24,6 +24,8 @@ pub struct Profile {
     pub description: String,
     /// It edits files, so its tries of a Task differ and are worth comparing.
     pub writes: bool,
+    /// Its prompt carries the repo's Lessons; a Member may leave them out (features/0084).
+    pub lessons: bool,
 }
 
 /// Where a Profile comes from; a later level wins.
@@ -266,6 +268,7 @@ fn parse(name: &str, text: &str) -> Result<Profile> {
         role: body.trim().to_string(),
         description: field("description").unwrap_or_default(),
         writes: field("writes").as_deref() == Some("true"),
+        lessons: true,
     })
 }
 
@@ -278,7 +281,11 @@ pub fn system_prompt(hub: &Path, state: &Path, repo: &str, profile: &Profile) ->
             std::fs::read_to_string(lessons::preferences_path(state, hub)).unwrap_or_default()
         ),
     ];
-    let lessons = lessons::lessons(state, repo);
+    let lessons = if profile.lessons {
+        lessons::lessons(state, repo)
+    } else {
+        String::new()
+    };
     if !lessons.is_empty() {
         parts.push(format!("{}\n\n{}", lessons::WORKER_INTRO, lessons.trim_end()));
     }
@@ -329,7 +336,40 @@ pub enum Launch<'a> {
     Next { spec: &'a str },
 }
 
+/// The heading of a Member's instructions in its Worker's role.
+const MEMBER_INSTRUCTIONS: &str = "# This Team's instructions for you";
+
 impl Profile {
+    /// This Profile with `member` laid over it, for the Worker that starts as that Member
+    /// (features/0084). Its `instructions` follow the role under their own heading, or take the
+    /// role's place when `replace_role`; a `tools`, `skills` or `context` list that is not empty
+    /// replaces the Profile's; `lessons` and `writes` replace the Profile's when the Member sets
+    /// them. Instructions that are blank leave the role as it is, so a Worker never starts with
+    /// no role. The CLI, model and effort are not laid over here; `resolve` picks them.
+    pub fn with_member(&self, member: &crate::team::Member) -> Profile {
+        let mut profile = self.clone();
+        let instructions = member.instructions.as_deref().map(str::trim).unwrap_or_default();
+        if !instructions.is_empty() {
+            profile.role = if member.replace_role {
+                instructions.to_string()
+            } else {
+                format!("{}\n\n{MEMBER_INSTRUCTIONS}\n\n{instructions}", self.role)
+            };
+        }
+        for (own, theirs) in [
+            (&mut profile.tools, &member.tools),
+            (&mut profile.skills, &member.skills),
+            (&mut profile.context, &member.context),
+        ] {
+            if !theirs.is_empty() {
+                own.clone_from(theirs);
+            }
+        }
+        profile.lessons = member.lessons.unwrap_or(self.lessons);
+        profile.writes = member.writes.unwrap_or(self.writes);
+        profile
+    }
+
     pub fn choice(&self) -> crate::cli::Choice {
         crate::cli::Choice {
             cli: self.cli.clone(),
@@ -613,6 +653,158 @@ mod tests {
         assert!(create(&hub, &state, None, "scout", Level::Yours)
             .unwrap()
             .ends_with("profiles/scout.md"));
+    }
+
+    /// The Member `id` of a Team of one Profile's Members, from the JSON of its fields.
+    fn member(fields: &str) -> crate::team::Member {
+        let team = format!(r#"{{"members": [{{"id": "build", "action": "execute", "profile": "naruto"{fields}}}]}}"#);
+        crate::team::parse(&team).unwrap().members.remove(0)
+    }
+
+    /// A state folder with a preference and one Lesson for `/code/shop`.
+    fn state_with_lessons(name: &str) -> PathBuf {
+        let state = std::env::temp_dir().join(format!("hub-overlay-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&state);
+        std::fs::create_dir_all(state.join("memory")).unwrap();
+        std::fs::write(state.join("memory/preferences.md"), "- Never push to main\n").unwrap();
+        lessons::add(&state, "/code/shop", "w2", "2026-10-28", &["Run make db first".into()]).unwrap();
+        state
+    }
+
+    fn naruto() -> Profile {
+        parse("naruto", NARUTO).unwrap()
+    }
+
+    #[test]
+    fn a_member_with_no_overlay_gives_the_prompt_the_profile_alone_gives() {
+        let hub = crate::paths::hub_dir();
+        let state = state_with_lessons("golden");
+        let profile = naruto();
+        let plain = member("");
+        let laid = profile.with_member(&plain);
+        assert_eq!(
+            system_prompt(&hub, &state, "/code/shop", &laid).unwrap(),
+            system_prompt(&hub, &state, "/code/shop", &profile).unwrap()
+        );
+        assert_eq!(laid.tools, profile.tools);
+        assert_eq!(laid.skills, profile.skills);
+        assert_eq!(laid.context, profile.context);
+        assert_eq!(laid.role, profile.role);
+        assert_eq!((laid.writes, laid.lessons), (profile.writes, profile.lessons));
+        let blank = member(r#", "instructions": "  \n", "replaceRole": true"#);
+        assert_eq!(
+            profile.with_member(&blank).role,
+            "You implement.",
+            "blank instructions never empty the role"
+        );
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_members_instructions_follow_the_role_under_their_own_heading() {
+        let hub = crate::paths::hub_dir();
+        let state = state_with_lessons("instructions");
+        let laid = naruto().with_member(&member(r#", "instructions": "Only touch src/api.\n""#));
+        let prompt = system_prompt(&hub, &state, "/code/shop", &laid).unwrap();
+        assert!(
+            prompt.contains(
+                "# Your role: naruto\n\nYou implement.\n\n# This Team's instructions for you\n\nOnly touch src/api."
+            ),
+            "{prompt}"
+        );
+        let (before, after) = prompt.split_once("# Your role: naruto").unwrap();
+        assert!(before.contains("- Never push to main") && before.contains("# Lessons for this repo"));
+        assert!(after.contains("Only touch src/api."));
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_members_instructions_replace_the_role_when_it_says_so() {
+        let hub = crate::paths::hub_dir();
+        let state = state_with_lessons("replace");
+        let member = member(r#", "instructions": "You only review.", "replaceRole": true"#);
+        let prompt = system_prompt(&hub, &state, "/code/shop", &naruto().with_member(&member)).unwrap();
+        assert!(prompt.contains("# Your role: naruto\n\nYou only review."), "{prompt}");
+        assert!(!prompt.contains("You implement.") && !prompt.contains("This Team's instructions"));
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_members_lists_replace_the_profiles_only_when_they_are_not_empty() {
+        let hub = crate::paths::hub_dir();
+        let state = state_with_lessons("lists");
+        let profile = naruto();
+        let kept = profile.with_member(&member(r#", "tools": [], "skills": [], "context": []"#));
+        assert_eq!((&kept.tools, &kept.context), (&profile.tools, &profile.context));
+        let laid = profile.with_member(&member(
+            r#", "tools": ["Read", "Grep"], "skills": ["tdd", "review"], "context": ["docs/api.md"]"#,
+        ));
+        assert_eq!(laid.tools, ["Read", "Grep"]);
+        assert_eq!(laid.skills, ["tdd", "review"]);
+        assert_eq!(laid.context, ["docs/api.md"]);
+        let prompt = system_prompt(&hub, &state, "/code/shop", &laid).unwrap();
+        assert!(prompt.contains("Use these skills when they fit the Task: tdd, review."));
+        assert!(prompt.contains("read whichever of these files exist (paths relative to your working directory unless absolute): docs/api.md."));
+        assert!(
+            !prompt.contains("AGENTS.md"),
+            "the Profile's context is replaced, not added to"
+        );
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn lessons_false_drops_the_lessons_and_nothing_else() {
+        let hub = crate::paths::hub_dir();
+        let state = state_with_lessons("lessons");
+        let profile = naruto();
+        let with = system_prompt(&hub, &state, "/code/shop", &profile).unwrap();
+        let without = system_prompt(
+            &hub,
+            &state,
+            "/code/shop",
+            &profile.with_member(&member(r#", "lessons": false"#)),
+        )
+        .unwrap();
+        assert!(with.contains("# Lessons for this repo") && with.contains("Run make db first"));
+        assert!(!without.contains("# Lessons") && !without.contains("Run make db first"));
+        assert!(without.contains("- Never push to main"), "Preferences stay");
+        let block = format!(
+            "{}\n\n{}\n\n",
+            lessons::WORKER_INTRO,
+            lessons::lessons(&state, "/code/shop").trim_end()
+        );
+        assert_eq!(with.replace(&block, ""), without, "only the Lessons block differs");
+        let kept = system_prompt(
+            &hub,
+            &state,
+            "/code/shop",
+            &profile.with_member(&member(r#", "lessons": true"#)),
+        )
+        .unwrap();
+        assert_eq!(kept, with);
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_members_writes_replaces_the_profiles_and_tools_reach_the_start() {
+        let hub = crate::paths::hub_dir();
+        let profile = naruto();
+        assert!(profile.writes);
+        let read_only = profile.with_member(&member(r#", "writes": false, "tools": ["Read", "Grep"]"#));
+        assert!(!read_only.writes);
+        let started = start(
+            &hub,
+            "/code/shop",
+            &read_only,
+            "t",
+            "s1",
+            Launch::New { spec: "go" },
+            (Cli::Claude, None),
+        )
+        .unwrap();
+        assert_eq!(started.tools, ["Read", "Grep"]);
+        assert!(started.prompt.contains("# Your role: naruto"));
+        assert!(profile.with_member(&member("")).writes, "left out, the Profile's stays");
     }
 
     /// What `resolve` gives naruto (claude, claude-sonnet-5-5, high in its file) under the settings
