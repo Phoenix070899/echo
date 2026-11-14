@@ -25,8 +25,16 @@ A reusable definition of a specialist: which agent CLI (`claude`, `codex` or `ki
 _Avoid_: subagent, agent type, persona
 
 **Team**:
-A named setup for an Orchestrator, its Workers and its rules: which CLI, model and effort the Orchestrator and its Workers run on, the Orchestrator's rules and renewal threshold, and extra instructions. It is a file at three levels (Echo's own, the human's, a repo's), picked when an Orchestrator starts, and read again each time that Orchestrator or one of its Workers starts or resumes. It is not a Profile (a Worker's role, its prompt and tools) and not a Hub Session; a Normal session and a Terminal have none.
+A named setup for an Orchestrator, its Workers and its rules: which CLI, model and effort the Orchestrator and its Workers run on, the Orchestrator's rules and renewal threshold, and extra instructions. It holds a tree of Members, the plan of which Workers the Orchestrator may start and what follows each. It is a file at three levels (Echo's own, the human's, a repo's), picked when an Orchestrator starts, and read again each time that Orchestrator or one of its Workers starts or resumes. It is not a Profile (a Worker's role, its prompt and tools) and not a Hub Session; a Normal session and a Terminal have none.
 _Avoid_: preset, mode, profile
+
+**Member**:
+One node of a Team's tree: a Worker slot with a name, an Action, the Profile it starts from, and the changes this Team makes to that Profile (instruction, model, tools, context). The Orchestrator starts a Worker by its Member's name; the tree is a plan of hand-offs, and a Member never starts another Member.
+_Avoid_: node (alone), slot, subagent, role
+
+**Action**:
+What a Member is for: Echo ships `scan`, `research`, `execute`, `verify`, `run` and `scribe`, each with a default Profile, and a Member the human builds on a Profile of their own is `custom`. It is not a Profile (a Worker's role) and not a Task.
+_Avoid_: skill, job type, step
 
 **Worker**:
 A running instance of one Agent Profile, in its own terminal (and, when the Orchestrator decides, its own worktree), working on exactly one Task, closed when that Task ends.
