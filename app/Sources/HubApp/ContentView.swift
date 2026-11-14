@@ -280,6 +280,7 @@ struct TreeRow<Label: View>: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) { label() }
+                .environment(\.listRowHovered, hovering.on)
                 .font(Ledger.font(14))
                 .padding(.leading, [10, 22, 30][min(indent, 2)])
                 .padding(.trailing, 10)
@@ -1346,8 +1347,8 @@ struct LedgerRow: View {
         TreeRow(selected: selected, indent: 2) {
             model.select(.worker(repo: repo, id: worker.id))
         } label: {
-            // A small square starts the row, under the agent's mark: the accent when picked, grey
-            // otherwise; the title lines up with the agent's (ui-ux/0111, ui-ux/0124).
+            // A small square starts the row, under the agent's mark: the accent when picked or
+            // hovered, grey otherwise; the title lines up with the agent's (ui-ux/0111, ui-ux/0127).
             ListMarker(picked: selected)
             Text(worker.title)
                 .fontWeight(worker.state == .needsYou && worker.isActive ? .semibold : .regular)

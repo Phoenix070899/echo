@@ -613,7 +613,8 @@ private struct DropLine: ViewModifier {
 
 /// One row of the tree: a square node with two capitals, stepped in by depth, then the text columns
 /// over a 1 pt rule. A Member's row starts with a small square under its parent's node, centred on
-/// its own node: the accent when picked, grey otherwise; there is no spine (ui-ux/0124). The picked
+/// its own node: the accent when picked or hovered, grey otherwise; there is no spine (ui-ux/0124,
+/// ui-ux/0127). The picked
 /// row is the sunk grey with an accent node frame; while the tree has the keyboard its fill is the soft accent instead, so the
 /// keyboard's place shows without an outline. A drag over it fills it with where the drop lands.
 private struct TeamTreeRow: View {
@@ -632,6 +633,9 @@ private struct TeamTreeRow: View {
     /// The fill a drag over this row gives it, which wins over the picked fill.
     var marked: Color?
     let pick: () -> Void
+
+    /// A Member's square sits 12 pt in from its parent's node, centred on its own node's line.
+    static let markerInset: CGFloat = 12
 
     /// A model without its provider and Claude's prefix: "sonnet-5-5".
     static func shortModel(_ model: String) -> String {
@@ -706,13 +710,14 @@ private struct TeamTreeRow: View {
             .overlay(alignment: .topLeading) {
                 if !root {
                     ListMarker(picked: picked)
-                        .offset(x: layout.indent(depth - 1) + (TreeLayout.node - ListMarker.size) / 2,
+                        .offset(x: layout.indent(depth - 1) + Self.markerInset,
                                 y: 10 + (TreeLayout.node - ListMarker.size) / 2)
                 }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .listRowHover()
         .accessibilityLabel([title, id, pill, effort.isEmpty ? nil : "effort \(effort)", changed ? "changed" : nil]
             .compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(picked ? .isSelected : [])
@@ -734,7 +739,8 @@ private struct TeamTreeRow: View {
     }
 }
 
-/// The row after the last: a dashed node and "Add a Member under …", which opens the Add menu.
+/// The row after the last: a grey square, a dashed node and "Add a Member under …", which opens
+/// the Add menu.
 private struct AddRow: View {
     @ObservedObject var teams: TeamSettingsModel
     let layout: TreeLayout
@@ -744,10 +750,11 @@ private struct AddRow: View {
     var body: some View {
         Button { menu.on.toggle() } label: {
             HStack(spacing: 14) {
-                Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .bold))
+                Text("+")
+                    .font(Ledger.monoFont(14, .bold))
                     .foregroundStyle(Ledger.ink3)
                     .frame(width: TreeLayout.node, height: TreeLayout.node)
+                    .background(Ledger.paper)
                     .overlay(Rectangle().strokeBorder(Ledger.ink3, style: StrokeStyle(lineWidth: Ledger.ruleStrong, dash: [4, 3])))
                 Text("Add a Member under \(teams.member.map { ActionLook.title(for: $0.action) } ?? "the Orchestrator")")
                     .font(Ledger.font(14))
@@ -756,9 +763,15 @@ private struct AddRow: View {
             }
             .padding(.leading, layout.indent(1))
             .padding(.top, 8)
+            // Like a level 1 Member's, its square sits under the Orchestrator's node.
+            .overlay(alignment: .topLeading) {
+                ListMarker(picked: false)
+                    .offset(x: TeamTreeRow.markerInset, y: 8 + (TreeLayout.node - ListMarker.size) / 2)
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .listRowHover()
         .foundryPopover(isPresented: $menu.on, width: AddEntries.width) { AddEntries.menu(teams) }
         .help("Add a Member under the picked one (a)")
     }
@@ -891,7 +904,7 @@ private struct TreeBar: View {
             }
             Spacer(minLength: 0)
             Button { moreMenu.on.toggle() } label: {
-                HStack(spacing: 3) {
+                HStack(spacing: 4.5) {
                     ForEach(0..<3, id: \.self) { _ in Rectangle().frame(width: 3, height: 3) }
                 }
                 .foregroundStyle(Ledger.ink)

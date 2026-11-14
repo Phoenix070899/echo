@@ -147,19 +147,19 @@ final class FileListView: NSView, NSViewToolTipOwner {
         let first = max(0, Int(floor((dirtyRect.minY - Self.margin) / Self.rowHeight)))
         let last = min(rows.count - 1, Int(floor((dirtyRect.maxY - Self.margin) / Self.rowHeight)))
         guard first <= last else { return }
-        for index in first...last { draw(rows[index], in: rect(of: index)) }
+        for index in first...last { draw(rows[index], in: rect(of: index), hovered: index == hovered) }
     }
 
     private static let name = Ledger.nsFont(13)
     private static let markFont = Ledger.nsMono(11, .bold)
     private static let chevronFont = Ledger.nsMono(11)
 
-    private func draw(_ row: FileListRow, in rect: NSRect) {
+    private func draw(_ row: FileListRow, in rect: NSRect, hovered: Bool) {
         let entry = row.entry
         let ink3 = NSColor(Ledger.ink3)
-        // A small square at the row's leading edge: the accent on the cursor's row, grey on the
-        // others; no vertical line (ui-ux/0124).
-        NSColor(entry.path == cursor ? Ledger.accent : Ledger.rule).setFill()
+        // A small square at the row's leading edge: the accent on the cursor's row and the hovered
+        // one, grey on the others; no vertical line (ui-ux/0124, ui-ux/0127).
+        NSColor(entry.path == cursor || hovered ? Ledger.accent : Ledger.square).setFill()
         NSRect(x: rect.minX + 3, y: rect.midY - 3, width: 6, height: 6).fill()
         // Foundry's tree: a mono ▸ or ▾ before a folder, no icons, 14 pt more for each level.
         var x = rect.minX + Self.inset + CGFloat(entry.depth) * 14
@@ -225,6 +225,10 @@ final class FileListView: NSView, NSViewToolTipOwner {
 
     private func hover(_ index: Int?) {
         guard index != hovered else { return }
+        // The square of the row left and of the row reached changes colour.
+        for old in [hovered, index].compactMap({ $0 }) where rows.indices.contains(old) {
+            text.setNeedsDisplay(rect(of: old))
+        }
         hovered = index
         placeFills()
         removeAllToolTips()

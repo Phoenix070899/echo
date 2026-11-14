@@ -52,7 +52,7 @@ struct FoundryPopoverHead: View {
 
 /// A menu row. With an icon it is Foundry's row: the 36 pt framed icon, the bold title over a
 /// one-line note, the key box. Without one it is the compact row of a long menu: the title, the note
-/// beside it, the key box. The picked row is the sunk grey with the 6 pt accent square.
+/// beside it, the key box. The picked row is the sunk grey; menu rows have no square (ui-ux/0127).
 struct FoundryPopoverItem: View {
     let title: String
     var note: String?
@@ -94,10 +94,8 @@ struct FoundryPopoverItem: View {
             .padding(.trailing, 14)
             .padding(.vertical, icon == nil ? 7 : 12)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // A menu row has no square: under the pointer or the arrows only its fill changes (ui-ux/0127).
             .background(picked && enabled ? Ledger.selected : Color.clear)
-            .overlay(alignment: .leading) {
-                if picked && enabled { ListMarker(picked: true).padding(.leading, 5) }
-            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

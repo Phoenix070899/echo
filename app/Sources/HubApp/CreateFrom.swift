@@ -166,6 +166,7 @@ struct CreateFromSection: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .listRowHover()
                 .accessibilityAddTraits(form.pickedBranch == branch.name ? .isSelected : [])
             }
         }
@@ -306,7 +307,7 @@ private struct BaseBranchSearch: View {
     }
 
     /// A branch as a compact popover row: its name in mono, "base" at the right of the one new
-    /// branches start from now; the picked row sunk with the accent square.
+    /// branches start from now; the picked row sunk, with no square (ui-ux/0127).
     private func row(_ name: String, picked: Bool) -> some View {
         Button { pick(name) } label: {
             HStack(spacing: 10) {
@@ -322,8 +323,8 @@ private struct BaseBranchSearch: View {
             .padding(.trailing, 14)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // A popover row has no square; picked, only its fill changes (ui-ux/0127).
             .background(picked ? Ledger.selected : Color.clear)
-            .overlay(alignment: .leading) { if picked { ListMarker(picked: true).padding(.leading, 5) } }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

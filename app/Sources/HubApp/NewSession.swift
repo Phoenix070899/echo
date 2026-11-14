@@ -502,7 +502,7 @@ struct ModeCard: View {
 }
 
 /// A repo to start in: its name and what runs there, a 40 pt row between 1 pt rules; picked, the
-/// sunk fill; a small square at its leading edge, the accent when picked (ui-ux/0124).
+/// sunk fill; a small square at its leading edge, the accent when picked or hovered (ui-ux/0127).
 struct RepoChoice: View {
     let repo: String
     let status: String?
@@ -529,6 +529,7 @@ struct RepoChoice: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .listRowHover()
         .help(info.shortPath)
         .accessibilityAddTraits(picked ? .isSelected : [])
     }

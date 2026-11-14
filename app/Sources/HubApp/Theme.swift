@@ -16,6 +16,8 @@ enum Ledger {
     static let ink3 = dynamic(0x5E5B55, 0x9C9A92) { CustomLook.mix($0.text, $0.surface, 0.4) }
     /// Foundry's line: dividers between rows and around sheets.
     static let rule = dynamic(0xC2BEB5, 0x3F3E3B) { CustomLook.mix($0.surface, $0.text, 0.14) }
+    /// A list row's grey square (ui-ux/0124), darker than the rule so it reads as a mark.
+    static let square = dynamic(0x8A857B, 0x6E6C66) { CustomLook.mix($0.surface, $0.text, 0.45) }
     /// A hovered row, and a code block's fill.
     static let wash = dynamic(0xDFDCD6, 0x30302E) { CustomLook.mix($0.surface, $0.text, 0.05) }
     /// The row picked in the sidebar; `accent` marks its leading edge.
@@ -218,18 +220,49 @@ struct StateMark: View {
     }
 }
 
-/// A list row's marker (ui-ux/0124): a 6 pt square at the row's leading edge, the accent on the
-/// picked row and the rule's grey on the others. Lists never draw a vertical line.
+/// A list row's marker (ui-ux/0124): a 6 pt square at the row's leading edge, grey, and the accent
+/// on the picked row or the row under the pointer (ui-ux/0127). A row that sets `listRowHovered`
+/// (`.listRowHover()`, or the sidebar's `TreeRow`) turns its square orange while hovered. Lists
+/// never draw a vertical line.
 struct ListMarker: View {
     static let size: CGFloat = 6
     let picked: Bool
+    @Environment(\.listRowHovered) private var hovered
 
     var body: some View {
         Rectangle()
-            .fill(picked ? Ledger.accent : Ledger.rule)
+            .fill(picked || hovered ? Ledger.accent : Ledger.square)
             .frame(width: Self.size, height: Self.size)
             .accessibilityHidden(true)
     }
+}
+
+private struct ListRowHoveredKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// The pointer is over the list row this view sits in; its `ListMarker` turns the accent.
+    var listRowHovered: Bool {
+        get { self[ListRowHoveredKey.self] }
+        set { self[ListRowHoveredKey.self] = newValue }
+    }
+}
+
+/// Tracks the pointer over a list row and tells the row's `ListMarker` (ui-ux/0127).
+private struct ListRowHover: ViewModifier {
+    @StateObject private var hover = Flag()
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.listRowHovered, hover.on)
+            .onHover { hover.on = $0 }
+    }
+}
+
+extension View {
+    /// The row's square turns the accent while the pointer is over it (ui-ux/0127).
+    func listRowHover() -> some View { modifier(ListRowHover()) }
 }
 
 /// Something in progress: an arc turning once a second (slower for work only waiting in the

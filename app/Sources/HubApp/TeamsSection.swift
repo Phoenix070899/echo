@@ -4,40 +4,41 @@ import SwiftUI
 /// Settings' Teams section, across the whole width beside the section list (ui-ux/0101, laid out
 /// as ui-ux/0121 says): the list of Teams with the section's head on the left, the picked Team's
 /// tree in the middle, the inspector of the picked row on the right, and the bar with Save under
-/// the tree and the inspector.
+/// all three columns.
 struct TeamsSection: View {
     @ObservedObject var teams: TeamSettingsModel
     @ObservedObject var agents: AgentSettingsModel
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            TeamsList(teams: teams)
-                .frame(width: 232)
-                .frame(maxHeight: .infinity, alignment: .top)
-                .background(Ledger.desk)
-            Rectangle()
-                .fill(Ledger.rule)
-                .frame(width: Ledger.hairline)
-                .frame(maxHeight: .infinity)
-            switch teams.pane {
-            case .defaults:
-                DefaultsPane(agents: agents)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .team:
-                VStack(spacing: 0) {
-                    HStack(alignment: .top, spacing: 0) {
-                        TeamTreeColumn(teams: teams)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        Rectangle()
-                            .fill(Ledger.rule)
-                            .frame(width: Ledger.hairline)
-                            .frame(maxHeight: .infinity)
-                        TeamInspectorColumn(teams: teams)
-                            .frame(width: 300)
-                            .frame(maxHeight: .infinity, alignment: .top)
-                    }
-                    TeamSaveBar(teams: teams)
+        // The bar with Save runs under all three columns, as Foundry's artboard has it.
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 0) {
+                TeamsList(teams: teams)
+                    .frame(width: 232)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .background(Ledger.desk)
+                Rectangle()
+                    .fill(Ledger.rule)
+                    .frame(width: Ledger.hairline)
+                    .frame(maxHeight: .infinity)
+                switch teams.pane {
+                case .defaults:
+                    DefaultsPane(agents: agents)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .team:
+                    TeamTreeColumn(teams: teams)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    Rectangle()
+                        .fill(Ledger.rule)
+                        .frame(width: Ledger.hairline)
+                        .frame(maxHeight: .infinity)
+                    TeamInspectorColumn(teams: teams)
+                        .frame(width: 300)
+                        .frame(maxHeight: .infinity, alignment: .top)
                 }
+            }
+            if teams.pane == .team {
+                TeamSaveBar(teams: teams)
             }
         }
         // What a Team's rules fall back to may have changed under Defaults.
@@ -124,9 +125,8 @@ private struct TeamsList: View {
 }
 
 /// An entry in the list: the name in bold over its one line of description, over a 1 pt rule; the
-/// picked one on the sheet's grey, a small square beside its name (the accent when picked, grey
-/// otherwise; ui-ux/0124), a square accent dot while it has edits not saved, and its problem in red
-/// under it where it has one.
+/// picked one on the sheet's grey with the accent square beside its name (ui-ux/0126), a square
+/// accent dot while it has edits not saved, and its problem in red under it where it has one.
 private struct TeamRow: View {
     let name: String
     let about: String?
@@ -150,9 +150,6 @@ private struct TeamRow: View {
                     }
                     Spacer(minLength: 0)
                 }
-                // Centred on the name's line, 4 pt in from the row's edge.
-                // Only the picked Team is marked (ui-ux/0126).
-                .overlay(alignment: .leading) { if picked { ListMarker(picked: true).offset(x: -11) } }
                 if let about, !about.isEmpty {
                     Text(about)
                         .font(Ledger.font(12))
@@ -173,7 +170,10 @@ private struct TeamRow: View {
             .padding(.trailing, 12)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // Hovered, only the fill changes; the picked Team alone has its square, 4 pt in and 18 pt
+            // down, on the name's line (ui-ux/0126, ui-ux/0127).
             .background(picked || hover.on ? Ledger.paper : .clear)
+            .overlay(alignment: .topLeading) { if picked { ListMarker(picked: true).offset(x: 4, y: 18) } }
             .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
             .contentShape(Rectangle())
         }
@@ -183,7 +183,7 @@ private struct TeamRow: View {
     }
 }
 
-/// The bar under the tree and the inspector: how many edits are not saved, Revert and Save; a
+/// The bar under the list, the tree and the inspector: how many edits are not saved, Revert and Save; a
 /// shipped Team offers Duplicate in Save's place (ui-ux/0100), and the daemon's refusal shows here.
 private struct TeamSaveBar: View {
     @ObservedObject var teams: TeamSettingsModel
