@@ -112,3 +112,66 @@ private func team(_ json: String) throws -> Team {
     #expect(TeamChoice.pick(from: [Team(name: "broken", problem: "x")], current: nil, remembered: nil) == nil)
     #expect(TeamChoice.pick(from: [], current: nil, remembered: nil) == nil)
 }
+
+@Test func decodesATeamWithMembers() throws {
+    let decoded = try team("""
+    {"name":"crew","origin":"user","members":[
+      {"id":"build","action":"execute","profile":"naruto","instructions":"Small commits.","replaceRole":true,
+       "cli":"kiro","model":"claude-sonnet-5.5","effort":"high","tools":["read","write"],"skills":["tdd"],
+       "context":["CONTEXT.md"],"lessons":false,"writes":true,"worktree":"new","future":1},
+      {"id":"check","action":"verify","profile":"sasuke","parent":"build"}]}
+    """)
+    #expect(decoded.members.map(\.id) == ["build", "check"])
+    let build = decoded.members[0]
+    #expect(build.action == "execute" && build.profile == "naruto" && build.parent == nil)
+    #expect(build.instructions == "Small commits." && build.replaceRole == true)
+    #expect(build.cli == "kiro" && build.model == "claude-sonnet-5.5" && build.effort == "high")
+    #expect(build.tools == ["read", "write"] && build.skills == ["tdd"] && build.context == ["CONTEXT.md"])
+    #expect(build.lessons == false && build.writes == true && build.worktree == "new")
+    let check = decoded.members[1]
+    #expect(check.parent == "build")
+    #expect(check.instructions == nil && check.replaceRole == nil && check.tools.isEmpty && check.lessons == nil)
+}
+
+@Test func aTeamWithoutMembersHasNone() throws {
+    #expect(try team(#"{"name":"bare"}"#).members.isEmpty)
+    #expect(Team(name: "x").members.isEmpty)
+}
+
+@Test func aMemberNeedsItsIdActionAndProfile() {
+    #expect(throws: (any Error).self) {
+        try JSONDecoder().decode(Team.Member.self, from: Data(#"{"id":"a","action":"scan"}"#.utf8))
+    }
+}
+
+@Test func decodesAnAction() throws {
+    let verify = try JSONDecoder().decode(Action.self, from: Data("""
+    {"id":"verify","title":"Verify","description":"Review the commits.","profile":"sasuke",
+     "routing":"Reviews.","writes":false,"worktree":"current","under":"execute","later":true}
+    """.utf8))
+    #expect(verify.id == "verify" && verify.title == "Verify" && verify.profile == "sasuke")
+    #expect(!verify.writes && verify.worktree == "current" && verify.under == "execute")
+    let scan = try JSONDecoder().decode(Action.self, from: Data("""
+    {"id":"scan","title":"Scan","description":"Read the code.","profile":"hinata",
+     "routing":"Reads.","writes":false,"worktree":"current"}
+    """.utf8))
+    #expect(scan.under == nil)
+}
+
+@Test func onlyTheSixAndCustomAreActions() {
+    #expect(Action.shippedIDs.allSatisfy(Action.isAction))
+    #expect(Action.isAction("custom"))
+    #expect(!Action.isAction("deploy") && !Action.isAction(""))
+}
+
+@Test func aProfileDecodesWithAndWithoutItsListsAndRole() throws {
+    let plain = try JSONDecoder().decode(WorkerProfile.self, from: Data(
+        #"{"name":"naruto","description":"Writes code.","model":"claude default","writes":true}"#.utf8))
+    #expect(plain.tools == nil && plain.skills == nil && plain.context == nil && plain.role == nil)
+    let full = try JSONDecoder().decode(WorkerProfile.self, from: Data("""
+    {"name":"naruto","description":"Writes code.","model":"claude default","writes":true,
+     "tools":["read"],"skills":["tdd"],"context":["CONTEXT.md"],"role":"You write code.","ownEffort":"low"}
+    """.utf8))
+    #expect(full.tools == ["read"] && full.skills == ["tdd"] && full.context == ["CONTEXT.md"])
+    #expect(full.role == "You write code.")
+}

@@ -230,6 +230,13 @@ public struct DaemonClient: Sendable {
         _ = try call("team.delete", params)
     }
 
+    /// Echo's own Actions, in the order the palette lists them; `custom` is not one of them.
+    public func actions() throws -> [Action] {
+        let result = try call("team.actions", [:]) as? [String: Any]
+        let data = try JSONSerialization.data(withJSONObject: result?["actions"] ?? [])
+        return try JSONDecoder().decode([Action].self, from: data)
+    }
+
     /// The Profiles Workers in `repo` can start as: Echo's own, the human's, and the repo's.
     public func profiles(repo: String?) throws -> [WorkerProfile] {
         let result = try call("profiles.list", repo.map { ["repo": $0] } ?? [:]) as? [String: Any]

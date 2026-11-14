@@ -1,8 +1,9 @@
 import Foundation
 
 /// The Teams page's editor, as plain values: a Team loaded into fields, and the fields turned
-/// back into the `team.save` request. Only a missing name is checked here; the daemon validates
-/// everything else and its message is shown as it is (features/0081).
+/// back into the `team.save` request. The name and the shape of the tree of Members are checked
+/// here, the same way the daemon checks them (features/0084); the daemon validates everything
+/// else and its message is shown as it is (features/0081).
 public struct TeamForm: Equatable, Sendable {
     /// One Profile whose Worker setup differs from the Team's Workers.
     public struct Override: Equatable, Identifiable, Sendable {
@@ -49,9 +50,25 @@ public struct TeamForm: Equatable, Sendable {
     public var review: Bool?
     public var mergeWithoutAsking: Bool?
     public var instructions = ""
+    /// The Team's Members in tree order. The form keeps every field a Member came with, so a Team
+    /// saved without edits sends them all back; `team.save` replaces the file with what it gets.
+    public var members: [Team.Member] = []
     private var nextOverrideID = 0
 
     public init() {}
+
+    /// Equal when every field the human can edit is equal; the counter that numbers new rows is
+    /// not one of them, so a form edited and edited back is not changed.
+    public static func == (a: TeamForm, b: TeamForm) -> Bool {
+        a.name == b.name && a.isNew == b.isNew && a.level == b.level && a.description == b.description
+            && a.orchestratorCli == b.orchestratorCli && a.orchestratorModel == b.orchestratorModel
+            && a.orchestratorEffort == b.orchestratorEffort && a.rotateAt == b.rotateAt
+            && a.workersCli == b.workersCli && a.workersModel == b.workersModel
+            && a.workersEffort == b.workersEffort && a.overrides == b.overrides
+            && a.maxWorkers == b.maxWorkers && a.planApproval == b.planApproval && a.review == b.review
+            && a.mergeWithoutAsking == b.mergeWithoutAsking && a.instructions == b.instructions
+            && a.members == b.members
+    }
 
     /// A saved Team in the fields. Its overrides come in Profile order, so the rows keep still.
     public init(team: Team) {
@@ -76,6 +93,7 @@ public struct TeamForm: Equatable, Sendable {
         review = team.rules?.review
         mergeWithoutAsking = team.rules?.mergeWithoutAsking
         instructions = team.instructions ?? ""
+        members = team.members
     }
 
     /// An unsaved copy of `team` under a free name. Echo's own Teams are copied into the human's
@@ -119,7 +137,65 @@ public struct TeamForm: Equatable, Sendable {
         if !trimmed(rotateAt).isEmpty, rotateAtTokens == nil {
             return "Renew at is a number of tokens, like 150000."
         }
+        return membersBlocker
+    }
+
+    /// The most Members a Team holds, and the deepest its tree goes (level 1 is depth 1).
+    public static let maxMembers = 24
+    public static let maxDepth = 3
+
+    /// The daemon's checks of the tree, in its order: the count, then each id, then each Action
+    /// and Profile, then each parent, verifier and depth. Each message names the Member.
+    private var membersBlocker: String? {
+        if members.count > Self.maxMembers {
+            return "A Team holds at most \(Self.maxMembers) Members; this one has \(members.count)."
+        }
+        for (at, member) in members.enumerated() {
+            if !Self.validID(member.id) {
+                return "Member \(at + 1) has the id \"\(member.id)\". An id is 1 to 32 lowercase letters, digits and -, "
+                    + "not starting with -, like build-2."
+            }
+            if members[..<at].contains(where: { $0.id == member.id }) {
+                return "\(member.id): another Member has this id. Give each Member its own."
+            }
+        }
+        for member in members {
+            if !Action.isAction(member.action) {
+                return "\(member.id): \"\(member.action)\" is not an Action. Use "
+                    + (Action.shippedIDs + [Action.custom]).joined(separator: ", ") + "."
+            }
+            if trimmed(member.profile).isEmpty {
+                return "\(member.id): name the Profile it starts from."
+            }
+        }
+        for member in members {
+            let parent = member.parent.flatMap { id in members.first { $0.id == id } }
+            if let id = member.parent, parent == nil {
+                return "\(member.id): its parent \"\(id)\" is not a Member of this Team."
+            }
+            if member.action == "verify", parent?.action != "execute" {
+                return "\(member.id): a verify Member sits under an execute Member."
+            }
+            var depth = 1
+            var above = parent
+            while let up = above {
+                if up.id == member.id || depth > members.count {
+                    return "\(member.id): its parents lead back to itself."
+                }
+                depth += 1
+                above = up.parent.flatMap { id in members.first { $0.id == id } }
+            }
+            if depth > Self.maxDepth {
+                return "\(member.id): the tree is \(depth) deep here; at most \(Self.maxDepth)."
+            }
+        }
         return nil
+    }
+
+    /// 1 to 32 lowercase letters, digits and `-`, not starting with `-`, as for a Profile's name.
+    public static func validID(_ id: String) -> Bool {
+        !id.isEmpty && id.utf8.count <= 32 && !id.hasPrefix("-")
+            && id.utf8.allSatisfy { ($0 >= 97 && $0 <= 122) || ($0 >= 48 && $0 <= 57) || $0 == 45 }
     }
 
     private var rotateAtTokens: Int? {
@@ -147,6 +223,25 @@ public struct TeamForm: Equatable, Sendable {
         if let mergeWithoutAsking { rules["mergeWithoutAsking"] = mergeWithoutAsking }
         if !rules.isEmpty { out["rules"] = rules }
         if let text = present(instructions) { out["instructions"] = text }
+        if !members.isEmpty { out["members"] = members.map(memberFields) }
+        return out
+    }
+
+    /// One Member as the file holds it: `id`, `action` and `profile` always, the rest only when set.
+    private func memberFields(_ member: Team.Member) -> [String: Any] {
+        var out: [String: Any] = ["id": member.id, "action": member.action, "profile": member.profile]
+        if let text = member.parent, !text.isEmpty { out["parent"] = text }
+        if let text = member.instructions, !trimmed(text).isEmpty { out["instructions"] = text }
+        if let flag = member.replaceRole { out["replaceRole"] = flag }
+        if let text = member.cli.flatMap(present) { out["cli"] = text }
+        if let text = member.model.flatMap(present) { out["model"] = text }
+        if let text = member.effort.flatMap(present) { out["effort"] = text }
+        if !member.tools.isEmpty { out["tools"] = member.tools }
+        if !member.skills.isEmpty { out["skills"] = member.skills }
+        if !member.context.isEmpty { out["context"] = member.context }
+        if let flag = member.lessons { out["lessons"] = flag }
+        if let flag = member.writes { out["writes"] = flag }
+        if let text = member.worktree, !text.isEmpty { out["worktree"] = text }
         return out
     }
 

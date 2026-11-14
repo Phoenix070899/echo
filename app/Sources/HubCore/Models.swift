@@ -601,6 +601,11 @@ public struct WorkerProfile: Decodable, Equatable, Identifiable, Sendable {
     public var replaces: [String]? = nil
     /// Why it cannot run here, when its CLI and model do not fit.
     public var problem: String? = nil
+    /// The Profile's own lists and role text, which a Member of a Team may replace or add to.
+    public var tools: [String]? = nil
+    public var skills: [String]? = nil
+    public var context: [String]? = nil
+    public var role: String? = nil
 
     public var id: String { name }
 

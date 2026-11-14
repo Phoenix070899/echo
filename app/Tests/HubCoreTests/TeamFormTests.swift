@@ -163,3 +163,133 @@ private func json(_ value: Any) throws -> String {
     #expect(TeamForm.modelHint(cli: "codex").contains("openai/"))
     #expect(TeamForm.modelHint(cli: "claude").contains("anthropic/"))
 }
+
+private let everyField = Team.Member(
+    id: "build", action: "execute", profile: "naruto", instructions: "Small commits.", replaceRole: true,
+    cli: "kiro", model: "claude-sonnet-5.5", effort: "high", tools: ["read", "write"], skills: ["tdd"],
+    context: ["CONTEXT.md"], lessons: false, writes: true, worktree: "new")
+
+private func crew(_ members: [Team.Member]) -> TeamForm {
+    var form = TeamForm()
+    form.name = "crew"
+    form.members = members
+    return form
+}
+
+private func member(_ id: String, _ action: String = "execute", parent: String? = nil) -> Team.Member {
+    Team.Member(id: id, action: action, profile: "naruto", parent: parent)
+}
+
+@Test func aFormSavedWithoutEditsSendsEveryMemberFieldBack() throws {
+    let check = Team.Member(id: "check", action: "verify", profile: "sasuke", parent: "build")
+    let loaded = Team(name: "crew", origin: "user", members: [everyField, check])
+    let params = TeamForm(team: loaded).saveParams(repo: nil)
+    let sent = try #require(params["team"] as? [String: Any])
+    let members = try #require(sent["members"] as? [[String: Any]])
+    #expect(try json(members[0]) == """
+    {"action":"execute","cli":"kiro","context":["CONTEXT.md"],"effort":"high","id":"build",\
+    "instructions":"Small commits.","lessons":false,"model":"claude-sonnet-5.5","profile":"naruto",\
+    "replaceRole":true,"skills":["tdd"],"tools":["read","write"],"worktree":"new","writes":true}
+    """)
+    #expect(try json(members[1]) == #"{"action":"verify","id":"check","parent":"build","profile":"sasuke"}"#)
+    let decoded = try JSONDecoder().decode([Team.Member].self, from: JSONSerialization.data(withJSONObject: members))
+    #expect(decoded == loaded.members, "What is sent decodes to the Members that were loaded")
+}
+
+@Test func membersAreSentInOrderAndOnlyWhenThereAreAny() throws {
+    let form = crew([member("b"), member("a"), member("c", "run", parent: "b")])
+    let members = try #require(form.fields["members"] as? [[String: Any]])
+    #expect(members.compactMap { $0["id"] as? String } == ["b", "a", "c"])
+    #expect(TeamForm().fields["members"] == nil)
+}
+
+@Test func aMemberLeavesOutWhatIsUnset() throws {
+    var blank = member("a")
+    blank.instructions = "  \n"
+    blank.model = ""
+    blank.cli = " "
+    blank.parent = ""
+    let sent = try #require(crew([blank]).fields["members"] as? [[String: Any]])
+    #expect(try json(sent[0]) == #"{"action":"execute","id":"a","profile":"naruto"}"#)
+}
+
+@Test func aFormFromAPureRoundTripIsNotChanged() {
+    let team = Team(name: "crew", members: [everyField])
+    let saved = TeamForm(team: team)
+    var form = TeamForm(team: team)
+    #expect(form == saved)
+    form.addOverride(from: ["lee"])
+    #expect(form != saved)
+    form.removeOverride(form.overrides[0].id)
+    #expect(form == saved, "A row added and removed again leaves no change, whatever the counter says")
+    form.members[0].model = "other"
+    #expect(form != saved)
+}
+
+@Test func aCopyKeepsTheMembers() {
+    let copy = TeamForm(copying: Team(name: "crew", members: [everyField]), taking: [])
+    #expect(copy.members == [everyField])
+}
+
+@Test func aSoundTreeHasNoBlocker() {
+    let form = crew([member("a"), member("b", parent: "a"), member("v", "verify", parent: "b"),
+                     member("x", "custom"), member("r", "run", parent: "x")])
+    #expect(form.blocker == nil)
+}
+
+@Test func aBadMemberIdBlocks() {
+    for id in ["", "Build", "-x", "a b", String(repeating: "a", count: 33)] {
+        #expect(crew([member(id)]).blocker?.contains("An id is 1 to 32") == true, "\(id)")
+    }
+    #expect(crew([member(String(repeating: "a", count: 32)), member("0-9")]).blocker == nil)
+}
+
+@Test func twoMembersWithOneIdBlock() {
+    #expect(crew([member("a"), member("a")]).blocker == "a: another Member has this id. Give each Member its own.")
+}
+
+@Test func aParentThatIsNoMemberBlocks() {
+    #expect(crew([member("a", parent: "ghost")]).blocker == #"a: its parent "ghost" is not a Member of this Team."#)
+}
+
+@Test func parentsThatLoopBlock() {
+    #expect(crew([member("a", parent: "a")]).blocker == "a: its parents lead back to itself.")
+    let loop = crew([member("a", parent: "c"), member("b", parent: "a"), member("c", parent: "b")])
+    #expect(loop.blocker?.hasSuffix("its parents lead back to itself.") == true)
+}
+
+@Test func aTreeDeeperThanThreeBlocks() {
+    let three = crew([member("a"), member("b", parent: "a"), member("c", parent: "b")])
+    #expect(three.blocker == nil)
+    let four = crew([member("a"), member("b", parent: "a"), member("c", parent: "b"), member("d", parent: "c")])
+    #expect(four.blocker == "d: the tree is 4 deep here; at most 3.")
+}
+
+@Test func aVerifyMemberNeedsAnExecuteMemberAbove() {
+    let message = "v: a verify Member sits under an execute Member."
+    #expect(crew([member("v", "verify")]).blocker == message)
+    #expect(crew([member("s", "scan"), member("v", "verify", parent: "s")]).blocker == message)
+    #expect(crew([member("e"), member("v", "verify", parent: "e")]).blocker == nil)
+}
+
+@Test func anUnknownActionBlocks() {
+    #expect(crew([member("a", "deploy")]).blocker?.hasPrefix(#"a: "deploy" is not an Action."#) == true)
+}
+
+@Test func aMemberWithoutAProfileBlocks() {
+    var bare = member("a")
+    bare.profile = " "
+    #expect(crew([bare]).blocker == "a: name the Profile it starts from.")
+}
+
+@Test func twentyFiveMembersBlock() {
+    let ids = (0..<25).map { "m\($0)" }
+    #expect(crew(ids.dropLast().map { member($0) }).blocker == nil)
+    #expect(crew(ids.map { member($0) }).blocker == "A Team holds at most 24 Members; this one has 25.")
+}
+
+@Test func theNameIsAskedForBeforeTheTreeIsChecked() {
+    var form = crew([member("a", parent: "ghost")])
+    form.name = ""
+    #expect(form.blocker == "Name the Team.")
+}
