@@ -274,8 +274,9 @@ final class TeamSettingsModel: ObservableObject {
 
     /// Asks for a name, creates a Profile of that name and opens its file to fill in, then adds a
     /// `custom` Member on it to the draft, under `parent` or at level 1, and picks it. The Profile's
-    /// file is written at once; the Member is held in the draft until Save.
-    func newCustomWorker(under parent: String? = nil) {
+    /// file is written at once; the Member is held in the draft until Save. A drop between rows
+    /// passes `placed`, so the Member goes there among its siblings and not last.
+    func newCustomWorker(under parent: String? = nil, placed: DropPlacement? = nil) {
         let alert = NSAlert()
         alert.messageText = "New custom Worker"
         alert.informativeText = "Name its Profile with lowercase letters, digits, and -, like code-reviewer. "
@@ -292,6 +293,9 @@ final class TeamSettingsModel: ObservableObject {
         run({ try client.profile("new", name: name, repo: repo) }) { path in
             if !path.isEmpty { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
             if let id = self.form.addCustomMember(profile: name, under: parent) {
+                if let placed, let moved = TeamTree.drop(id, onto: placed.target, as: placed.position, in: self.form.members) {
+                    self.form.members = moved
+                }
                 self.selectMember(id)
             } else {
                 self.treeNotice = "The Profile \(name) is made, but no Member could be added for it: a Team holds at most "
