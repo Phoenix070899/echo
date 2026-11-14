@@ -82,7 +82,7 @@ final class CodeCoordinator {
     private var glow: CGFloat = 0
     private var fade: Timer?
 
-    private static let font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
+    private static let font = Ledger.nsMono(12.5, .regular)
     private static let base: NSParagraphStyle = {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 2

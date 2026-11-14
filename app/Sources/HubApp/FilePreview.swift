@@ -211,7 +211,7 @@ struct FilePreviewPanel: View {
             }
             ForEach(Array(content.pageErrors.suffix(3).enumerated()), id: \.offset) { _, error in
                 Text(error)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(Ledger.monoFont(12))
                     .foregroundStyle(Ledger.ink2)
                     .lineLimit(2)
                     .textSelection(.enabled)
@@ -330,7 +330,7 @@ struct FilePreviewPanel: View {
     private var header: some View {
         HStack(spacing: 10) {
             Text(file.path)
-                .font(.system(size: 12.5, design: .monospaced))
+                .font(Ledger.monoFont(12.5))
                 .foregroundStyle(Ledger.ink2)
                 .lineLimit(1)
                 .truncationMode(.head)
@@ -339,7 +339,7 @@ struct FilePreviewPanel: View {
                 .layoutPriority(-1)
             if let mark = files.marks[file.path] {
                 Text(mark.rawValue)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(Ledger.monoFont(11, .semibold))
                     .foregroundStyle(mark == .modified || mark == .renamed ? Ledger.changed : mark == .deleted ? Ledger.fail : Ledger.done)
             }
             Spacer(minLength: 8)
@@ -360,8 +360,9 @@ struct FilePreviewPanel: View {
                     .disabled(!unsaved)
                     .help("Writes your changes to the file. ⌘S")
             } else {
+                // An outline, not the primary: inserting a path does not move the work forward (ui-ux/0106).
                 Button("Insert into terminal") { model.insertMention(file) }
-                    .buttonStyle(.ledgerPrimary)
+                    .buttonStyle(.ledger)
                     .fixedSize()
                     .disabled(!model.terminalTypeable)
                     .help(model.terminalTypeable ? "Types @\(file.path) into the terminal" : "The agent isn't running, so there is no terminal to type into.")
@@ -721,7 +722,7 @@ final class PreviewContent: ObservableObject {
         }
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 2
-        out.addAttributes([.font: NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular), .paragraphStyle: style], range: all)
+        out.addAttributes([.font: Ledger.nsMono(12.5, .regular), .paragraphStyle: style], range: all)
         var starts = [0]
         for (offset, unit) in text.utf16.enumerated() where unit == 0x0A { starts.append(offset + 1) }
         return Code(text: out, lines: lines, starts: starts)
@@ -758,7 +759,7 @@ private final class Highlighters: @unchecked Sendable {
         defer { lock.unlock() }
         if made[dark] == nil, let highlightr = Highlightr() {
             highlightr.setTheme(to: dark ? "atom-one-dark" : "xcode")
-            highlightr.theme.setCodeFont(NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular))
+            highlightr.theme.setCodeFont(Ledger.nsMono(12.5, .regular))
             made[dark] = highlightr
         }
         return made[dark]?.highlight(text, as: language, fastRender: true)
@@ -945,7 +946,7 @@ struct MarkdownBlockView: View {
                 }
                 ScrollView(.horizontal) {
                     Text(code)
-                        .font(.system(size: 12.5, design: .monospaced))
+                        .font(Ledger.monoFont(12.5))
                         .lineSpacing(2)
                         .fixedSize()
                 }
@@ -1180,7 +1181,7 @@ private func parseInline(_ text: String, code: CGFloat) -> AttributedString {
     guard var out = try? AttributedString(markdown: source, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
     else { return AttributedString(source) }
     for run in out.runs where run.inlinePresentationIntent?.contains(.code) == true {
-        out[run.range].font = .system(size: code, design: .monospaced)
+        out[run.range].font = Ledger.monoFont(code)
         out[run.range].backgroundColor = Ledger.wash
     }
     return out

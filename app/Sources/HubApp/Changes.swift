@@ -293,7 +293,7 @@ struct DiffFileHeader: View {
                     .foregroundStyle(Ledger.ink3)
                     .frame(width: 12)
                 Text(file.path)
-                    .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                    .font(Ledger.monoFont(12.5, .semibold))
                     .lineLimit(1)
                     .truncationMode(.head)
                 switch file.change {
@@ -348,7 +348,7 @@ struct DiffLineRow: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .font(.system(size: 12, design: .monospaced))
+        .font(Ledger.monoFont(12))
         .padding(.vertical, 1)
         .padding(.trailing, 18)
         .background(background)
@@ -365,7 +365,7 @@ struct DiffLineRow: View {
 
     private func number(_ value: Int?) -> some View {
         Text(value.map(String.init) ?? "")
-            .font(.system(size: 11, design: .monospaced))
+            .font(Ledger.monoFont(11))
             .foregroundStyle(Ledger.ink3)
             .padding(.trailing, 8)
     }

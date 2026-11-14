@@ -399,8 +399,7 @@ private struct ChatBottom: View {
         }
         .background(Ledger.field, in: RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous)
-            .strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
-        .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
+            .strokeBorder(Ledger.ink, lineWidth: Ledger.ruleStrong))
     }
 
     /// The model the agent runs, as Claude's box names it beside the send button.
@@ -885,7 +884,6 @@ private struct CommandList: View {
         .padding(4)
         .background(Ledger.field, in: RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous).strokeBorder(Ledger.rule, lineWidth: Ledger.hairline))
-        .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
     }
 }
 

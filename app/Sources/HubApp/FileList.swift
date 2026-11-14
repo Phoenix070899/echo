@@ -145,7 +145,7 @@ final class FileListView: NSView, NSViewToolTipOwner {
     }
 
     private static let name = Ledger.nsFont(13)
-    private static let markFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
+    private static let markFont = Ledger.nsMono(11, .semibold)
 
     private func draw(_ row: FileListRow, in rect: NSRect) {
         let entry = row.entry

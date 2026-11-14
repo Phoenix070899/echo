@@ -262,7 +262,8 @@ struct LedgerTree: View {
     }
 }
 
-/// A line of the tree: a rounded fill when picked or hovered, the same height everywhere.
+/// A line of the tree: a square fill when hovered, the sunk fill with an accent edge when picked,
+/// the same height everywhere.
 struct TreeRow<Label: View>: View {
     let selected: Bool
     /// 0 for a repo, 1 for an agent, 2 for a Worker.
@@ -279,14 +280,17 @@ struct TreeRow<Label: View>: View {
                 .padding(.trailing, 12)
                 .frame(height: 32)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(selected ? Ledger.selected : hovering.on ? Ledger.wash : Color.clear,
-                            in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+                .background(selected ? Ledger.selected : hovering.on ? Ledger.wash : Color.clear)
                 .overlay(alignment: .leading) {
-                    // Beneath a repo or an agent, a small dot marks the row as its child (ui-ux/0086).
+                    // Beneath a repo or an agent, a spine runs through the row's children (ui-ux/0109).
+                    // It overhangs the row by the stack's 2 pt gap, so the line reads unbroken.
                     if indent > 0 {
-                        Circle().fill(Ledger.ink3.opacity(0.55)).frame(width: 3, height: 3)
-                            .padding(.leading, CGFloat(indent) * 20 - 1.5)
+                        Rectangle().fill(Ledger.rule).frame(width: 2, height: 34)
+                            .padding(.leading, CGFloat(indent) * 20 - 1)
                     }
+                }
+                .overlay(alignment: .leading) {
+                    if selected { Rectangle().fill(Ledger.accent).frame(width: 3) }
                 }
                 .padding(.horizontal, 8)
                 .contentShape(Rectangle())
@@ -387,8 +391,9 @@ struct NewSessionMenu: View {
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(Ledger.onPrimary)
                         .frame(width: 22, height: 22)
-                        .background(Ledger.primary, in: Circle())
-                    Text("New session").font(Ledger.font(14, .medium)).foregroundStyle(Ledger.ink)
+                        .background(Ledger.primary)
+                        .background(Rectangle().fill(Ledger.accent).offset(x: 2, y: 2))
+                    Text("New session").font(Ledger.monoFont(12, .bold)).tracking(0.8).textCase(.uppercase).foregroundStyle(Ledger.ink)
                     Spacer(minLength: 0)
                 }
                 .padding(.leading, 6)
@@ -861,20 +866,13 @@ struct ChatTerminalSwitch: View {
             segment(other, on: !chat)
         }
         .padding(2)
-        .background(Ledger.bubble, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+        .background(Ledger.bubble)
         .help("Switch between the chat and the \(other.lowercased()) (⇧⌘T)")
     }
 
     private func segment(_ title: String, on: Bool) -> some View {
         Button { if !on { toggle() } } label: {
-            Text(title)
-                .font(Ledger.font(12, on ? .medium : .regular))
-                .foregroundStyle(on ? Ledger.ink : Ledger.ink2)
-                .padding(.horizontal, 10)
-                .frame(height: 24)
-                .background(on ? Ledger.field : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
-                .shadow(color: .black.opacity(on ? 0.08 : 0), radius: 1.5, y: 0.5)
-                .contentShape(Rectangle())
+            SegmentLabel(title: title, on: on)
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(on ? .isSelected : [])
@@ -1125,7 +1123,8 @@ struct WorkerHeader: View {
                 Text(worker.title).foregroundStyle(Ledger.ink2).lineLimit(1)
                 HStack(spacing: 6) {
                     WorkerMark(worker: worker)
-                    Text(worker.phaseLabel)
+                    // The title gives way first; the phase word never wraps (bugs/0076).
+                    Text(worker.phaseLabel).fixedSize()
                 }
                 .font(Ledger.font(12.5))
                 .foregroundStyle(worker.markColor)
@@ -1168,7 +1167,7 @@ enum Fact {
 
     static func value(_ text: String, mono: Bool = false) -> some View {
         Text(text)
-            .font(mono ? .system(size: 12, design: .monospaced) : .system(size: 12.5))
+            .font(mono ? Ledger.monoFont(12) : .system(size: 12.5))
             .lineLimit(1)
             .truncationMode(.middle)
     }

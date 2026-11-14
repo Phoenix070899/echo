@@ -2,82 +2,136 @@ import AppKit
 import HubCore
 import SwiftUI
 
-/// The Ledger look in Claude's own app: its warm greys (bg-200 for the window and sidebar, bg-100
-/// for the chat canvas, bg-300 for a user's bubble and hovers), near-black ink, a 0.5 pt hairline
-/// for borders, and the clay accent for the one action that moves work forward (ui-ux/0085).
+/// The Ledger look in Foundry, the human's design system (ui-ux/0104): a pale concrete desk, a
+/// lighter sheet for panels, near-black ink, 1 pt rules, square corners, and a muted safety orange
+/// that marks things but is never text. Dark mode keeps the values it had before Foundry.
 enum Ledger {
     /// The window, and the sidebar that sits flat on it.
-    static let desk = dynamic(0xF5F4ED, 0x1F1E1D) { $0.background }
+    static let desk = dynamic(0xE6E4DF, 0x1F1E1D) { $0.background }
     /// The chat canvas and every panel beside it.
-    static let paper = dynamic(0xFAF9F5, 0x262624) { $0.surface }
-    static let ink = dynamic(0x141413, 0xFAF9F5) { $0.text }
-    static let ink2 = dynamic(0x3D3D3A, 0xC2C0B6) { CustomLook.mix($0.text, $0.surface, 0.3) }
+    static let paper = dynamic(0xEFEEEA, 0x262624) { $0.surface }
+    static let ink = dynamic(0x2B2B29, 0xFAF9F5) { $0.text }
+    static let ink2 = dynamic(0x45433F, 0xC2C0B6) { CustomLook.mix($0.text, $0.surface, 0.3) }
     /// The quietest text; still 4.5:1 or better on every fill it sits on.
-    static let ink3 = dynamic(0x6B6A64, 0x9C9A92) { CustomLook.mix($0.text, $0.surface, 0.4) }
-    /// Claude's border: ink at 15 % on the canvas.
-    static let rule = dynamic(0xDDDACF, 0x3F3E3B) { CustomLook.mix($0.surface, $0.text, 0.14) }
+    static let ink3 = dynamic(0x5E5B55, 0x9C9A92) { CustomLook.mix($0.text, $0.surface, 0.4) }
+    /// Foundry's line: dividers between rows and around sheets.
+    static let rule = dynamic(0xC2BEB5, 0x3F3E3B) { CustomLook.mix($0.surface, $0.text, 0.14) }
     /// A hovered row, and a code block's fill.
-    static let wash = dynamic(0xEFEDE4, 0x30302E) { CustomLook.mix($0.surface, $0.text, 0.05) }
-    /// The row picked in the sidebar.
-    static let selected = dynamic(0xE8E6DC, 0x3A3936) { CustomLook.mix($0.surface, $0.accent, 0.12) }
-    /// The human's message bubble: Claude's bg-300, darker than the canvas in both modes.
-    static let bubble = dynamic(0xF0EEE6, 0x141413) { CustomLook.mix($0.surface, $0.text, 0.07) }
-    // Areas are told apart by fills, not lines.
-    static let strip = dynamic(0xF5F4ED, 0x1F1E1D) { CustomLook.mix($0.background, $0.surface, 0.4) }
-    static let pill = dynamic(0xFAF9F5, 0x30302E) { CustomLook.mix($0.surface, $0.dark ? $0.text : "#ffffff", 0.1) }
-    /// A title row's band: none, as Claude's header sits on the canvas.
-    static let band = dynamic(0xFAF9F5, 0x262624) { $0.surface }
+    static let wash = dynamic(0xDFDCD6, 0x30302E) { CustomLook.mix($0.surface, $0.text, 0.05) }
+    /// The row picked in the sidebar; `accent` marks its leading edge.
+    static let selected = dynamic(0xD8D5CE, 0x3A3936) { CustomLook.mix($0.surface, $0.accent, 0.12) }
+    /// The human's message bubble: the sunk grey, darker than the canvas in both modes.
+    static let bubble = dynamic(0xD8D5CE, 0x141413) { CustomLook.mix($0.surface, $0.text, 0.07) }
+    // Areas are told apart by fills and rules.
+    static let strip = dynamic(0xE6E4DF, 0x1F1E1D) { CustomLook.mix($0.background, $0.surface, 0.4) }
+    static let pill = dynamic(0xEFEEEA, 0x30302E) { CustomLook.mix($0.surface, $0.dark ? $0.text : "#ffffff", 0.1) }
+    /// A title row's band: the desk, so a tab strip reads as a strip above its sheet.
+    static let band = dynamic(0xE6E4DF, 0x262624) { $0.surface }
     /// A Needs you item's card.
-    static let needCard = dynamic(0xF7ECDC, 0x3A3024) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.12 : 0.16) }
-    /// Secondary buttons.
-    static let fill = dynamic(0xEAE8DE, 0x3A3936) { CustomLook.mix($0.surface, $0.text, 0.09) }
-    /// The primary button, and the text on it: Claude's clay, a shade deeper in light mode for 4.5:1
-    /// under its cream text.
-    static let primary = dynamic(0xBE5638, 0xD97757) { $0.text }
-    static let onPrimary = dynamic(0xFFFFFF, 0x141413) { $0.surface }
-    /// The message box and text fields: Claude's bg-000.
-    static let field = dynamic(0xFFFFFF, 0x30302E) { CustomLook.mix($0.surface, $0.text, 0.06) }
+    static let needCard = dynamic(0xF2DDCD, 0x3A3024) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.12 : 0.16) }
+    /// Chips and other quiet fills.
+    static let fill = dynamic(0xD8D5CE, 0x3A3936) { CustomLook.mix($0.surface, $0.text, 0.09) }
+    /// The primary button, and the text on it: Foundry's ink, its accent shown as a hard offset.
+    static let primary = dynamic(0x2B2B29, 0xD97757) { $0.text }
+    static let onPrimary = dynamic(0xEFEEEA, 0x141413) { $0.surface }
+    /// The message box and text fields: the sheet's grey inside an ink or grey rule.
+    static let field = dynamic(0xEFEEEA, 0x30302E) { CustomLook.mix($0.surface, $0.text, 0.06) }
     /// The picked one of a few choices, like a mode card.
-    static let chosen = dynamic(0xEBDBBC, 0x45402F) { CustomLook.mix($0.surface, $0.accent, 0.22) }
-    /// The highlighter, Claude's manilla and kraft. Text on it is always dark ink, in both modes.
-    static let marker = dynamic(0xEBDBBC, 0xD4A27F) { $0.highlighter }
-    static let markerInk = rgb(0x141413)
-    static let markerWash = dynamic(0xF7ECDC, 0x3A3024) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.12 : 0.14) }
-    static let run = dynamic(0x35699B, 0x6A9BCC) { $0.accent }
+    static let chosen = dynamic(0xEBC9B0, 0x45402F) { CustomLook.mix($0.surface, $0.accent, 0.22) }
+    /// Foundry's muted safety orange: marks, meters, the picked row's edge, the button's offset. Never
+    /// text in light mode (3.1:1 on the sheet).
+    static let accent = dynamic(0xC8642E, 0xD9773F) { $0.accent }
+    /// The highlighter. Text on it is always dark ink, in both modes.
+    static let marker = dynamic(0xEBC9B0, 0xD4A27F) { $0.highlighter }
+    static let markerInk = rgb(0x2B2B29)
+    static let markerWash = dynamic(0xF2DDCD, 0x3A3024) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.12 : 0.14) }
+    static let run = dynamic(0x3F6A92, 0x6A9BCC) { $0.accent }
     static let done = dynamic(0x5B6E42, 0x9BB07C)
-    static let fail = dynamic(0xB42318, 0xF2877B)
+    static let fail = dynamic(0xA33A2A, 0xF2877B)
     /// A file changed but not committed, in the Files column; amber, apart from added green.
-    static let changed = dynamic(0x9A6A12, 0xD4A27F)
+    static let changed = dynamic(0x8A5E12, 0xD4A27F)
     /// Lines an agent just changed in an open preview, for a moment.
-    static let justChanged = dynamic(0xF5E6C4, 0x3D3320) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.18 : 0.3) }
-    static let okWash = dynamic(0xE8EEDD, 0x2B3123)
+    static let justChanged = dynamic(0xF0DFC7, 0x3D3320) { CustomLook.mix($0.surface, $0.highlighter, $0.dark ? 0.18 : 0.3) }
+    static let okWash = dynamic(0xE3E8D6, 0x2B3123)
     static let okInk = dynamic(0x3F5230, 0xBCD0A0)
-    static let failWash = dynamic(0xF8E1DC, 0x4A2420)
+    static let failWash = dynamic(0xF1DCD5, 0x4A2420)
     static let failInk = dynamic(0x8C1D14, 0xF5B3AA)
 
-    /// Claude's radii (Tailwind's): inner 6 (chips), element 8 (rows, buttons, small fields),
-    /// card 12 (bubbles, tool cards, popovers), container 16 (panels and the message box).
-    static let radiusInner: CGFloat = 6
-    static let radiusElement: CGFloat = 8
-    static let radiusCard: CGFloat = 12
-    static let radiusContainer: CGFloat = 16
-    /// Claude's border is half a point.
-    static let hairline: CGFloat = 0.5
+    /// Foundry is square: every radius is 0. The names stay so each view keeps saying which kind of
+    /// shape it is.
+    static let radiusInner: CGFloat = 0
+    static let radiusElement: CGFloat = 0
+    static let radiusCard: CGFloat = 0
+    static let radiusContainer: CGFloat = 0
+    /// Foundry's rule is a full point; section and control frames are `ruleStrong`.
+    static let hairline: CGFloat = 1
+    static let ruleStrong: CGFloat = 2
 
-    static let mono = Font.system(size: 12, design: .monospaced)
+    /// The faces Echo bundles (ui-ux/0104): Archivo for the interface, JetBrains Mono for code,
+    /// labels and readouts. A face that is missing falls back to the system's.
+    static let sansFamily = "Archivo"
+    static let monoFamily = "JetBrains Mono"
 
-    /// The interface's sans: the system face at the weight asked for.
+    static let mono = monoFont(12)
+
+    /// The interface's sans: Archivo at the weight asked for.
     static func font(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight)
+        .custom(sansFamily, fixedSize: size).weight(weight)
+    }
+
+    /// Code, paths and readouts: JetBrains Mono.
+    static func monoFont(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .custom(monoFamily, fixedSize: size).weight(weight)
+    }
+
+    /// Titles: Archivo at its heaviest, 75 % wide, set in capitals by the view.
+    static func display(_ size: CGFloat) -> Font {
+        Font(variable(sansFamily, size, weight: 800, width: 75) ?? .systemFont(ofSize: size, weight: .heavy))
     }
 
     /// `font`'s face as an NSFont, for text AppKit draws.
     static func nsFont(_ size: CGFloat, _ weight: Font.Weight = .regular) -> NSFont {
-        .systemFont(ofSize: size, weight: weight == .medium ? .medium : weight == .semibold ? .semibold : weight == .bold ? .bold : .regular)
+        variable(sansFamily, size, weight: axisWeight(weight))
+            ?? .systemFont(ofSize: size, weight: weight == .medium ? .medium : weight == .semibold ? .semibold : weight == .bold ? .bold : .regular)
     }
 
-    /// The system faces need no registering; kept so launch code stays as it was.
-    static func registerFonts() {}
+    /// `monoFont`'s face as an NSFont.
+    static func nsMono(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
+        let value: CGFloat = weight == .semibold ? 600 : weight == .bold ? 700 : weight == .medium ? 500 : 400
+        return variable(monoFamily, size, weight: value) ?? .monospacedSystemFont(ofSize: size, weight: weight)
+    }
+
+    private static func axisWeight(_ weight: Font.Weight) -> CGFloat {
+        switch weight {
+        case .medium: 500
+        case .semibold: 600
+        case .bold: 700
+        case .heavy: 800
+        case .black: 900
+        default: 400
+        }
+    }
+
+    /// A variable face at a weight (and width), or nil when the face is not registered.
+    private static func variable(_ family: String, _ size: CGFloat, weight: CGFloat, width: CGFloat? = nil) -> NSFont? {
+        guard let base = NSFont(name: family, size: size) else { return nil }
+        var axes: [NSNumber: CGFloat] = [NSNumber(value: 0x7767_6874): weight] // 'wght'
+        if let width { axes[NSNumber(value: 0x7764_7468)] = width } // 'wdth'
+        let descriptor = base.fontDescriptor.addingAttributes([
+            NSFontDescriptor.AttributeName(rawValue: kCTFontVariationAttribute as String): axes,
+        ])
+        return NSFont(descriptor: descriptor, size: size) ?? base
+    }
+
+    /// Registers the bundled faces for this process; a build without them keeps the system's.
+    static func registerFonts() {
+        guard let folder = Bundle.main.resourceURL?.appendingPathComponent("Fonts"),
+              let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+        else { return }
+        for file in files where file.pathExtension == "ttf" {
+            CTFontManagerRegisterFontsForURL(file as CFURL, .process, nil)
+        }
+    }
 
     private static func rgb(_ hex: Int) -> Color {
         Color(nsColor: nsColor(hex))
@@ -154,7 +208,7 @@ struct StateMark: View {
     let color: Color
 
     var body: some View {
-        Circle()
+        Rectangle()
             .fill(color)
             .frame(width: 7, height: 7)
             .accessibilityHidden(true)
@@ -281,21 +335,24 @@ struct WorkerMark: View {
     }
 }
 
-/// The amber target: something waits on the human.
+/// The target: something waits on the human. A square on the accent's soft fill, with a solid
+/// square at its centre (ui-ux/0108).
 struct NeedsRing: View {
     var size: CGFloat = 14
 
     var body: some View {
-        Circle().strokeBorder(Ledger.changed, lineWidth: 1.6)
-            .overlay(Circle().fill(Ledger.changed).frame(width: size * 0.36, height: size * 0.36))
+        Rectangle().fill(Ledger.marker)
+            .overlay(Rectangle().strokeBorder(Ledger.accent, lineWidth: max(1.5, size / 8)))
+            .overlay(Rectangle().fill(Ledger.accent).frame(width: size * 0.32, height: size * 0.32))
             .frame(width: size, height: size)
             .accessibilityLabel("Needs you")
     }
 }
 
-/// A Worker's mark at the right of its sidebar row (ui-ux/0092): a turning ring while it works (slower
-/// while it only waits on background work), an amber target when it needs the human, a filled tick
-/// when it is done, a plain grey tick when it ended at its input box, a red cross when it went wrong.
+/// A Worker's mark at the right of its sidebar row (ui-ux/0092, squared by ui-ux/0108): a turning
+/// ring while it works (slower while it only waits on background work), the square target when it
+/// needs the human, a solid green square with a tick when it is done, a plain grey tick when it ended
+/// at its input box, a solid red square with a cross when it went wrong.
 struct WorkerGlyph: View {
     let worker: WorkerRow
     private let size: CGFloat = 14
@@ -307,16 +364,48 @@ struct WorkerGlyph: View {
             } else if worker.isActive {
                 Spinner(color: worker.markColor, size: size - 1, period: worker.state == .waiting ? 2.4 : 1)
             } else if worker.phase == "ended" {
-                Image(systemName: "checkmark").font(Ledger.font(10, .semibold)).foregroundStyle(Ledger.ink3)
+                Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Ledger.ink3)
             } else if worker.isTrouble {
-                Image(systemName: "xmark.circle.fill").font(Ledger.font(size)).foregroundStyle(Ledger.fail)
+                SquareGlyph(symbol: "xmark", fill: Ledger.fail, size: size)
             } else {
-                Image(systemName: "checkmark.circle.fill").font(Ledger.font(size)).foregroundStyle(Ledger.done)
+                SquareGlyph(symbol: "checkmark", fill: Ledger.done, size: size)
             }
         }
         .frame(width: size, height: size)
         .accessibilityElement()
         .accessibilityLabel(worker.phaseLabel)
+    }
+}
+
+/// A solid square with a symbol cut out of it in the sheet's colour.
+struct SquareGlyph: View {
+    let symbol: String
+    let fill: Color
+    var size: CGFloat = 14
+
+    var body: some View {
+        Rectangle().fill(fill)
+            .overlay(Image(systemName: symbol).font(.system(size: size * 0.55, weight: .heavy)).foregroundStyle(Ledger.paper))
+            .frame(width: size, height: size)
+    }
+}
+
+/// A small mono label in capitals: section names, tabs, readouts.
+struct MonoLabel: View {
+    let text: String
+    var color: Color = Ledger.ink3
+
+    init(_ text: String, color: Color = Ledger.ink3) {
+        self.text = text
+        self.color = color
+    }
+
+    var body: some View {
+        Text(text)
+            .font(Ledger.monoFont(10.5, .bold))
+            .tracking(1)
+            .textCase(.uppercase)
+            .foregroundStyle(color)
     }
 }
 
@@ -345,12 +434,12 @@ struct Marked: View {
             .fontWeight(.medium)
             .foregroundStyle(Ledger.markerInk)
             .padding(.horizontal, 3)
-            .background(Ledger.marker, in: RoundedRectangle(cornerRadius: 2, style: .continuous))
+            .background(Ledger.marker)
     }
 }
 
-/// The ledger's buttons: the clay accent's primary for the action that moves work forward, a quiet fill for
-/// the rest; 28 pt tall, or 32 pt when large, on the row radius.
+/// The ledger's buttons (ui-ux/0106): the primary is solid ink casting a hard accent offset that
+/// presses flat; the rest are an ink outline. Mono capitals, square, 28 pt tall or 32 pt when large.
 struct LedgerButtonStyle: ButtonStyle {
     var primary = false
     var large = false
@@ -366,13 +455,27 @@ struct LedgerButtonStyle: ButtonStyle {
         @Environment(\.isEnabled) private var isEnabled
 
         var body: some View {
+            let pressed: CGFloat = primary && configuration.isPressed ? 3 : 0
             configuration.label
-                .font(Ledger.font(14, .medium))
+                .font(Ledger.monoFont(11, .bold))
+                .tracking(0.4)
+                .textCase(.uppercase)
                 .lineLimit(1)
+                // A label never truncates: capitals in mono run wider than the sans they replaced.
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, large ? 14 : 10)
                 .frame(minHeight: large ? 32 : 28)
                 .foregroundStyle(primary ? Ledger.onPrimary : Ledger.ink)
-                .background(primary ? Ledger.primary : Ledger.fill, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+                .background(primary ? Ledger.primary : Color.clear)
+                .overlay(Rectangle().strokeBorder(primary ? Color.clear : Ledger.ink, lineWidth: 1.5))
+                .offset(x: pressed, y: pressed)
+                // The offset is a solid block behind the button, not a blurred shadow (ui-ux/0106);
+                // pressing moves the button onto it.
+                .background {
+                    if primary && isEnabled { Rectangle().fill(Ledger.accent).offset(x: 3, y: 3) }
+                }
+                .padding(.trailing, primary ? 3 : 0)
+                .padding(.bottom, primary ? 3 : 0)
                 .opacity(isEnabled ? 1 : 0.45)
                 .contentShape(Rectangle())
         }
@@ -385,8 +488,9 @@ extension ButtonStyle where Self == LedgerButtonStyle {
     static var ledgerLarge: LedgerButtonStyle { LedgerButtonStyle(primary: true, large: true) }
 }
 
-/// Claude's segmented control: a grey track, the picked choice on a white thumb. Stands in for
-/// the system's segmented picker, whose accent-blue thumb belongs to no other control here.
+/// A segmented choice (ui-ux/0107): a sunk square track, the picked choice on the sheet's grey
+/// inside a 1.5 pt ink frame, mono capitals. Stands in for the system's segmented picker, whose
+/// accent-blue thumb belongs to no other control here.
 struct LedgerSegmented<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(value: Value, title: String)]
@@ -396,31 +500,44 @@ struct LedgerSegmented<Value: Hashable>: View {
             ForEach(Array(options.enumerated()), id: \.offset) { _, option in
                 let on = option.value == selection
                 Button { selection = option.value } label: {
-                    Text(option.title)
-                        .font(Ledger.font(12, on ? .medium : .regular))
-                        .foregroundStyle(on ? Ledger.ink : Ledger.ink2)
-                        .padding(.horizontal, 10)
-                        .frame(height: 24)
-                        .background(on ? Ledger.field : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
-                        .shadow(color: .black.opacity(on ? 0.08 : 0), radius: 1.5, y: 0.5)
-                        .contentShape(Rectangle())
+                    SegmentLabel(title: option.title, on: on)
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
         .padding(2)
-        .background(Ledger.bubble, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+        .background(Ledger.bubble)
         .fixedSize()
     }
 }
 
-/// A blue text link, for quiet actions like Show all.
+/// One choice of a segmented control, picked or not.
+struct SegmentLabel: View {
+    let title: String
+    let on: Bool
+
+    var body: some View {
+        Text(title)
+            .font(Ledger.monoFont(10.5, .bold))
+            .tracking(0.6)
+            .textCase(.uppercase)
+            .foregroundStyle(on ? Ledger.ink : Ledger.ink3)
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .background(on ? Ledger.field : .clear)
+            .overlay(Rectangle().strokeBorder(on ? Ledger.ink : .clear, lineWidth: 1.5))
+            .contentShape(Rectangle())
+    }
+}
+
+/// A text link, for quiet actions like Show all: ink, underlined in the accent.
 struct LinkButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(Ledger.font(13, .medium))
-            .foregroundStyle(Ledger.run)
+            .font(Ledger.font(13, .semibold))
+            .foregroundStyle(Ledger.ink)
+            .underline(true, color: Ledger.accent)
             .opacity(configuration.isPressed ? 0.6 : 1)
             .contentShape(Rectangle())
     }
@@ -464,11 +581,12 @@ extension View {
             })
     }
 
-    /// A text field filled rather than outlined; pair with `.textFieldStyle(.plain)`.
+    /// A text field: the sheet's grey inside a 1 pt grey rule; pair with `.textFieldStyle(.plain)`.
     func ledgerField() -> some View {
         padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(Ledger.field, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+            .background(Ledger.field)
+            .overlay(Rectangle().strokeBorder(Ledger.ink3.opacity(0.6), lineWidth: Ledger.hairline))
     }
 }
 
@@ -480,9 +598,9 @@ struct SectionHeader<Trailing: View>: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(title).font(Ledger.font(15, .semibold))
+            MonoLabel(title, color: Ledger.ink)
             if let count {
-                Text("\(count)").font(Ledger.font(12.5)).foregroundStyle(Ledger.ink3).monospacedDigit()
+                Text("\(count)").font(Ledger.monoFont(11)).foregroundStyle(Ledger.ink3).monospacedDigit()
             }
             Spacer(minLength: 8)
             trailing()
@@ -500,17 +618,18 @@ extension SectionHeader where Trailing == EmptyView {
     }
 }
 
-/// Echo's mark for the top bar: one solid square and the echoes it sends out, light on an ink
-/// tile, with the highlighter's dot; the app icon is too fine to read at this size.
+/// Echo's mark for the top bar: one solid square and the echoes it sends out, light on a square ink
+/// tile that casts the accent's hard offset, with the highlighter's dot; the app icon is too fine to
+/// read at this size.
 struct EchoMark: View {
     var body: some View {
         Canvas { context, size in
             let s = min(size.width, size.height) / 32
-            context.fill(Path(roundedRect: CGRect(x: 0, y: 0, width: 32 * s, height: 32 * s), cornerRadius: 8 * s, style: .continuous),
-                         with: .color(Ledger.markerInk))
+            context.fill(Path(CGRect(x: 4 * s, y: 4 * s, width: 28 * s, height: 28 * s)), with: .color(Ledger.accent))
+            context.fill(Path(CGRect(x: 0, y: 0, width: 28 * s, height: 28 * s)), with: .color(Ledger.markerInk))
             // The mark sits on a 16-unit grid, centred in the tile.
             let unit = 22 * s / 16
-            let origin = CGPoint(x: 5 * s, y: 5 * s)
+            let origin = CGPoint(x: 3 * s, y: 3 * s)
             func square(_ x: CGFloat, _ y: CGFloat, _ side: CGFloat, _ radius: CGFloat) -> Path {
                 Path(roundedRect: CGRect(x: origin.x + x * unit, y: origin.y + y * unit, width: side * unit, height: side * unit),
                      cornerRadius: radius * unit, style: .continuous)

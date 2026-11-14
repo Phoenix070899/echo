@@ -112,7 +112,7 @@ private struct FilesTree: View {
             if let branch = files.branch {
                 HStack(spacing: 4) {
                     Image(systemName: "arrow.triangle.branch").font(Ledger.font(10.5))
-                    Text(branch).font(.system(size: 12, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                    Text(branch).font(Ledger.monoFont(12)).lineLimit(1).truncationMode(.middle)
                 }
                 .foregroundStyle(Ledger.ink2)
                 .help(root)
@@ -477,7 +477,7 @@ private struct ResultLine: View {
             Text(hit.text).foregroundStyle(Ledger.ink2).lineLimit(1)
             Spacer(minLength: 0)
         }
-        .font(.system(size: 12, design: .monospaced))
+        .font(Ledger.monoFont(12))
         .padding(.leading, 20)
         .padding(.trailing, 14)
         .frame(height: 22)
@@ -840,7 +840,7 @@ private struct CommitRow: View {
                     .foregroundStyle(Ledger.ink)
                     .lineLimit(1)
                 HStack(spacing: 6) {
-                    Text(commit.short).font(.system(size: 11.5, design: .monospaced))
+                    Text(commit.short).font(Ledger.monoFont(11.5))
                     Text(commit.author).lineLimit(1)
                     Text(commit.when).lineLimit(1)
                 }
@@ -897,7 +897,7 @@ private struct ChangedFileRow: View {
                 .truncationMode(.head)
             Spacer(minLength: 6)
             Text(file.mark.rawValue)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .font(Ledger.monoFont(11, .semibold))
                 .foregroundStyle(gitMarkColor(file.mark))
                 .accessibilityLabel(gitMarkLabel(file.mark))
         }

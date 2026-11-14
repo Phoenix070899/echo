@@ -74,13 +74,13 @@ struct WorktreeSettings: View {
                 }
             }
             TextField(text: $worktrees.setup, prompt: Text("pnpm install")) { Text("Setup").font(Ledger.font(13)) }
-                .font(.system(size: 12, design: .monospaced))
+                .font(Ledger.monoFont(12))
             Text("Runs in each new worktree before its agent starts, in your login shell, where you can watch it. When it fails, the agent does not start.")
                 .font(Ledger.font(11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             TextField(text: $worktrees.copy, prompt: Text(".env"), axis: .vertical) { Text("Copy").font(Ledger.font(13)) }
-                .font(.system(size: 12, design: .monospaced))
+                .font(Ledger.monoFont(12))
                 .lineLimit(1...6)
             Text("Files git ignores, one per line, copied from the main checkout into each new worktree that lacks them; a folder is copied whole.")
                 .font(Ledger.font(11))

@@ -68,7 +68,7 @@ struct FanOutModal: View {
                         VStack(alignment: .leading, spacing: 4) {
                             TextField("feat/task", text: branchBinding)
                                 .textFieldStyle(.plain)
-                                .font(.system(size: 12.5, design: .monospaced))
+                                .font(Ledger.monoFont(12.5))
                                 .autocorrectionDisabled()
                                 .ledgerField()
                             Text(branchNote)
@@ -272,7 +272,7 @@ struct TryColumn: View {
                 .foregroundStyle(worker.markColor)
             }
             Text(worker.branch ?? worker.place)
-                .font(.system(size: 12, design: .monospaced))
+                .font(Ledger.monoFont(12))
                 .foregroundStyle(Ledger.ink3)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -333,7 +333,7 @@ struct TryColumn: View {
                     ForEach(Array(files.prefix(8).enumerated()), id: \.offset) { _, file in
                         HStack(spacing: 6) {
                             Text(file.path)
-                                .font(.system(size: 11.5, design: .monospaced))
+                                .font(Ledger.monoFont(11.5))
                                 .lineLimit(1)
                                 .truncationMode(.head)
                             Spacer(minLength: 4)

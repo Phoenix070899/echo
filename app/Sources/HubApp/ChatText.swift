@@ -213,7 +213,7 @@ struct ChatTextBuilder {
                 }
                 for (index, line) in lines.enumerated() {
                     out.append(NSAttributedString(string: line + (index < lines.count - 1 ? "\n" : ""), attributes: [
-                        .font: NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular), .foregroundColor: base,
+                        .font: Ledger.nsMono(12.5, .regular), .foregroundColor: base,
                         .echoCode: number,
                         .paragraphStyle: paragraph(before: first ? lead : 0, line: 2, first: 12, head: 12, tail: -12),
                     ]))
@@ -265,7 +265,7 @@ struct ChatTextBuilder {
             let intent = run.inlinePresentationIntent ?? []
             var font = (base[.font] as? NSFont) ?? Ledger.nsFont(size)
             if intent.contains(.code) {
-                font = .monospacedSystemFont(ofSize: code, weight: .regular)
+                font = Ledger.nsMono(code, .regular)
                 attributes[.backgroundColor] = wash
                 attributes[.echoInlineCode] = true
             }

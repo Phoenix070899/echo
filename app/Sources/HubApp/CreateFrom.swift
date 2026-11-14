@@ -103,7 +103,7 @@ struct CreateFromSection: View {
             HStack(spacing: 5) {
                 Image(systemName: "arrow.triangle.branch")
                 Text(form.base.isEmpty ? "HEAD" : form.base)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(Ledger.monoFont(12))
                     .lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down").font(Ledger.font(9, .semibold))
             }
@@ -153,7 +153,7 @@ struct CreateFromSection: View {
                         Image(systemName: form.pickedBranch == branch.name ? "largecircle.fill.circle" : "circle")
                             .foregroundStyle(form.pickedBranch == branch.name ? Ledger.ink : Ledger.ink3)
                         Text(branch.name)
-                            .font(.system(size: 12.5, design: .monospaced))
+                            .font(Ledger.monoFont(12.5))
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer(minLength: 8)
@@ -338,7 +338,7 @@ private struct BaseBranchSearch: View {
                     .font(Ledger.font(11, .semibold))
                     .opacity(name == base ? 1 : 0)
                 Text(name)
-                    .font(.system(size: 12.5, design: .monospaced))
+                    .font(Ledger.monoFont(12.5))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)

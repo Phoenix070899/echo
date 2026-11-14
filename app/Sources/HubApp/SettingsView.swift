@@ -172,12 +172,12 @@ struct SettingsView: View {
                     }
                     if model.multiplexer.kind == .custom {
                         TextField("Command", text: $model.multiplexer.command, axis: .vertical)
-                            .font(.system(size: 12, design: .monospaced))
+                            .font(Ledger.monoFont(12))
                             .lineLimit(1...3)
                     } else if model.multiplexer.enabled {
                         LabeledContent("Command") {
                             Text(model.multiplexer.command)
-                                .font(.system(size: 12, design: .monospaced))
+                                .font(Ledger.monoFont(12))
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                                 .multilineTextAlignment(.trailing)
