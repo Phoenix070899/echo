@@ -3436,3 +3436,183 @@ fn profile_list_shows_what_each_profile_runs_with_under_a_team() {
     let bad = hub.call("profiles.list", serde_json::json!({ "team": "nope" }));
     assert_eq!(bad["ok"], false, "{bad}");
 }
+
+/// A Team of two naruto Members, each with a model of its own, and a lee Member.
+const CREW: &str = r#"{"members": [
+    {"id": "build-a", "action": "execute", "profile": "naruto", "model": "claude-opus-5-5", "effort": "max"},
+    {"id": "build-b", "action": "execute", "profile": "naruto", "model": "claude-haiku-5-5"},
+    {"id": "runner", "action": "run", "profile": "lee", "parent": "build-a"}]}"#;
+
+#[test]
+fn a_worker_starts_as_the_member_a_name_stands_for_and_runs_with_its_choices() {
+    let hub = Hub::new("member-start");
+    hub.ok(&["status"]);
+    put_team(&hub, "crew", CREW);
+    let agent = open_orchestrator(&hub, Some("crew"));
+
+    // A Member id, another Member of the same Profile, a Profile name (the first Member using it),
+    // and a Profile that no Member uses.
+    let by_id = start_under(&hub, agent, &["build-b", "--spec", "done quickly"]);
+    assert!(by_id.contains("(build-b from naruto:"), "{by_id}");
+    start_under(&hub, agent, &["build-a", "--spec", "done quickly"]);
+    start_under(&hub, agent, &["naruto", "--spec", "done quickly"]);
+    let bare = start_under(&hub, agent, &["hinata", "--spec", "done quickly"]);
+    assert!(bare.contains("(hinata:"), "{bare}");
+    hub.eventually("every Worker to finish", || {
+        (1..=4).all(|n| row_of(&hub, n)["phase"] == "done")
+    });
+    let who = |n: u32| {
+        let row = row_of(&hub, n);
+        (
+            row["member"].clone(),
+            row["profile"].clone(),
+            row["model"].clone(),
+            row["effort"].clone(),
+        )
+    };
+    let member = |id: &str, model: &str, effort: &str| (id.into(), "naruto".into(), model.into(), effort.into());
+    assert_eq!(
+        who(1),
+        member("build-b", "claude-haiku-5-5", "high"),
+        "a Member's model and the Profile's effort"
+    );
+    assert_eq!(
+        who(2),
+        member("build-a", "claude-opus-5-5", "max"),
+        "the other naruto Member runs on its own model"
+    );
+    assert_eq!(who(3), who(2), "a Profile name starts the first Member that uses it");
+    let bare = row_of(&hub, 4);
+    assert!(bare["member"].is_null() && bare["profile"] == "hinata", "{bare}");
+    assert_eq!(hub.worker("w1")["member"], "build-b");
+    assert!(hub.worker("w4")["member"].is_null());
+}
+
+#[test]
+fn a_team_without_members_and_an_unknown_name_start_as_they_always_did() {
+    let hub = Hub::new("member-none");
+    hub.ok(&["status"]);
+    put_team(&hub, "lean", KIRO_WORKERS);
+    put_team(&hub, "crew", CREW);
+    let (lean, crew) = (
+        open_orchestrator(&hub, Some("lean")),
+        open_orchestrator(&hub, Some("crew")),
+    );
+    start_under(&hub, lean, &["naruto", "--spec", "done quickly"]);
+    hub.eventually("w1 to finish", || row_of(&hub, 1)["phase"] == "done");
+    let row = row_of(&hub, 1);
+    assert!(row["member"].is_null() && row["profile"] == "naruto", "{row}");
+    assert_eq!(
+        runs_of(&row),
+        (serde_json::json!("kiro"), "claude-sonnet-5.5".into(), "low".into())
+    );
+
+    // A name that is no Member and no Profile is refused, with or without Members in the Team.
+    for agent in [lean, crew] {
+        let refused = hub.run_with(
+            &["worker", "start", "nobody", "--spec", "done"],
+            &[("HUB_AGENT", &agent.to_string())],
+        );
+        assert!(!refused.status.success());
+        let message = String::from_utf8_lossy(&refused.stderr).into_owned();
+        assert!(message.contains("unknown profile \"nobody\""), "{message}");
+    }
+    assert!(!hub.ok(&["worker", "list"]).contains("w2"), "no Worker row was made");
+}
+
+#[test]
+fn an_edited_team_changes_a_members_worker_at_its_resume_and_a_removed_member_falls_back() {
+    let hub = Hub::new("member-resume");
+    hub.ok(&["status"]);
+    put_team(&hub, "crew", CREW);
+    let agent = open_orchestrator(&hub, Some("crew"));
+    start_under(&hub, agent, &["build-b", "--spec", "exit"]);
+    start_under(&hub, agent, &["build-a", "--spec", "exit"]);
+    hub.eventually("both Workers to give up", || {
+        row_of(&hub, 1)["phase"] == "exited" && row_of(&hub, 2)["phase"] == "exited"
+    });
+    assert_eq!(runs_of(&row_of(&hub, 1)).1, "claude-haiku-5-5");
+
+    // The Member's model is edited: the row follows at once, and the resume runs on it.
+    put_team(&hub, "crew", &CREW.replace("claude-haiku-5-5", "claude-sonnet-5-5"));
+    assert_eq!(runs_of(&row_of(&hub, 1)).1, "claude-sonnet-5-5");
+    assert!(hub.ok(&["worker", "resume", "w1"]).contains("Resumed w1"));
+    let resumed = row_of(&hub, 1);
+    assert_eq!(
+        (&resumed["member"], &resumed["model"]),
+        (&"build-b".into(), &"claude-sonnet-5-5".into())
+    );
+
+    // The Member is removed: w2 keeps its stored Member and Profile, and resumes on the Profile's
+    // own choices, with no error.
+    put_team(
+        &hub,
+        "crew",
+        r#"{"members": [{"id": "build-b", "action": "execute", "profile": "naruto"}]}"#,
+    );
+    let fallen = row_of(&hub, 2);
+    assert_eq!(
+        (
+            &fallen["member"],
+            &fallen["profile"],
+            runs_of(&fallen).1,
+            runs_of(&fallen).2
+        ),
+        (
+            &"build-a".into(),
+            &"naruto".into(),
+            "claude-sonnet-5-5".into(),
+            "high".into()
+        )
+    );
+    assert!(hub.ok(&["worker", "resume", "w2"]).contains("Resumed w2"));
+    assert_eq!(runs_of(&row_of(&hub, 2)).1, "claude-sonnet-5-5");
+}
+
+#[test]
+fn a_member_that_cannot_run_stops_the_start_before_its_worktree() {
+    let hub = Hub::new("member-refused");
+    hub.ok(&["status"]);
+    let before = git(&hub.repo, &["worktree", "list"]);
+    put_team(
+        &hub,
+        "ghosts",
+        r#"{"members": [{"id": "ghost", "action": "execute", "profile": "no-such-profile"}]}"#,
+    );
+    put_team(
+        &hub,
+        "sonnet",
+        r#"{"members": [{"id": "pick", "action": "execute", "profile": "naruto", "model": "anthropic/claude-sonnet-5-5"}]}"#,
+    );
+    let (ghosts, sonnet) = (
+        open_orchestrator(&hub, Some("ghosts")),
+        open_orchestrator(&hub, Some("sonnet")),
+    );
+    let start = |agent: i64, name: &str| {
+        let refused = hub.run_with(
+            &[
+                "worker",
+                "start",
+                name,
+                "--spec",
+                "done",
+                "--worktree",
+                "new:feat/member",
+            ],
+            &[("HUB_AGENT", &agent.to_string())],
+        );
+        assert!(!refused.status.success());
+        String::from_utf8_lossy(&refused.stderr).into_owned()
+    };
+    let refused = |message: String, why: &str| {
+        assert!(message.contains(why), "{message}");
+        assert_eq!(git(&hub.repo, &["branch", "--list", "feat/member"]).trim(), "");
+        assert_eq!(git(&hub.repo, &["worktree", "list"]), before);
+    };
+    // A Member that names a Profile nobody has.
+    refused(start(ghosts, "ghost"), "unknown profile \"no-such-profile\"");
+    // A Member whose model the CLI now in force refuses: the Team is checked again at the start.
+    std::fs::write(hub.state.join("settings.json"), r#"{"cli": "kiro"}"#).unwrap();
+    refused(start(sonnet, "pick"), "sonnet");
+    assert!(!hub.ok(&["worker", "list"]).contains("w1"), "no Worker row was made");
+}

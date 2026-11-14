@@ -339,26 +339,42 @@ impl Profile {
 }
 
 /// A Worker's CLI, model and effort, from the highest: what was picked for it (`picked`), its
-/// Orchestrator's Team for its Profile, its Team for all Workers, then its Profile's own and the
-/// levels below (features/0081, 0036). `forceCli` (features/0075) puts a Profile's own cli and
-/// model aside but never what a Team names, so it applies only where the Team names nothing.
-/// Without a Team this is `cli::pick`, and the effort is the Profile's.
+/// Member (features/0085), its Orchestrator's Team for its Profile, its Team for all Workers, then
+/// its Profile's own and the levels below (features/0081, 0036). `forceCli` (features/0075) puts a
+/// Profile's own cli and model aside but never what a Team names, a Member included, so it applies
+/// only where the Team names nothing. Without a Team this is `cli::pick`, and the effort is the
+/// Profile's.
 pub fn resolve(
     state: &Path,
     repo: Option<&Path>,
     profile: &Profile,
     team: Option<&crate::team::Team>,
+    member: Option<&crate::team::Member>,
     picked: &crate::cli::Choice,
 ) -> Result<(Cli, Option<String>, Option<String>)> {
     let (all, own) = team.map(|team| team.worker_levels(&profile.name)).unwrap_or_default();
+    let member = member.map(member_choice).unwrap_or_default();
     let (cli, model) = crate::cli::pick(
         state,
         repo,
         Some(&profile.choice()),
-        &[&all.runs(), &own.runs(), picked],
+        &[&all.runs(), &own.runs(), &member.runs(), picked],
     )?;
-    let effort = own.effort.or(all.effort).or_else(|| profile.effort.clone());
+    let effort = member
+        .effort
+        .or(own.effort)
+        .or(all.effort)
+        .or_else(|| profile.effort.clone());
     Ok((cli, model, effort))
+}
+
+/// What a Member names for its Worker's CLI, model and effort.
+pub fn member_choice(member: &crate::team::Member) -> crate::team::Choice {
+    crate::team::Choice {
+        cli: member.cli.clone(),
+        model: member.model.clone(),
+        effort: member.effort.clone(),
+    }
 }
 
 /// What a Worker starts with, whatever its CLI; `picked` is the CLI and model already picked for it.
@@ -607,6 +623,17 @@ mod tests {
         profile: &str,
         picked: (Option<&str>, Option<&str>),
     ) -> Result<(Cli, Option<String>, Option<String>)> {
+        resolved_as(settings, team, profile, None, picked)
+    }
+
+    /// As `resolved`, for a Worker started as the Member `member` of the Team.
+    fn resolved_as(
+        settings: &str,
+        team: Option<&str>,
+        profile: &str,
+        member: Option<&str>,
+        picked: (Option<&str>, Option<&str>),
+    ) -> Result<(Cli, Option<String>, Option<String>)> {
         static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let state = std::env::temp_dir().join(format!("hub-profile-resolve-{}-{n}", std::process::id()));
@@ -615,11 +642,16 @@ mod tests {
         let mut found = parse("naruto", NARUTO).unwrap();
         found.name = profile.to_string();
         let team = team.map(|text| crate::team::parse(text).unwrap());
+        let member = member.map(|id| {
+            team.as_ref()
+                .and_then(|team| team.members.iter().find(|m| m.id == id))
+                .unwrap_or_else(|| panic!("no Member {id}"))
+        });
         let picked = crate::cli::Choice {
             cli: picked.0.map(String::from),
             model: picked.1.map(String::from),
         };
-        let resolved = resolve(&state, None, &found, team.as_ref(), &picked);
+        let resolved = resolve(&state, None, &found, team.as_ref(), member, &picked);
         let _ = std::fs::remove_dir_all(&state);
         resolved
     }
@@ -771,6 +803,171 @@ mod tests {
     fn a_pair_the_teams_cli_cannot_run_is_an_error() {
         let team = r#"{"workers": {"cli": "kiro", "model": "anthropic/claude-haiku-5-5"}}"#;
         let error = resolved("{}", Some(team), "naruto", (None, None)).unwrap_err();
+        assert!(error.to_string().contains("kiro runs its own model ids"), "{error}");
+    }
+
+    /// A Team with Workers entries and Members for naruto: `build` names a model and an effort,
+    /// `plain` names nothing, `swap` names a CLI with its model, `mine` names a model alone.
+    const MEMBERS: &str = r#"{"workers": {"model": "claude-haiku-5-5", "effort": "low",
+        "profiles": {"naruto": {"model": "claude-opus-5-5", "effort": "max"}}},
+        "members": [
+            {"id": "build", "action": "execute", "profile": "naruto", "model": "claude-fable-5-1", "effort": "medium"},
+            {"id": "plain", "action": "execute", "profile": "naruto"},
+            {"id": "swap", "action": "execute", "profile": "naruto", "cli": "kiro", "model": "claude-sonnet-5.5"},
+            {"id": "mine", "action": "execute", "profile": "naruto", "model": "claude-haiku-5-5"}]}"#;
+
+    #[test]
+    fn every_step_of_the_order_for_a_member() {
+        let sonnet = "claude-sonnet-5-5";
+        let no_entry = r#"{"workers": {"model": "claude-haiku-5-5", "effort": "low"},
+            "members": [{"id": "plain", "action": "execute", "profile": "naruto"},
+                        {"id": "build", "action": "execute", "profile": "naruto", "model": "claude-fable-5-1"}]}"#;
+        let only_members = r#"{"members": [{"id": "build", "action": "execute", "profile": "naruto",
+            "model": "claude-fable-5-1", "effort": "medium"}]}"#;
+        let none = (None, None);
+        let cases: [(&str, &str, &str, &str, (Option<&str>, Option<&str>), _); 10] = [
+            (
+                "a Member's model and effort over the Team's entry for its Profile",
+                MEMBERS,
+                "naruto",
+                "build",
+                none,
+                runs(Cli::Claude, "claude-fable-5-1", "medium"),
+            ),
+            (
+                "a Member naming nothing leaves the Team's entry for its Profile",
+                MEMBERS,
+                "naruto",
+                "plain",
+                none,
+                runs(Cli::Claude, "claude-opus-5-5", "max"),
+            ),
+            (
+                "a Member's model alone leaves the Team's effort",
+                MEMBERS,
+                "naruto",
+                "mine",
+                none,
+                runs(Cli::Claude, "claude-haiku-5-5", "max"),
+            ),
+            (
+                "a Member's cli carries its model",
+                MEMBERS,
+                "naruto",
+                "swap",
+                none,
+                runs(Cli::Kiro, "claude-sonnet-5.5", "max"),
+            ),
+            (
+                "picked over the Member, field by field",
+                MEMBERS,
+                "naruto",
+                "build",
+                (None, Some("claude-opus-5-5")),
+                runs(Cli::Claude, "claude-opus-5-5", "medium"),
+            ),
+            (
+                "picked cli and model over a Member's",
+                MEMBERS,
+                "naruto",
+                "swap",
+                (Some("claude"), Some("claude-opus-5-5")),
+                runs(Cli::Claude, "claude-opus-5-5", "max"),
+            ),
+            (
+                "no Profile entry: a Member over the Team's workers",
+                no_entry,
+                "naruto",
+                "build",
+                none,
+                runs(Cli::Claude, "claude-fable-5-1", "low"),
+            ),
+            (
+                "no Profile entry, a Member naming nothing: the Team's workers",
+                no_entry,
+                "naruto",
+                "plain",
+                none,
+                runs(Cli::Claude, "claude-haiku-5-5", "low"),
+            ),
+            (
+                "no Workers entries: a Member over the Profile",
+                only_members,
+                "naruto",
+                "build",
+                none,
+                runs(Cli::Claude, "claude-fable-5-1", "medium"),
+            ),
+            (
+                "a Member over a Profile that is not naruto",
+                only_members,
+                "lee",
+                "build",
+                none,
+                runs(Cli::Claude, "claude-fable-5-1", "medium"),
+            ),
+        ];
+        for (what, team, profile, member, picked, want) in cases {
+            assert_eq!(
+                resolved_as("{}", Some(team), profile, Some(member), picked).unwrap(),
+                want,
+                "{what}"
+            );
+        }
+        assert_eq!(
+            resolved_as("{}", Some(MEMBERS), "naruto", None, none).unwrap(),
+            runs(Cli::Claude, "claude-opus-5-5", "max"),
+            "no Member: the order of features/0081"
+        );
+    }
+
+    #[test]
+    fn forcecli_gives_way_to_a_member_and_applies_where_the_team_names_nothing() {
+        let force = r#"{"cli": "kiro", "model": "claude-haiku-5.5", "forceCli": true}"#;
+        let kiro = |model: &str, effort: &str| runs(Cli::Kiro, model, effort);
+        let team = r#"{"members": [
+            {"id": "build", "action": "execute", "profile": "naruto", "model": "claude-sonnet-5.5", "effort": "low"},
+            {"id": "own-cli", "action": "execute", "profile": "naruto", "cli": "claude", "model": "claude-opus-5-5"},
+            {"id": "effort", "action": "execute", "profile": "naruto", "effort": "medium"},
+            {"id": "plain", "action": "execute", "profile": "naruto"}]}"#;
+        let cases: [(&str, Option<&str>, _); 5] = [
+            (
+                "a Member's model beats the forced one, the forced cli stays",
+                Some("build"),
+                kiro("claude-sonnet-5.5", "low"),
+            ),
+            (
+                "a Member's cli and model beat the forced ones",
+                Some("own-cli"),
+                runs(Cli::Claude, "claude-opus-5-5", "high"),
+            ),
+            (
+                "a Member's effort alone leaves cli and model to force",
+                Some("effort"),
+                kiro("claude-haiku-5.5", "medium"),
+            ),
+            (
+                "a Member naming nothing leaves everything to force",
+                Some("plain"),
+                kiro("claude-haiku-5.5", "high"),
+            ),
+            ("no Member: force applies", None, kiro("claude-haiku-5.5", "high")),
+        ];
+        for (what, member, want) in cases {
+            let team = member.map(|_| team).or(Some("{}"));
+            assert_eq!(
+                resolved_as(force, team, "naruto", member, (None, None)).unwrap(),
+                want,
+                "{what}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pair_a_member_cannot_run_is_an_error() {
+        let team = r#"{"members": [{"id": "build", "action": "execute", "profile": "naruto",
+            "cli": "kiro", "model": "anthropic/claude-haiku-5-5"}]}"#;
+        let error = resolved_as("{}", Some(team), "naruto", Some("build"), (None, None)).unwrap_err();
         assert!(error.to_string().contains("kiro runs its own model ids"), "{error}");
     }
 }

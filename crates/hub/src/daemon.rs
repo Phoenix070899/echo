@@ -384,6 +384,13 @@ fn timeout_param(params: &Value, default: Duration) -> Duration {
         .unwrap_or(default)
 }
 
+/// The Member a Worker started as, in its Team as it is now; none when it started from no Member
+/// or the Team has since lost it, which leaves the Worker to its Profile (features/0085).
+fn stored_member<'a>(team: Option<&'a team::Team>, worker: &Worker) -> Option<&'a team::Member> {
+    let id = worker.member.as_deref()?;
+    team?.members.iter().find(|member| member.id == id)
+}
+
 /// The first line of the spec, without a Markdown heading or a "Task:" label.
 pub fn title_from_spec(spec: &str) -> String {
     let first = spec
@@ -474,13 +481,17 @@ impl Hub {
     }
 
     /// What names a Worker's CLI, lowest first: its Orchestrator's Team for all Workers and for its
-    /// Profile (as of now, when readable), then what was picked for it.
+    /// Profile, then its Member (as of now, when readable), then what was picked for it.
     fn worker_choices(&self, worker: &Worker) -> Vec<cli::Choice> {
         let team = self.worker_team(&self.db(), worker.agent_id).ok().flatten();
+        let member = stored_member(team.as_ref(), worker)
+            .map(profile::member_choice)
+            .unwrap_or_default();
         let (all, own) = team.map(|team| team.worker_levels(&worker.profile)).unwrap_or_default();
         vec![
             all.runs(),
             own.runs(),
+            member.runs(),
             cli::Choice {
                 cli: worker.cli.clone(),
                 model: worker.model.clone(),
@@ -1579,7 +1590,8 @@ impl Hub {
                             continue;
                         }
                     };
-                    let resolved = profile::resolve(&state, repo.as_deref(), p, team.as_ref(), &cli::Choice::default());
+                    let resolved =
+                        profile::resolve(&state, repo.as_deref(), p, team.as_ref(), None, &cli::Choice::default());
                     let (cli, model, effort, problem) = match resolved {
                         Ok((cli, model, effort)) => (cli.name().to_string(), model, effort, None),
                         Err(e) => (
@@ -1942,7 +1954,8 @@ impl Hub {
     }
 
     /// A Worker's Profile, with the effort picked for it, and the CLI and model picked for it. Its
-    /// Orchestrator's Team is read now, so an edited Team applies at a resume (features/0081).
+    /// Orchestrator's Team is read now, so an edited Team applies at a resume (features/0081); a
+    /// Member the Team no longer has leaves the Profile's own resolution (features/0085).
     fn pick_for(&self, worker: &Worker) -> Result<(profile::Profile, cli::Cli, Option<String>)> {
         let repo = Path::new(&worker.repo);
         let mut profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(repo), &worker.profile)?;
@@ -1951,8 +1964,15 @@ impl Hub {
             cli: worker.cli.clone(),
             model: worker.model.clone(),
         };
-        let (worker_cli, model, effort) =
-            profile::resolve(&paths::state_dir(), Some(repo), &profile, team.as_ref(), &picked)?;
+        let member = stored_member(team.as_ref(), worker);
+        let (worker_cli, model, effort) = profile::resolve(
+            &paths::state_dir(),
+            Some(repo),
+            &profile,
+            team.as_ref(),
+            member,
+            &picked,
+        )?;
         profile.effort = effort;
         Ok((profile, worker_cli, model))
     }
@@ -2056,8 +2076,7 @@ impl Hub {
     fn start_worker(self: &Arc<Self>, p: &Value) -> Result<Value> {
         // The repo's main checkout, as every other method keys it, whatever path names it.
         let repo_root = repo::root(Path::new(str_param(p, "repo")?))?;
-        let profile_name = str_param(p, "profile")?;
-        let profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(&repo_root), profile_name)?;
+        let name = str_param(p, "profile")?;
         let picked = |key: &str| {
             p.get(key)
                 .and_then(Value::as_str)
@@ -2073,11 +2092,22 @@ impl Hub {
             Some(agent) => Some(agent),
             None => db::first_orchestrator(&self.db(), &repo_root.display().to_string())?.map(|a| a.id),
         };
-        // A CLI or model that cannot run (the Orchestrator's Team included), or a Kiro Worker without
-        // its notes, fails here, before a worktree is made for it.
+        // The name is a Member of its Orchestrator's Team (its id, else the first one using that
+        // Profile), else a Profile (features/0085).
         let team = self.worker_team(&self.db(), agent)?;
-        let (worker_cli, _, _) =
-            profile::resolve(&paths::state_dir(), Some(&repo_root), &profile, team.as_ref(), &runs)?;
+        let member = team.as_ref().and_then(|team| team.member_for(name));
+        let profile_name = member.map_or(name, |member| member.profile.as_str());
+        let profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(&repo_root), profile_name)?;
+        // A CLI or model that cannot run (the Orchestrator's Team and its Member included), or a Kiro
+        // Worker without its notes, fails here, before a worktree is made for it.
+        let (worker_cli, _, _) = profile::resolve(
+            &paths::state_dir(),
+            Some(&repo_root),
+            &profile,
+            team.as_ref(),
+            member,
+            &runs,
+        )?;
         worker_cli.check_worker_notes(&self.hub_dir)?;
         let spec = str_param(p, "spec")?;
         let title = match p.get("title").and_then(Value::as_str) {
@@ -2129,7 +2159,7 @@ impl Hub {
             &db::NewWorker {
                 repo: &repo_root.display().to_string(),
                 profile: profile_name,
-                member: None,
+                member: member.map(|member| member.id.as_str()),
                 title: &title,
                 spec,
                 cwd: &cwd.display().to_string(),
@@ -2175,7 +2205,8 @@ impl Hub {
             },
         )?;
         let view = json!({ "id": format!("w{id}"), "cwd": cwd, "branch": branch, "session_id": session_id,
-                           "title": title, "verify": worker.verify, "member": worker.member });
+                           "title": title, "verify": worker.verify, "member": worker.member,
+                           "profile": worker.profile });
         match started.as_deref() {
             Some(state::EXITED) => {
                 // Its terminal may be gone already; the exit message kept its last screen.
@@ -2817,6 +2848,7 @@ impl Hub {
                         Some(Path::new(&worker.repo)),
                         profile,
                         team.as_ref(),
+                        stored_member(team.as_ref(), &worker),
                         &choice,
                     )
                 })

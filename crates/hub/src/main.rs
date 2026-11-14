@@ -251,8 +251,11 @@ enum UiCommand {
 
 #[derive(Subcommand)]
 enum WorkerCommand {
-    /// Start a Worker from an Agent Profile on one Task.
+    /// Start a Worker on one Task: as a Member of your Team (its id, else the first Member that uses
+    /// that Profile), else from an Agent Profile.
     Start {
+        /// A Member id or a Profile name.
+        #[arg(value_name = "member-or-profile")]
         profile: String,
         #[arg(long, conflicts_with = "spec_file")]
         spec: Option<String>,
@@ -419,17 +422,23 @@ fn profile_command(command: ProfileCommand) -> Result<()> {
                 };
                 match &entry.profile {
                     Ok(p) => {
-                        let runs =
-                            match profile::resolve(&state, repo.as_deref(), p, team.as_ref(), &Default::default()) {
-                                Ok((cli, model, effort)) => {
-                                    let model = model.unwrap_or_else(|| "default".into());
-                                    match (&team, effort) {
-                                        (Some(_), Some(effort)) => format!("{} {model} {effort}", cli.name()),
-                                        _ => format!("{} {model}", cli.name()),
-                                    }
+                        let runs = match profile::resolve(
+                            &state,
+                            repo.as_deref(),
+                            p,
+                            team.as_ref(),
+                            None,
+                            &Default::default(),
+                        ) {
+                            Ok((cli, model, effort)) => {
+                                let model = model.unwrap_or_else(|| "default".into());
+                                match (&team, effort) {
+                                    (Some(_), Some(effort)) => format!("{} {model} {effort}", cli.name()),
+                                    _ => format!("{} {model}", cli.name()),
                                 }
-                                Err(e) => format!("cannot run: {e}"),
-                            };
+                            }
+                            Err(e) => format!("cannot run: {e}"),
+                        };
                         println!("{:width$}  {from:25}  {runs:32}  {}", entry.name, p.description)
                     }
                     Err(e) => println!("{:width$}  {from:25}  does not load: {e}", entry.name),
@@ -862,8 +871,14 @@ fn worker(command: WorkerCommand) -> Result<ExitCode> {
             if json {
                 print_json(&result)?;
             } else {
+                // As a Member it says which, and the Profile it started from.
+                let who = match (result["member"].as_str(), result["profile"].as_str()) {
+                    (Some(member), Some(from)) if member != from => format!("{member} from {from}"),
+                    (Some(member), _) => member.to_string(),
+                    _ => profile,
+                };
                 println!(
-                    "Started {} ({profile}: {}) in {}{}",
+                    "Started {} ({who}: {}) in {}{}",
                     result["id"].as_str().unwrap_or(""),
                     result["title"].as_str().unwrap_or(""),
                     result["cwd"].as_str().unwrap_or(""),
