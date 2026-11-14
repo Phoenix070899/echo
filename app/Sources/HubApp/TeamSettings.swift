@@ -154,31 +154,32 @@ final class TeamSettingsModel: ObservableObject {
         saved = form
     }
 
-    func newTeam() {
+    /// Shows `form`, a Team that has no file yet, with its tree and the Orchestrator picked.
+    /// Unsaved edits are asked about first (ui-ux/0103); the New Team sheet's Create comes here,
+    /// and `done` runs once the form is shown, not when the human cancels the ask.
+    func startNew(_ form: TeamForm, then done: @escaping @MainActor () -> Void = {}) {
         leave {
-            self.pane = .team
-            self.picked = nil
-            self.failure = nil
-            self.selectedMember = nil
-            self.memberNotice = nil
-            self.treeNotice = nil
-            self.form = TeamForm()
-            self.saved = self.form
+            self.show(unsaved: form)
+            done()
         }
     }
 
     func duplicate() {
         guard let team else { return }
-        leave {
-            self.pane = .team
-            self.picked = nil
-            self.failure = nil
-            self.selectedMember = nil
-            self.memberNotice = nil
-            self.treeNotice = nil
-            self.form = TeamForm(copying: team, taking: self.teams.map(\.name))
-            self.saved = TeamForm()
-        }
+        leave { self.show(unsaved: TeamForm(copying: team, taking: self.teams.map(\.name))) }
+    }
+
+    /// The Teams section shows `form` as a Team never saved: nothing is picked in the list, so
+    /// every field counts as changed until Save writes it.
+    private func show(unsaved form: TeamForm) {
+        pane = .team
+        picked = nil
+        failure = nil
+        selectedMember = nil
+        memberNotice = nil
+        treeNotice = nil
+        self.form = form
+        saved = TeamForm()
     }
 
     /// Writes the Team; `done` hears whether it was written, after the list has been read again.

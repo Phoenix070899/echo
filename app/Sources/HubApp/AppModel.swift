@@ -134,8 +134,10 @@ final class AppModel: ObservableObject {
     /// The Teams section's state, kept here so that its unsaved edits outlive the section's views
     /// and are asked about before Settings change or close (ui-ux/0103).
     let teamSettings = TeamSettingsModel()
+    /// The New Team sheet is up, over the Teams section.
+    @Published var newTeamShown = false
     /// While a modal is up, terminals hand it the keyboard.
-    var modalShown: Bool { teamSettings.asking || newSession != nil || renaming != nil || closing != nil || quickOpenShown || fanOutShown }
+    var modalShown: Bool { teamSettings.asking || newTeamShown || newSession != nil || renaming != nil || closing != nil || quickOpenShown || fanOutShown }
     /// Shrinks the ledger to a strip of status marks so the terminal takes almost the whole window.
     @Published var ledgerCollapsed = false
 

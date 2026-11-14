@@ -49,6 +49,8 @@ struct ContentView: View {
                     QuickOpen()
                 } else if model.fanOutShown {
                     FanOutModal()
+                } else if model.newTeamShown {
+                    NewTeamModal(teams: model.teamSettings)
                 }
                 // Asked while Settings change or close with a Team's edits not saved (ui-ux/0103).
                 UnsavedTeamModal(teams: model.teamSettings)

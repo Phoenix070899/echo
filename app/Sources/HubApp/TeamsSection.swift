@@ -49,6 +49,7 @@ struct TeamsSection: View {
 /// Defaults at the top, then the Teams the selected repo can use, each with where it
 /// comes from; New, Duplicate and Delete sit under the list.
 private struct TeamsList: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject var teams: TeamSettingsModel
 
     var body: some View {
@@ -75,7 +76,7 @@ private struct TeamsList: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Button("New Team", action: teams.newTeam)
+                    Button("New Team") { model.newTeamShown = true }
                     Button("Duplicate", action: teams.duplicate)
                         .disabled(teams.form.isNew || teams.team == nil)
                     Spacer(minLength: 0)

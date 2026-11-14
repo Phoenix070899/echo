@@ -96,8 +96,11 @@ struct SettingsPage: View {
         .onReceive(model.teamSettings.$asking) { asking in
             if !asking { DispatchQueue.main.async { focused = true } }
         }
+        .onReceive(model.$newTeamShown) { shown in
+            if !shown { DispatchQueue.main.async { focused = true } }
+        }
         .onKeyPress(.escape) {
-            guard !model.teamSettings.asking else { return .ignored }
+            guard !model.teamSettings.asking, !model.newTeamShown else { return .ignored }
             model.hideSettings()
             return .handled
         }
@@ -107,7 +110,8 @@ struct SettingsPage: View {
         // the page never sees them; the guard keeps the page out even if one is ignored (ui-ux/0102).
         .onKeyPress(keys: [.upArrow, .downArrow]) { press in
             let teams = model.teamSettings
-            guard SettingsKeys.pageTakesUpDown(treeFocused: teams.treeFocused, asking: teams.asking,
+            guard SettingsKeys.pageTakesUpDown(treeFocused: teams.treeFocused,
+                                               asking: teams.asking || model.newTeamShown,
                                                hasModifiers: !press.modifiers.isEmpty) else { return .ignored }
             let all = SettingsSection.allCases
             let at = all.firstIndex(of: section) ?? 0
@@ -120,7 +124,8 @@ struct SettingsPage: View {
         .onKeyPress(keys: [.rightArrow]) { press in
             let teams = model.teamSettings
             guard focused, SettingsKeys.pageEntersTree(treeShown: section == .teams && teams.pane == .team,
-                                              treeFocused: teams.treeFocused, asking: teams.asking,
+                                              treeFocused: teams.treeFocused,
+                                              asking: teams.asking || model.newTeamShown,
                                               hasModifiers: !press.modifiers.isEmpty) else { return .ignored }
             teams.treeFocusRequest += 1
             return .handled
