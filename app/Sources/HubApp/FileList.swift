@@ -92,19 +92,14 @@ final class FileListView: NSView, NSViewToolTipOwner {
         self.typeable = typeable
         guard changed || moved else { return }
         if root != self.root { hovered = nil }
-        let before = cursorIndex
         self.rows = rows
         self.root = root
         self.cursor = cursor
         self.look = look
         fit(width: frame.width)
         placeFills()
-        if changed {
-            text.needsDisplay = true
-        } else {
-            // Only the marker moved: redraw the rows it left and reached.
-            for index in [before, cursorIndex].compactMap({ $0 }) { text.setNeedsDisplay(rect(of: index)) }
-        }
+        // A cursor that only moved is drawn by its fill; the rows stay (ui-ux/0135).
+        if changed { text.needsDisplay = true }
         if moved, let index = cursorIndex { scrollToVisible(rect(of: index)) }
         accessibilityRows = nil
     }
@@ -147,20 +142,16 @@ final class FileListView: NSView, NSViewToolTipOwner {
         let first = max(0, Int(floor((dirtyRect.minY - Self.margin) / Self.rowHeight)))
         let last = min(rows.count - 1, Int(floor((dirtyRect.maxY - Self.margin) / Self.rowHeight)))
         guard first <= last else { return }
-        for index in first...last { draw(rows[index], in: rect(of: index), hovered: index == hovered) }
+        for index in first...last { draw(rows[index], in: rect(of: index)) }
     }
 
     private static let name = Ledger.nsFont(13)
     private static let markFont = Ledger.nsMono(11, .bold)
     private static let chevronFont = Ledger.nsMono(11)
 
-    private func draw(_ row: FileListRow, in rect: NSRect, hovered: Bool) {
+    private func draw(_ row: FileListRow, in rect: NSRect) {
         let entry = row.entry
         let ink3 = NSColor(Ledger.ink3)
-        // A small square at the row's leading edge: the accent on the cursor's row and the hovered
-        // one, grey on the others; no vertical line (ui-ux/0124, ui-ux/0127).
-        NSColor(entry.path == cursor || hovered ? Ledger.accent : Ledger.square).setFill()
-        NSRect(x: rect.minX + 3, y: rect.midY - 3, width: 6, height: 6).fill()
         // Foundry's tree: a mono ▸ or ▾ before a folder, no icons, 14 pt more for each level.
         var x = rect.minX + Self.inset + CGFloat(entry.depth) * 14
         if entry.isFolder {
@@ -225,10 +216,6 @@ final class FileListView: NSView, NSViewToolTipOwner {
 
     private func hover(_ index: Int?) {
         guard index != hovered else { return }
-        // The square of the row left and of the row reached changes colour.
-        for old in [hovered, index].compactMap({ $0 }) where rows.indices.contains(old) {
-            text.setNeedsDisplay(rect(of: old))
-        }
         hovered = index
         placeFills()
         removeAllToolTips()
