@@ -125,8 +125,8 @@ private struct TeamsList: View {
 }
 
 /// An entry in the list: the name in bold over its one line of description, over a 1 pt rule; the
-/// picked one on the sheet's grey with the accent square beside its name (ui-ux/0126), a square
-/// accent dot while it has edits not saved, and its problem in red under it where it has one.
+/// picked one on the sheet's grey with no square (ui-ux/0132), a square accent dot while it has
+/// edits not saved, and its problem in red under it where it has one.
 private struct TeamRow: View {
     let name: String
     let about: String?
@@ -170,10 +170,8 @@ private struct TeamRow: View {
             .padding(.trailing, 12)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Hovered, only the fill changes; the picked Team alone has its square, 4 pt in and 18 pt
-            // down, on the name's line (ui-ux/0126, ui-ux/0127).
+            // The list has no squares, so picked or hovered only the fill changes (ui-ux/0132).
             .background(picked || hover.on ? Ledger.paper : .clear)
-            .overlay(alignment: .topLeading) { if picked { ListMarker(picked: true).offset(x: 4, y: 18) } }
             .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
             .contentShape(Rectangle())
         }

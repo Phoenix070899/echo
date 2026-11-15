@@ -352,11 +352,10 @@ struct DiffLineRow: View {
         .font(Ledger.monoFont(12))
         .padding(.vertical, 2)
         .padding(.trailing, 12)
+        // Diff lines have no squares, so the cursor's line shows by its fill alone: an added or
+        // removed line a shade darker (ui-ux/0132).
+        .background(marked && (line.kind == .added || line.kind == .removed) ? Ledger.ink.opacity(0.08) : .clear)
         .background(background)
-        // The cursor's line is marked by the accent square on its first line (ui-ux/0124).
-        .overlay(alignment: .topLeading) {
-            if marked { ListMarker(picked: true).padding(.leading, 3).padding(.top, 7) }
-        }
         .contentShape(Rectangle())
         .onHover { hover.on = $0 }
         .onTapGesture(perform: comment)

@@ -130,8 +130,7 @@ struct SettingsPage: View {
 }
 
 /// A section in the list (ui-ux/0120): its number in mono and its name, 44 pt tall over a 1 pt rule;
-/// the picked one in ink and bold on the sheet's grey. A small square at its leading edge marks it:
-/// the accent on the picked one, grey on the others (ui-ux/0124).
+/// the picked one in ink and bold on the sheet's grey; no row has a square (ui-ux/0132).
 private struct SectionRow: View {
     let item: SettingsSection
     let picked: Bool
@@ -157,8 +156,7 @@ private struct SectionRow: View {
             .frame(minHeight: 44)
             .frame(maxWidth: .infinity)
             .background(picked || hover.on ? Ledger.paper : .clear)
-            // Only the picked section is marked (ui-ux/0126).
-            .overlay(alignment: .leading) { if picked { ListMarker(picked: true).padding(.leading, 4) } }
+            // The list has no squares, so the picked section shows by its fill alone (ui-ux/0132).
             .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
             .contentShape(Rectangle())
         }
