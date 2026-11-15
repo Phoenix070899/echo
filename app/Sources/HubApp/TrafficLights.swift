@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import SwiftUI
 
 /// Moves the window's traffic lights down so they sit centred in Echo's taller top bar, where a

@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import HubCore
 import SwiftUI
 

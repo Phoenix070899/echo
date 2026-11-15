@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -21,6 +22,11 @@ struct FilesColumn: View {
     }
 }
 
+/// The row a right click in the tree opened its menu for.
+private final class MenuEntry: ObservableObject {
+    var value: FileEntry?
+}
+
 private struct FilesTree: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var files: CheckoutFiles
@@ -32,6 +38,9 @@ private struct FilesTree: View {
     @StateObject private var search = Draft()
     /// Kept while another tab shows, so coming back does not start empty.
     @StateObject private var commits = CommitsState()
+    /// The row a right click opened the menu for, and where.
+    @StateObject private var pointerMenu = PointerMenuState()
+    @StateObject private var menuEntry = MenuEntry()
 
     private var rows: [FileEntry] { files.tree.rows(open: model.openFolders(root)) }
     private var cursor: String? { model.fileCursor[root] }
@@ -79,11 +88,19 @@ private struct FilesTree: View {
             ZStack {
                 FileList(rows: rows.map { FileListRow(entry: $0, mark: mark($0), ignored: files.tree.isIgnored($0.path),
                                                       open: open.contains($0.path)) },
-                         root: root, cursor: cursor, typeable: model.terminalTypeable) { entry in
+                         root: root, cursor: cursor) { entry in
                     focused = true
                     activate(entry)
+                } menu: { entry, point in
+                    menuEntry.value = entry
+                    pointerMenu.at = point
                 }
             }
+                .foundryPointerMenu(pointerMenu, label: menuEntry.value?.path ?? "File") {
+                    guard let entry = menuEntry.value else { return [] }
+                    return FileActions.entries(FileRef(root: root, path: entry.path), folder: entry.isFolder,
+                                               typeable: model.terminalTypeable)
+                }
                 .focusable()
                 .focused($focused)
                 .focusEffectDisabled()
@@ -845,11 +862,11 @@ private struct CommitRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: click)
         .onHover { hover.on = $0 }
-        .contextMenu {
-            Button("Copy Hash") {
+        .foundryContextMenu(label: commit.short) {
+            [.item("Copy Hash") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(commit.hash, forType: .string)
-            }
+            }]
         }
         .help("\(commit.short) \(commit.subject)")
         .accessibilityElement(children: .combine)
@@ -899,14 +916,8 @@ private struct ChangedFileRow: View {
         .onTapGesture(perform: click)
         .onHover { hover.on = $0 }
         .onDrag { NSItemProvider(object: ref.url as NSURL) }
-        .contextMenu {
-            Button("Preview") { model.preview = ref }
-            Button("Insert into Terminal") { model.insertMention(ref) }
-                .disabled(!model.terminalTypeable)
-            Button("Open") { model.openInEditor(ref) }
-            Divider()
-            Button("Reveal in Finder") { model.revealInFinder(ref) }
-            Button("Copy Path") { model.copyPath(ref) }
+        .foundryContextMenu(label: file.path) {
+            FileActions.entries(ref, folder: false, typeable: model.terminalTypeable)
         }
         .help(file.path)
         .accessibilityElement(children: .combine)

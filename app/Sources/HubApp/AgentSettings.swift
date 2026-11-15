@@ -1,3 +1,4 @@
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -81,9 +82,8 @@ struct DefaultsSettings: View {
                     .onSubmit { agents.set("model", agents.model.trimmingCharacters(in: .whitespaces)) }
             }
             SettingsRow("Every agent") {
-                Toggle("Use for every agent", isOn: Binding(
+                Checkbox("Use for every agent", isOn: Binding(
                     get: { agents.settings?.forceCli ?? false }, set: { agents.set("forceCli", $0) }))
-                    .toggleStyle(.square)
                 SettingsNote("Every agent's default. A repo's .echo/settings.json comes first. When off, a Profile's own CLI and model come first; when on, every agent runs this CLI and model. Name models as provider/model, like openai/gpt-5.6-terra; Kiro takes its own ids, like claude-sonnet-5.5.")
             }
         }
@@ -105,14 +105,13 @@ struct OrchestratorSettings: View {
                 }
                 SettingsRow("Rules") {
                     Group {
-                        Toggle("Wait for my go before Tasks that write code", isOn: Binding(
+                        Checkbox("Wait for my go before Tasks that write code", isOn: Binding(
                             get: { rules.planApproval }, set: { agents.set("planApproval", $0) }))
-                        Toggle("Have sasuke review each writing Worker", isOn: Binding(
+                        Checkbox("Have sasuke review each writing Worker", isOn: Binding(
                             get: { rules.review }, set: { agents.set("review", $0) }))
-                        Toggle("Merge verified branches without asking", isOn: Binding(
+                        Checkbox("Merge verified branches without asking", isOn: Binding(
                             get: { rules.mergeWithoutAsking }, set: { agents.set("mergeWithoutAsking", $0) }))
                     }
-                    .toggleStyle(.square)
                     SettingsNote("Applies to Orchestrators started or resumed after a change. Anything else you want them to do goes in your Preferences: tell an Orchestrator.")
                 }
             }

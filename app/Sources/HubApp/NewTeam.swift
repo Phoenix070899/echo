@@ -1,3 +1,4 @@
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -125,13 +126,9 @@ struct NewTeamModal: View {
                     Text("Copy of")
                         .font(Ledger.font(12.5, .semibold))
                         .foregroundStyle(Ledger.ink2)
-                    Picker("Copy of", selection: copySource) {
-                        ForEach(teams.teams) { team in
-                            Text("\(team.name), \(team.origin)").tag(team.name)
-                        }
-                    }
-                    .labelsHidden()
-                    .fixedSize()
+                    SquarePicker(selection: copySource, options: teams.teams.map { ($0.name, "\($0.name), \($0.origin)") },
+                                 weight: .inspector, label: "Copy of")
+                        .frame(maxWidth: 320)
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 10)

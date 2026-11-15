@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -92,9 +93,9 @@ struct NewSessionModal: View {
                                     TeamPicker(form: form)
                                 } else {
                                     MonoLabel("Model")
-                                    FieldMenu(title: form.model.isEmpty ? "Default model" : form.model) {
-                                        ForEach(AppModel.models, id: \.self) { name in
-                                            Button(name.isEmpty ? "Default model" : name) { form.model = name }
+                                    FieldMenu(title: form.model.isEmpty ? "Default model" : form.model, label: "Model") {
+                                        AppModel.models.map { name in
+                                            .item(name.isEmpty ? "Default model" : name, checked: name == form.model) { form.model = name }
                                         }
                                     }
                                 }
@@ -330,9 +331,9 @@ struct TeamPicker: View {
     @ObservedObject var form: NewSessionForm
 
     var body: some View {
-        FieldMenu(title: form.team ?? "No Teams yet") {
-            ForEach(form.teams) { team in
-                Button(team.name) { form.team = team.name }.disabled(!team.usable)
+        FieldMenu(title: form.team ?? "No Teams yet", label: "Team") {
+            form.teams.map { team in
+                .item(team.name, checked: team.name == form.team, enabled: team.usable) { form.team = team.name }
             }
         }
         .disabled(form.teams.isEmpty)
@@ -340,15 +341,14 @@ struct TeamPicker: View {
 }
 
 /// A menu drawn as Foundry's field: the choice in a 38 pt box in a 1 pt rule, with a chevron.
-struct FieldMenu<Items: View>: View {
+struct FieldMenu: View {
     let title: String
-    @ViewBuilder var items: () -> Items
+    let label: String
+    let entries: () -> [FoundryMenuEntry]
     @StateObject private var hover = Flag()
 
     var body: some View {
-        Menu {
-            items()
-        } label: {
+        MenuButton(label: label, entries: entries) {
             HStack(spacing: 8) {
                 Text(title).font(Ledger.font(14)).foregroundStyle(Ledger.ink).lineLimit(1)
                 Spacer(minLength: 4)
@@ -360,9 +360,7 @@ struct FieldMenu<Items: View>: View {
             .overlay(Rectangle().strokeBorder(Ledger.ink3, lineWidth: Ledger.hairline))
             .contentShape(Rectangle())
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .onHover { hover.on = $0 }
     }
 }

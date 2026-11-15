@@ -1,5 +1,6 @@
 import CoreServices
 import Foundation
+import Foundry
 import HubCore
 
 /// The files of one checkout (the repo's, or an agent's or Worker's worktree) as the Files column

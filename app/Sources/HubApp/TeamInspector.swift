@@ -1,3 +1,4 @@
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -88,10 +89,9 @@ private struct MemberRole: View {
                 .labelsHidden()
                 .lineLimit(3...12)
                 .squareField(.inspector)
-            Toggle("Replace the role", isOn: Binding(
+            Checkbox("Replace the role", isOn: Binding(
                 get: { member.replaceRole ?? false },
-                set: { on in teams.form.updateMember(member.id) { $0.replaceRole = on ? true : nil } }))
-                .toggleStyle(SquareToggleStyle(size: 14))
+                set: { on in teams.form.updateMember(member.id) { $0.replaceRole = on ? true : nil } }), size: 14)
                 .disabled(!member.isSet(.instructions) && member.replaceRole != true)
             SourceLine(text: member.instructionNote(roleOf: member.profile),
                        reset: member.isSet(.instructions) ? { teams.form.clearMember(member.id, .instructions) } : nil)
@@ -156,12 +156,11 @@ private struct MemberToolList: View {
             LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
                       alignment: .leading, spacing: 10) {
                 ForEach(MemberTools.all, id: \.self) { tool in
-                    Toggle(tool, isOn: Binding(
+                    Checkbox(tool, isOn: Binding(
                         get: { tools.value.contains(tool) },
                         set: { on in
                             teams.form.updateMember(member.id) { $0.tools = MemberTools.toggled(tools.value, tool, on: on) }
-                        }))
-                        .toggleStyle(SquareToggleStyle(size: 13))
+                        }), size: 13)
                 }
             }
             SourceLine(text: tools.isOwn || !tools.value.isEmpty ? tools.sourceText : "none named, \(tools.sourceText)",
@@ -217,20 +216,18 @@ private struct MemberChoices: View {
         let worktree = member.worktreeValue()
         InspectorGroup("Other choices") {
             VStack(alignment: .leading, spacing: 6) {
-                Toggle("Give it this repo's Lessons", isOn: Binding(
+                Checkbox("Give it this repo's Lessons", isOn: Binding(
                     get: { lessons.value },
-                    set: { on in teams.form.updateMember(member.id) { $0.lessons = on ? nil : false } }))
-                    .toggleStyle(SquareToggleStyle(size: 14))
+                    set: { on in teams.form.updateMember(member.id) { $0.lessons = on ? nil : false } }), size: 14)
                 SourceLine(text: lessons.sourceText, reset: lessons.isOwn ? { teams.form.clearMember(member.id, .lessons) } : nil)
             }
             VStack(alignment: .leading, spacing: 6) {
-                Toggle("Writes files", isOn: Binding(
+                Checkbox("Writes files", isOn: Binding(
                     get: { writes.value },
                     set: { on in
                         let inherited = profile?.writes ?? false
                         teams.form.updateMember(member.id) { $0.writes = on == inherited ? nil : on }
-                    }))
-                    .toggleStyle(SquareToggleStyle(size: 14))
+                    }), size: 14)
                 SourceLine(text: "\(writes.sourceText); only tells the Orchestrator what to expect",
                            reset: writes.isOwn ? { teams.form.clearMember(member.id, .writes) } : nil)
             }

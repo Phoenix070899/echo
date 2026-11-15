@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -18,9 +19,9 @@ struct FileList: NSViewRepresentable {
     let rows: [FileListRow]
     let root: String
     let cursor: String?
-    /// A terminal shows that a mention can be typed into.
-    let typeable: Bool
     let click: (FileEntry) -> Void
+    /// A right click on a row: the row and the point in this view, for its Foundry menu (ui-ux/0141).
+    let menu: (FileEntry, CGPoint) -> Void
 
     func makeNSView(context: Context) -> FileListScrollView { FileListScrollView() }
 
@@ -28,7 +29,8 @@ struct FileList: NSViewRepresentable {
         scroll.appearance = NSAppearance(named: context.environment.colorScheme == .dark ? .darkAqua : .aqua)
         let list = scroll.list
         list.click = click
-        list.update(rows: rows, root: root, cursor: cursor, typeable: typeable, look: Ledger.custom)
+        list.rightClick = menu
+        list.update(rows: rows, root: root, cursor: cursor, look: Ledger.custom)
     }
 }
 
@@ -60,10 +62,10 @@ final class FileListView: NSView, NSViewToolTipOwner {
     private static let inset: CGFloat = 12
 
     var click: ((FileEntry) -> Void)?
+    var rightClick: ((FileEntry, CGPoint) -> Void)?
     private(set) var rows: [FileListRow] = []
     private var root = ""
     private var cursor: String?
-    private var typeable = false
     private var look: CustomLook?
     private var hovered: Int?
     private var pressed: (row: Int, at: NSPoint)?
@@ -86,10 +88,9 @@ final class FileListView: NSView, NSViewToolTipOwner {
 
     override var isFlipped: Bool { true }
 
-    func update(rows: [FileListRow], root: String, cursor: String?, typeable: Bool, look: CustomLook?) {
+    func update(rows: [FileListRow], root: String, cursor: String?, look: CustomLook?) {
         let changed = rows != self.rows || root != self.root || look != self.look
         let moved = cursor != self.cursor
-        self.typeable = typeable
         guard changed || moved else { return }
         if root != self.root { hovered = nil }
         self.rows = rows
@@ -255,22 +256,13 @@ final class FileListView: NSView, NSViewToolTipOwner {
         beginDraggingSession(with: [item], event: event, source: self)
     }
 
+    /// A right click opens the row's Foundry menu, which SwiftUI draws, not an AppKit one.
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard let index = row(at: convert(event.locationInWindow, from: nil)) else { return nil }
-        let entry = rows[index].entry
-        let file = FileRef(root: root, path: entry.path)
-        let model = AppModel.shared
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        if !entry.isFolder {
-            menu.addItem(ActionItem("Preview") { model.preview = file })
-            menu.addItem(ActionItem("Insert into Terminal", enabled: typeable) { model.insertMention(file) })
-            menu.addItem(ActionItem("Open") { model.openInEditor(file) })
-            menu.addItem(.separator())
-        }
-        menu.addItem(ActionItem("Reveal in Finder") { model.revealInFinder(file) })
-        menu.addItem(ActionItem("Copy Path") { model.copyPath(file) })
-        return menu
+        guard let index = row(at: convert(event.locationInWindow, from: nil)),
+              let scroll = enclosingScrollView else { return nil }
+        let point = scroll.convert(event.locationInWindow, from: nil)
+        rightClick?(rows[index].entry, CGPoint(x: point.x, y: scroll.isFlipped ? point.y : scroll.bounds.height - point.y))
+        return nil
     }
 
     // MARK: Accessibility
@@ -348,18 +340,23 @@ extension FileListView: NSDraggingSource {
     }
 }
 
-/// A menu item that runs a closure.
-private final class ActionItem: NSMenuItem {
-    private let run: () -> Void
-
-    init(_ title: String, enabled: Bool = true, run: @escaping () -> Void) {
-        self.run = run
-        super.init(title: title, action: #selector(runAction), keyEquivalent: "")
-        target = self
-        isEnabled = enabled
+/// What a file's or folder's right-click menu offers, in the tree and in Changes.
+@MainActor
+enum FileActions {
+    static func entries(_ file: FileRef, folder: Bool, typeable: Bool) -> [FoundryMenuEntry] {
+        let model = AppModel.shared
+        var entries: [FoundryMenuEntry] = []
+        if !folder {
+            entries += [
+                .item("Preview") { model.preview = file },
+                .item("Insert into Terminal", enabled: typeable) { model.insertMention(file) },
+                .item("Open") { model.openInEditor(file) },
+                .rule,
+            ]
+        }
+        return entries + [
+            .item("Reveal in Finder") { model.revealInFinder(file) },
+            .item("Copy Path") { model.copyPath(file) },
+        ]
     }
-
-    required init(coder: NSCoder) { fatalError("ActionItem is built in code") }
-
-    @objc private func runAction() { run() }
 }

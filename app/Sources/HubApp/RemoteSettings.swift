@@ -1,5 +1,6 @@
 import AppKit
 import CoreImage.CIFilterBuiltins
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -10,18 +11,17 @@ struct RemoteSettings: View {
     var body: some View {
         SettingsGroup {
             SettingsRow("Echo Remote") {
-                Toggle("On", isOn: Binding(get: { remote.status?.enabled ?? false }, set: remote.turn))
-                    .toggleStyle(.square)
+                Checkbox("On", isOn: Binding(get: { remote.status?.enabled ?? false }, set: remote.turn))
                     .disabled(remote.status == nil || remote.busy)
                 if let line = remote.line {
                     SettingsNote(line.text, problem: line.problem)
                         .textSelection(.enabled)
                 }
                 if remote.status?.tailscale == "missing" {
-                    Link("Get Tailscale for this Mac and your phone", destination: URL(string: "https://tailscale.com/download")!)
-                        .font(Ledger.font(14, .semibold))
-                        .foregroundStyle(Ledger.ink)
-                        .underline(true, color: Ledger.accent)
+                    Button("Get Tailscale for this Mac and your phone") {
+                        NSWorkspace.shared.open(URL(string: "https://tailscale.com/download")!)
+                    }
+                    .buttonStyle(.ledgerLink)
                 }
             }
             if let status = remote.status, status.enabled, status.url != nil || status.tailscale == "test", let link = status.pairLink {
@@ -88,12 +88,9 @@ final class RemoteModel: ObservableObject {
     func turn(_ on: Bool) { run(on ? "remote.enable" : "remote.disable") }
 
     func confirmNewPairing() {
-        let alert = NSAlert()
-        alert.messageText = "Make a new pairing link?"
-        alert.informativeText = "Every phone paired now stops working until it scans the new code."
-        alert.addButton(withTitle: "New Link")
-        alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn { run("remote.pair") }
+        FoundryAsk.shared.confirm("Make a new pairing link?",
+                                  message: "Every phone paired now stops working until it scans the new code.",
+                                  answer: FoundryAnswer("New Link", role: .primary)) { self.run("remote.pair") }
     }
 
     private func run(_ method: String) {

@@ -1,3 +1,4 @@
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -51,13 +52,10 @@ struct FanOutModal: View {
                 Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 12) {
                     GridRow {
                         label("Profile")
-                        Picker("Profile", selection: $form.profile) {
-                            ForEach(form.profiles) { profile in
-                                Text("\(profile.name), \(profile.model)").tag(profile.name)
-                            }
-                        }
-                        .labelsHidden()
-                        .fixedSize()
+                        SquarePicker(selection: $form.profile,
+                                     options: form.profiles.map { ($0.name, "\($0.name), \($0.model)") },
+                                     weight: .inspector, label: "Profile")
+                            .frame(maxWidth: 320)
                     }
                     GridRow {
                         label("Tries")
@@ -257,7 +255,6 @@ struct TryColumn: View {
     /// The others are closed: there is nothing left to keep it over.
     let alone: Bool
     @StateObject private var diff = TryDiff()
-    @StateObject private var confirmKeep = Flag()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -292,7 +289,7 @@ struct TryColumn: View {
                 .buttonStyle(.ledger)
                 Spacer(minLength: 4)
                 if !alone {
-                    Button("Keep this one") { confirmKeep.on = true }
+                    Button("Keep this one", action: confirmKeep)
                         .buttonStyle(.ledgerPrimary)
                         .disabled(worker.isActive || worker.branch == nil)
                         .help(worker.isActive ? "\(worker.id) is still working. Keep it once it sends its Final Report." : "Merge \(worker.branch ?? "its branch") and close the other tries.")
@@ -307,11 +304,13 @@ struct TryColumn: View {
         .task(id: "\(worker.id) \(worker.phase) \(worker.progress ?? "")") {
             if !alone { await load() }
         }
-        .confirmationDialog("Keep \(worker.id) and merge \(worker.branch ?? "")?", isPresented: $confirmKeep.on) {
-            Button("Merge \(worker.id)") { model.keep(worker, repo: repo) }
-        } message: {
-            Text("Anything \(worker.id) left uncommitted is committed, then \(worker.branch ?? "its branch") is merged into the repo's current branch. The other tries close and their worktrees are removed, uncommitted work included; their branches stay.")
-        }
+    }
+
+    private func confirmKeep() {
+        FoundryAsk.shared.confirm(
+            "Keep \(worker.id) and merge \(worker.branch ?? "")?",
+            message: "Anything \(worker.id) left uncommitted is committed, then \(worker.branch ?? "its branch") is merged into the repo's current branch. The other tries close and their worktrees are removed, uncommitted work included; their branches stay.",
+            answer: FoundryAnswer("Merge \(worker.id)", role: .primary)) { model.keep(worker, repo: repo) }
     }
 
     @ViewBuilder

@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import HubCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -30,16 +31,22 @@ extension TeamSettingsModel {
                 newCustomWorker(under: parent?.id)
             }
         default:
-            var edit = TeamTreeEditing.apply(command, to: form.members, selected: selectedMember)
+            let edit = TeamTreeEditing.apply(command, to: form.members, selected: selectedMember)
             if let count = edit.asksToRemove, let id = selectedMember {
-                guard confirmRemoval(of: id, count: count) else { return }
-                edit = TeamTreeEditing.apply(command, to: form.members, selected: selectedMember, confirmed: true)
+                confirmRemoval(of: id, count: count) {
+                    self.apply(TeamTreeEditing.apply(command, to: self.form.members, selected: self.selectedMember, confirmed: true))
+                }
+                return
             }
-            form.members = edit.members
-            selectedMember = edit.selected
-            treeNotice = edit.notice
-            memberNotice = nil
+            apply(edit)
         }
+    }
+
+    private func apply(_ edit: TreeEdit) {
+        form.members = edit.members
+        selectedMember = edit.selected
+        treeNotice = edit.notice
+        memberNotice = nil
     }
 
     /// Why nothing can be dropped on Echo's own Teams.
@@ -88,15 +95,12 @@ extension TeamSettingsModel {
         memberNotice = nil
     }
 
-    /// Asks before a Member goes with the Members under it.
-    private func confirmRemoval(of id: String, count: Int) -> Bool {
+    /// Asks before a Member goes with the Members under it; `remove` runs on Remove.
+    private func confirmRemoval(of id: String, count: Int, remove: @escaping () -> Void) {
         let below = count - 1
-        let alert = NSAlert()
-        alert.messageText = "Remove \(id) and the \(below) \(below == 1 ? "Member" : "Members") under it?"
-        alert.informativeText = "They go from this Team's draft. Revert brings them back until you save."
-        alert.addButton(withTitle: "Remove")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
+        FoundryAsk.shared.confirm("Remove \(id) and the \(below) \(below == 1 ? "Member" : "Members") under it?",
+                                  message: "They go from this Team's draft. Revert brings them back until you save.",
+                                  answer: FoundryAnswer("Remove", role: .destructive), then: remove)
     }
 }
 
@@ -569,7 +573,7 @@ private struct MemberRow: View {
                 return NSItemProvider(object: DropPayload.member(id).text as NSString)
             }
             .onDrop(of: [.plainText], delegate: TreeDropDelegate(teams: teams, drag: drag, row: id))
-            .contextMenu { MoveToMenu(teams: teams, id: id) }
+            .foundryContextMenu(width: 320, label: "Move to") { MoveTo.entries(teams, id: id) }
     }
 }
 
@@ -820,21 +824,17 @@ enum AddEntries {
     }
 }
 
-/// "Move to…" in a row's context menu: the Members the Member may go under, and level 1. It does
+/// "Move to" in a row's right-click menu: the Members the Member may go under, and level 1. It does
 /// what a drop on a Member does, so a move never needs a drag (ui-ux/0008); the More menu under the
 /// tree has the same list for the picked Member.
-private struct MoveToMenu: View {
-    @ObservedObject var teams: TeamSettingsModel
-    let id: String
-
-    var body: some View {
-        let places = TeamTreeDrop.moveDestinations(of: id, in: teams.form.members)
-        Menu("Move to…") {
-            ForEach(places, id: \.self) { parent in
-                Button(Self.title(of: parent, in: teams.form)) { teams.move(id, under: parent) }
-            }
+@MainActor
+private enum MoveTo {
+    static func entries(_ teams: TeamSettingsModel, id: String) -> [FoundryMenuEntry] {
+        let places = teams.readOnly ? [] : TeamTreeDrop.moveDestinations(of: id, in: teams.form.members)
+        guard !places.isEmpty else { return [] }
+        return [.label("Move to")] + places.map { parent in
+            .item(title(of: parent, in: teams.form)) { teams.move(id, under: parent) }
         }
-        .disabled(teams.readOnly || places.isEmpty)
     }
 
     static func title(of parent: String?, in form: TeamForm) -> String {
@@ -955,7 +955,7 @@ private struct TreeBar: View {
         if !places.isEmpty {
             entries += [.rule, .label("Move to")]
             entries += places.map { parent in
-                .item(MoveToMenu.title(of: parent, in: teams.form)) { teams.move(id, under: parent) }
+                .item(MoveTo.title(of: parent, in: teams.form)) { teams.move(id, under: parent) }
             }
         }
         return FoundryMenu(label: "More", head: "Member", detail: teams.member.map { ActionLook.title(for: $0.action) },
