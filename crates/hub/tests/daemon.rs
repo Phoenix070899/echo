@@ -4072,3 +4072,50 @@ fn a_team_of_members_is_built_used_edited_and_resumed_end_to_end() {
     assert_eq!((&fallen["member"], &fallen["profile"]), (&"run".into(), &"lee".into()));
     assert_eq!(fallen["model"], lees_own, "the Profile's own choices: {fallen}");
 }
+
+#[test]
+fn a_worker_runs_on_echos_own_login_once_it_is_signed_in_and_on_the_humans_after_sign_out() {
+    let hub = Hub::new("accounts");
+    // The human's own config folders, so nothing of the real ones is linked or copied.
+    let human = |name: &str| hub.state.join(name).display().to_string();
+    let (claude, codex) = (human("human-claude"), human("human-codex"));
+    let out = hub.run_with(
+        &["providers"],
+        &[("CLAUDE_CONFIG_DIR", claude.as_str()), ("CODEX_HOME", codex.as_str())],
+    );
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let humans = format!("config: {claude} codex: {codex}");
+    hub.ok(&["worker", "start", "lee", "--spec", "account"]);
+    assert!(hub.wait().contains(&humans));
+    assert!(hub
+        .ok(&["providers"])
+        .contains("claude  your own login, human@example.com"));
+
+    // Settings' sign-in: the CLI's own login runs in a terminal, on Echo's config folder.
+    let mut stream = UnixStream::connect(hub.state.join("hubd.sock")).unwrap();
+    stream
+        .write_all(b"{\"method\":\"attach\",\"params\":{\"login\":\"claude\",\"rows\":30,\"cols\":100}}\n")
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(stream.try_clone().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert!(line.contains("\"ok\":true"), "{line}");
+    hub.eventually("Echo's own login", || {
+        hub.ok(&["providers"]).contains("Echo's own login, echo@example.com")
+    });
+    // Codex was not signed in to Echo, so it keeps the human's.
+    assert!(hub.ok(&["providers"]).contains("codex   your own login"));
+    let echo = hub.state.join("accounts/claude").display().to_string();
+    hub.ok(&["worker", "start", "lee", "--spec", "account"]);
+    let told = hub.wait();
+    assert!(told.contains(&format!("config: {echo} codex: {codex}")), "{told}");
+
+    let out = hub.call("providers.signout", serde_json::json!({ "cli": "claude" }));
+    assert_eq!(out["ok"], true, "{out}");
+    hub.ok(&["worker", "start", "lee", "--spec", "account"]);
+    assert!(hub.wait().contains(&humans));
+    // Kiro keeps one login for the Mac: Echo reads it and never signs it in.
+    let kiro = hub.call("attach", serde_json::json!({ "login": "kiro" }));
+    assert_eq!(kiro["ok"], false, "{kiro}");
+}
