@@ -25,7 +25,11 @@
       "id": "check",
       "action": "verify",
       "profile": "sasuke",
-      "parent": "build"
+      "after": [
+        {
+          "from": "build"
+        }
+      ]
     },
     {
       "id": "run",

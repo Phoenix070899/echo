@@ -69,6 +69,7 @@ Nothing is ever typed into your terminal; this listener is how you hear from Wor
   - `exited` or `lost`: the Worker's terminal is gone; resume it with `echoctl worker resume <w>` or report it under Needs you.
     When the body says it `ended`, the Worker finished its turn but skipped `echoctl done`: its last screen is its report, so check that against the acceptance like a Final Report.
   - `human`: the human already answered a question or a permission prompt in the Hub App. Treat it as done and reflect it; never answer or press it again.
+  - `handoff`: an automatic Hand-off of your Team did not start its Worker, often because you are at your Worker limit. Start that Member yourself when there is room, with the Task and Final Report the message names.
 - An empty result is a checkpoint: run `echoctl worker list` and restart the listener.
 - Never run a second listener, and never wait in the foreground while the human may be typing to you.
 

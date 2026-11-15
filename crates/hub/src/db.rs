@@ -39,6 +39,8 @@ pub mod kind {
     pub const LOST: &str = "lost";
     /// The human acted directly in the Hub App; the daemon tells the Orchestrator.
     pub const HUMAN: &str = "human";
+    /// An automatic Hand-off did not start its Worker; the Orchestrator decides (features/0093).
+    pub const HANDOFF: &str = "handoff";
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,6 +77,9 @@ pub struct Worker {
     pub verifies: Option<i64>,
     /// How many times a failed verification sent it back to fix its change.
     pub retries: i64,
+    /// For a Worker an automatic Hand-off started: the first Task of that chain.
+    #[serde(skip)]
+    pub chain_task: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -214,6 +219,10 @@ pub fn open(path: &Path) -> Result<Connection> {
              alter table workers add column retries integer not null default 0",
         )?;
     }
+    // The first Task of the chain of automatic Hand-offs a Worker was started by (features/0093).
+    if !has_column(&conn, "workers", "chain_task")? {
+        conn.execute_batch("alter table workers add column chain_task text")?;
+    }
     // A repo's one Orchestrator from before agents becomes its first agent, Workers and all.
     conn.execute_batch(
         "insert into agents (repo, kind, model, session_id, created_at)
@@ -241,7 +250,7 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
 
 const WORKER_COLUMNS: &str = "id, repo, profile, title, cwd, branch, session_id, state, final_report, \
                               created_at, settled_at, closed_at, last_message_at, agent_id, dismissed_at, fanout, cli, model, \
-                              keep, verify, verifies, retries, member";
+                              keep, verify, verifies, retries, member, chain_task";
 
 fn worker_row(row: &Row) -> rusqlite::Result<Worker> {
     Ok(Worker {
@@ -268,6 +277,7 @@ fn worker_row(row: &Row) -> rusqlite::Result<Worker> {
         verifies: row.get(20)?,
         retries: row.get(21)?,
         member: row.get(22)?,
+        chain_task: row.get(23)?,
     })
 }
 
@@ -338,6 +348,11 @@ pub fn set_worker_role(conn: &Connection, id: i64, keep: bool, verify: bool, ver
         "update workers set keep = ?2, verify = ?3, verifies = ?4 where id = ?1",
         params![id, keep, verify, verifies],
     )?;
+    Ok(())
+}
+
+pub fn set_chain_task(conn: &Connection, id: i64, task: &str) -> Result<()> {
+    conn.execute("update workers set chain_task = ?2 where id = ?1", params![id, task])?;
     Ok(())
 }
 
