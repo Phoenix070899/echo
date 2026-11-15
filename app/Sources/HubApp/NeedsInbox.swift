@@ -1,3 +1,4 @@
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -33,8 +34,8 @@ struct NeedItem: View {
         .overlay(Rectangle().strokeBorder(Ledger.accent, lineWidth: Ledger.ruleStrong))
         .disabled(draft.sent || !model.connected)
         .opacity(draft.sent ? 0.55 : 1)
-        .contextMenu {
-            Button("Open \(need.worker ?? need.title)", action: open)
+        .foundryContextMenu(label: need.title) {
+            [.item("Open \(need.worker ?? need.title)", action: open)]
         }
         .onAppear(perform: takeReplyFocus)
         .onChange(of: model.replyFocus) { takeReplyFocus() }
@@ -147,11 +148,6 @@ struct NeedItem: View {
         draft.sent = true
         model.reply(need, repo: repo, text: answer)
     }
-}
-
-/// One on/off bit of view state, for views that would otherwise need `@State`.
-final class Flag: ObservableObject {
-    @Published var on = false
 }
 
 final class Draft: ObservableObject {

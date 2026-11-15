@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import HubCore
 import SwiftUI
 import UserNotifications
@@ -122,7 +123,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// Unsaved edits to a previewed file are saved or let go first.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        AppModel.shared.settleDrafts() ? .terminateNow : .terminateCancel
+        let model = AppModel.shared
+        guard !model.unsaved.isEmpty else { return .terminateNow }
+        // Echo's own question, in the window, answers later (ui-ux/0140).
+        model.settleDrafts { sender.reply(toApplicationShouldTerminate: $0) }
+        return .terminateLater
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

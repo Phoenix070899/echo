@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -58,15 +59,8 @@ struct ContentView: View {
         }
         // Every floating panel, over the modals too (ui-ux/0125).
         .foundryPopoverHost(shown: $model.popoverShown)
-        .confirmationDialog(closeTitle, isPresented: closingShown, presenting: model.closing) { agent in
-            Button("Close \(agent.kindName)", role: .destructive) {
-                model.forgetAgent(agent.id)
-            }
-        } message: { agent in
-            Text(agent.live
-                 ? "It stops now and leaves the ledger. Echo cannot start it again."
-                 : "It leaves the ledger. Echo cannot start it again.")
-        }
+        // Every question Echo asks, over the popovers (ui-ux/0140).
+        .foundryAskHost()
         .onAppear { model.openMainWindow = { openWindow(id: "main") } }
         .background(TrafficLightInset(barHeight: TitleBar.height))
     }
@@ -109,14 +103,6 @@ struct ContentView: View {
             .padding(.top, 12)
             .padding(.bottom, 12)
         }
-    }
-
-    private var closeTitle: String {
-        model.closing.map { "Close \($0.displayName)?" } ?? ""
-    }
-
-    private var closingShown: Binding<Bool> {
-        Binding(get: { model.closing != nil }, set: { if !$0 { model.closing = nil } })
     }
 }
 
@@ -715,16 +701,15 @@ struct AgentLine: View {
         }
         .onHover { hovering.on = $0 }
         .prewarmsTerminal(.agent(id: agent.id), epoch: "\(agent.live)")
-        .contextMenu {
-            Button("Rename…") { model.renaming = agent }
+        .foundryContextMenu(label: agent.displayName) {
+            var entries: [FoundryMenuEntry] = [.item("Rename…") { model.renaming = agent }]
             if agent.isTerminal {
             } else if agent.live {
-                Button(agent.isOrchestrator ? "Stop Orchestrator" : "End Session") { model.stopAgent(agent.id) }
+                entries.append(.item(agent.isOrchestrator ? "Stop Orchestrator" : "End Session") { model.stopAgent(agent.id) })
             } else {
-                Button(agent.isOrchestrator ? "Start Orchestrator" : "Resume Session") { model.startAgent(agent.id) }
+                entries.append(.item(agent.isOrchestrator ? "Start Orchestrator" : "Resume Session") { model.startAgent(agent.id) })
             }
-            Divider()
-            Button("Close \(agent.kindName)…") { model.closing = agent }
+            return entries + [.rule, .item("Close \(agent.kindName)…") { model.askToClose(agent) }]
         }
         .help([agent.name == nil ? "Named after your first request" : agent.displayName,
                number <= 9 ? "⌘\(number)" : nil,
@@ -1057,12 +1042,11 @@ struct WorkerPanel: View {
     @EnvironmentObject private var model: AppModel
     let repo: String
     let id: String
-    @StateObject private var confirmStop = Flag()
 
     var body: some View {
         if let worker = model.snapshot(repo).workers.first(where: { $0.id == id }) {
             VStack(spacing: 0) {
-                WorkerHeader(worker: worker, confirmStop: $confirmStop.on, view: viewBinding(worker),
+                WorkerHeader(worker: worker, view: viewBinding(worker),
                              comments: model.reviews[AppModel.workerKey(repo, worker)]?.count ?? 0,
                              chat: model.showsChat(worker))
                 if model.workerView(repo, worker) == .changes {
@@ -1088,11 +1072,6 @@ struct WorkerPanel: View {
                     FinalReportView(worker: worker)
                 }
             }
-            .confirmationDialog("Stop \(worker.id)?", isPresented: $confirmStop.on) {
-                Button("Stop \(worker.id)", role: .destructive) { model.stopWorker(worker) }
-            } message: {
-                Text("Its terminal closes and the Orchestrator is told it ended without a Final Report.")
-            }
         } else {
             EmptyNote(title: "\(id) is gone", detail: "Its row left the ledger. Pick another Worker or the Orchestrator.")
         }
@@ -1109,7 +1088,6 @@ struct WorkerPanel: View {
 
 struct WorkerHeader: View {
     let worker: WorkerRow
-    @Binding var confirmStop: Bool
     /// Its terminal or Final Report, its Changes, or its fan-out compared.
     @Binding var view: WorkerView
     /// Review comments not sent yet.
@@ -1203,9 +1181,15 @@ extension WorkerHeader {
             LedgerSegmented(selection: shown, options: shownOptions, large: true)
                 .help("⇧⌘T switches between the chat and the \(worker.isActive && worker.live ? "terminal" : "Final Report")")
             if worker.isActive, worker.live {
-                Button("Stop Worker") { confirmStop = true }.buttonStyle(LedgerButtonStyle(height: 34))
+                Button("Stop Worker", action: confirmStop).buttonStyle(LedgerButtonStyle(height: 34))
             }
         }
+    }
+
+    private func confirmStop() {
+        FoundryAsk.shared.confirm("Stop \(worker.id)?",
+                                  message: "Its terminal closes and the Orchestrator is told it ended without a Final Report.",
+                                  answer: FoundryAnswer("Stop \(worker.id)", role: .destructive)) { model.stopWorker(worker) }
     }
 }
 
@@ -1385,10 +1369,8 @@ struct LedgerRow: View {
         .prewarmsTerminal(model.terminalTarget(repo, worker))
         .help([worker.id, worker.profile, worker.title, worker.branch, worker.phaseLabel,
                "quiet for \(formatAge(worker.quietFor()))"].compactMap { $0 }.joined(separator: " · "))
-        .contextMenu {
-            if worker.settledAt != nil {
-                Button("Dismiss") { model.dismiss([worker]) }
-            }
+        .foundryContextMenu(label: worker.id) {
+            worker.settledAt == nil ? [] : [.item("Dismiss") { model.dismiss([worker]) }]
         }
     }
 }

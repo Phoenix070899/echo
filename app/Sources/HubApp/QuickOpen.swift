@@ -1,3 +1,4 @@
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -18,7 +19,7 @@ struct QuickOpen: View {
                 .ignoresSafeArea()
                 .onTapGesture(perform: close)
                 .accessibilityHidden(true)
-            VStack(spacing: 0) {
+            FoundryPopover(label: "Quick open") {
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass").foregroundStyle(Ledger.ink3)
                     TextField("Go to a repo, agent, Worker or command", text: $search.query)
@@ -32,33 +33,31 @@ struct QuickOpen: View {
                         .onKeyPress(.downArrow) { move(1, in: results); return .handled }
                         .onKeyPress(.upArrow) { move(-1, in: results); return .handled }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 18)
                 .padding(.vertical, 14)
-                .background(Ledger.band, in: Rectangle())
+                .overlay(alignment: .bottom) { Rule() }
 
                 if results.isEmpty {
-                    Text("Nothing matches \u{201C}\(search.query)\u{201D}.")
-                        .font(Ledger.font(13))
-                        .foregroundStyle(Ledger.ink2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
+                    FoundryPopoverBody {
+                        Text("Nothing matches \u{201C}\(search.query)\u{201D}.")
+                            .font(Ledger.font(13))
+                            .foregroundStyle(Ledger.ink2)
+                    }
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(results.enumerated()), id: \.element.id) { index, item in
-                            QuickOpenRow(item: item, picked: index == search.picked, point: { search.picked = index }) {
+                            // A Foundry menu row (ui-ux/0125): the pointer moves the pick, as the arrows do.
+                            FoundryPopoverItem(title: item.title, note: item.detail, picked: index == search.picked) {
                                 search.picked = index
                                 run(results)
                             }
+                            .onHover { if $0 { search.picked = index } }
                         }
                     }
                     .padding(.vertical, 6)
                 }
             }
             .frame(width: 600)
-            .background(Ledger.paper)
-            .clipShape(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous))
-            // A hairline, not a shadow, sets it apart from the dimmed window.
-            .overlay(RoundedRectangle(cornerRadius: Ledger.radiusContainer, style: .continuous).strokeBorder(Ledger.rule))
             .padding(.top, 110)
             .accessibilityElement(children: .contain)
             .accessibilityAddTraits(.isModal)
@@ -91,7 +90,7 @@ struct QuickOpen: View {
         // same name still comes first.
         for (root, score, path) in search.files where root == model.selectedCheckout {
             let dir = (path as NSString).deletingLastPathComponent
-            scored.append((score, QuickOpenItem(id: "file \(path)", icon: "doc", title: (path as NSString).lastPathComponent,
+            scored.append((score, QuickOpenItem(id: "file \(path)", title: (path as NSString).lastPathComponent,
                                                 detail: dir.isEmpty ? "File" : "File in \(dir)") {
                 model.fileCursor[root] = path
                 model.preview = FileRef(root: root, path: path)
@@ -106,30 +105,29 @@ struct QuickOpen: View {
 
     private var items: [QuickOpenItem] {
         var items: [QuickOpenItem] = [
-            QuickOpenItem(id: "new-orchestrator", icon: "plus", title: "New Orchestrator", detail: "Command") {
+            QuickOpenItem(id: "new-orchestrator", title: "New Orchestrator", detail: "Command") {
                 model.showNewSession(repo: model.selectedRepo, kind: .orchestrator)
             },
-            QuickOpenItem(id: "new-terminal", icon: "plus", title: "New Terminal", detail: "Command, a shell in the repo") {
+            QuickOpenItem(id: "new-terminal", title: "New Terminal", detail: "Command, a shell in the repo") {
                 model.openTerminal()
             },
-            QuickOpenItem(id: "fan-out", icon: "arrow.triangle.branch", title: "Fan Out a Task", detail: "Command, several Workers try it") {
+            QuickOpenItem(id: "fan-out", title: "Fan Out a Task", detail: "Command, several Workers try it") {
                 model.showFanOut()
             },
-            QuickOpenItem(id: "ledger", icon: "sidebar.left", title: model.ledgerCollapsed ? "Expand Ledger" : "Collapse Ledger", detail: "Command") {
+            QuickOpenItem(id: "ledger", title: model.ledgerCollapsed ? "Expand Ledger" : "Collapse Ledger", detail: "Command") {
                 model.toggleLedger()
             },
-            QuickOpenItem(id: "settings", icon: "gearshape", title: "Settings", detail: "Command") {
+            QuickOpenItem(id: "settings", title: "Settings", detail: "Command") {
                 model.showSettings()
             },
         ]
         if let (_, worker) = model.selectedWorker {
-            items.insert(QuickOpenItem(id: "changes", icon: "plus.forwardslash.minus",
-                                       title: model.changesSelected ? "Hide Changes" : "Show Changes",
+            items.insert(QuickOpenItem(id: "changes", title: model.changesSelected ? "Hide Changes" : "Show Changes",
                                        detail: "Command, \(worker.id)'s diff") {
                 model.toggleChanges()
             }, at: 2)
             if worker.fanout != nil, let (repo, _) = model.selectedWorker {
-                items.insert(QuickOpenItem(id: "compare", icon: "rectangle.split.3x1", title: "Compare Tries",
+                items.insert(QuickOpenItem(id: "compare", title: "Compare Tries",
                                            detail: "Command, every try of \(worker.id)'s Task") {
                     model.show(.compare, repo: repo, worker: worker)
                 }, at: 3)
@@ -137,31 +135,27 @@ struct QuickOpen: View {
         }
         for session in model.sessions {
             let repo = session.repo
-            items.append(QuickOpenItem(id: "repo \(repo)", icon: "folder", title: session.name, detail: "Repo, \(session.shortPath)") {
+            items.append(QuickOpenItem(id: "repo \(repo)", title: session.name, detail: "Repo, \(session.shortPath)") {
                 model.selectSession(repo)
             })
             for agent in model.agents(repo) {
                 let kind = agent.kindName
-                items.append(QuickOpenItem(id: "agent \(repo) \(agent.id)", icon: agent.isOrchestrator ? "circle.grid.cross" : "terminal",
-                                           title: agent.displayName, detail: "\(kind) in \(session.name)") {
+                items.append(QuickOpenItem(id: "agent \(repo) \(agent.id)", title: agent.displayName, detail: "\(kind) in \(session.name)") {
                     model.select(.agent(repo: repo, id: agent.id))
                 })
             }
             for worker in model.snapshot(repo).workers {
-                items.append(QuickOpenItem(id: "worker \(repo) \(worker.id)", icon: worker.isActive ? "circle.fill" : "checkmark.circle",
-                                           title: "\(worker.id) \(worker.title)", detail: "\(worker.profile), \(worker.phaseLabel) in \(session.name)") {
+                items.append(QuickOpenItem(id: "worker \(repo) \(worker.id)", title: "\(worker.id) \(worker.title)", detail: "\(worker.profile), \(worker.phaseLabel) in \(session.name)") {
                     model.select(.worker(repo: repo, id: worker.id))
                 })
             }
         }
         if model.filesShown {
-            items.append(QuickOpenItem(id: "ignored", icon: model.showIgnoredFiles ? "eye.slash" : "eye",
-                                       title: model.showIgnoredFiles ? "Hide Ignored Files" : "Show Ignored Files",
+            items.append(QuickOpenItem(id: "ignored", title: model.showIgnoredFiles ? "Hide Ignored Files" : "Show Ignored Files",
                                        detail: "Command, files .gitignore covers") {
                 model.showIgnoredFiles.toggle()
             })
-            items.append(QuickOpenItem(id: "search ignored", icon: "text.magnifyingglass",
-                                       title: model.searchIgnoredFiles ? "Stop Searching Ignored Files" : "Search Ignored Files",
+            items.append(QuickOpenItem(id: "search ignored", title: model.searchIgnoredFiles ? "Stop Searching Ignored Files" : "Search Ignored Files",
                                        detail: "Command, text search in files .gitignore covers") {
                 model.searchIgnoredFiles.toggle()
             })
@@ -196,41 +190,7 @@ final class QuickOpenSearch: ObservableObject {
 
 struct QuickOpenItem: Identifiable {
     let id: String
-    let icon: String
     let title: String
     let detail: String
     let action: () -> Void
-}
-
-struct QuickOpenRow: View {
-    let item: QuickOpenItem
-    let picked: Bool
-    /// The pointer moves the highlight, as in Foundry's popover (ui-ux/0127).
-    let point: () -> Void
-    let run: () -> Void
-
-    var body: some View {
-        Button(action: run) {
-            HStack(spacing: 10) {
-                Image(systemName: item.icon)
-                    .font(Ledger.font(12))
-                    .foregroundStyle(Ledger.ink3)
-                    .frame(width: 18)
-                Text(item.title).lineLimit(1)
-                Spacer(minLength: 12)
-                Text(item.detail)
-                    .font(Ledger.font(12))
-                    .foregroundStyle(Ledger.ink3)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(picked ? Ledger.selected : Color.clear)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { if $0 { point() } }
-        .accessibilityAddTraits(picked ? .isSelected : [])
-    }
 }
