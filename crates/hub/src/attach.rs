@@ -34,6 +34,8 @@ pub enum Target {
     Agent(i64),
     /// A checkout's side shell (`t` and the hex of its path), which Echo shows under the files.
     Side(String),
+    /// The terminal signing Echo's own login to a CLI in (`l` and its name), shown in Settings.
+    Login(String),
 }
 
 impl Target {
@@ -41,6 +43,10 @@ impl Target {
         let bad = || format!("{text:?} is not a terminal like w12 or a3");
         if let Some(hex) = text.strip_prefix('t') {
             return Ok(Target::Side(crate::daemon::unhex(hex).with_context(bad)?));
+        }
+        if let Some(name) = text.strip_prefix('l') {
+            crate::cli::Cli::parse(name).with_context(bad)?;
+            return Ok(Target::Login(name.to_string()));
         }
         if let Some(id) = text.strip_prefix('a') {
             return Ok(Target::Agent(id.parse().with_context(bad)?));
@@ -54,6 +60,7 @@ impl Target {
             Target::Worker(id) => json!({ "id": id }),
             Target::Agent(id) => json!({ "agent": id }),
             Target::Side(path) => json!({ "side": path }),
+            Target::Login(name) => json!({ "login": name }),
         }
     }
 
@@ -62,6 +69,7 @@ impl Target {
             Target::Worker(id) => format!("w{id}"),
             Target::Agent(id) => format!("a{id}"),
             Target::Side(path) => format!("t{}", crate::daemon::hex(path)),
+            Target::Login(name) => format!("l{name}"),
         }
     }
 
@@ -70,6 +78,11 @@ impl Target {
         match self {
             // Attaching starts a side shell, so it is always ready.
             Target::Side(_) => Some(true),
+            // A sign-in runs once: when it has ended it is gone, not started again.
+            Target::Login(name) => {
+                let answer = proto::call("providers.login.live", json!({ "cli": name })).ok()?;
+                answer["live"].as_bool().filter(|live| *live)
+            }
             Target::Worker(id) => Some(proto::call("worker.read", json!({ "id": id, "lines": 1 })).is_ok()),
             Target::Agent(id) => {
                 let sessions = proto::call("sessions.list", json!({})).ok()?;
@@ -329,6 +342,10 @@ mod tests {
         let side = Target::Side("/tmp/a b".into());
         assert_eq!(Target::parse(&side.label()).unwrap(), side);
         assert_eq!(side.params(), json!({ "side": "/tmp/a b" }));
+        let login = Target::Login("codex".into());
+        assert_eq!(Target::parse(&login.label()).unwrap(), login);
+        assert_eq!(login.params(), json!({ "login": "codex" }));
+        assert!(Target::parse("lnotacli").is_err());
         assert!(Target::parse("tzz").is_err());
     }
 }

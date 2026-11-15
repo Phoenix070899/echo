@@ -1,5 +1,28 @@
 #!/bin/sh
 # A stand-in for `claude` in daemon tests: $1 is the Task spec, and its first word picks a script.
+# Sign-ins (accounts.rs): Echo's own login is a file in its config folder; the human's is always there.
+case "$1 $2" in
+  "auth status")
+    case "$CLAUDE_CONFIG_DIR" in
+      */accounts/claude)
+        if [ -e "$CLAUDE_CONFIG_DIR/fake-login" ]; then
+          printf '{"loggedIn": true, "authMethod": "claude.ai", "email": "echo@example.com"}\n'
+        else
+          printf '{"loggedIn": false, "authMethod": "none"}\n'; exit 1
+        fi ;;
+      *) printf '{"loggedIn": true, "authMethod": "claude.ai", "email": "human@example.com"}\n' ;;
+    esac
+    exit 0 ;;
+  "auth login") touch "$CLAUDE_CONFIG_DIR/fake-login"; echo "Login successful."; exit 0 ;;
+  "auth logout") rm -f "$CLAUDE_CONFIG_DIR/fake-login"; echo "Successfully logged out."; exit 0 ;;
+  "login status")
+    case "$CODEX_HOME" in
+      */accounts/codex) [ -e "$CODEX_HOME/fake-login" ] && { echo "Logged in using ChatGPT"; exit 0; }; echo "Not logged in"; exit 1 ;;
+      *) echo "Logged in using ChatGPT"; exit 0 ;;
+    esac ;;
+  "login "|"logout ") [ "$1" = login ] && touch "$CODEX_HOME/fake-login" || rm -f "$CODEX_HOME/fake-login"; exit 0 ;;
+  "whoami ") printf 'Logged in with Builder ID\nEmail: human@example.com\n'; exit 0 ;;
+esac
 if [ "$1" = "-p" ] && [ "$2" = "/usage" ] && [ -n "$HUB_FAKE_USAGE_FLAKY" ] && [ ! -e "$HUB_FAKE_USAGE_FLAKY" ]; then
   # The first call fails the way the real one sometimes does: a cost summary, no limits.
   touch "$HUB_FAKE_USAGE_FLAKY"
@@ -31,6 +54,7 @@ P1 foo.rs:1 broken" ;;
     esac ;;
   ask*) answer=$(echoctl ask "Which color?") && echoctl done --state done "answer was $answer" ;;
   done*) echoctl done --state done "finished" ;;
+  account*) echoctl done --state done "config: ${CLAUDE_CONFIG_DIR:-none} codex: ${CODEX_HOME:-none}" ;;
   next*)
     # Reports, then takes each line typed at its input box as its next Task.
     echoctl done --state done "first Task done"

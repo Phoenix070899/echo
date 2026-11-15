@@ -15,6 +15,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
+use crate::accounts;
 use crate::action;
 use crate::chat;
 use crate::cli;
@@ -70,6 +71,8 @@ pub struct Hub {
     /// A login shell per checkout, by its real path: what Echo shows under the Files column. It
     /// belongs to the folder, not to an agent, so it stays while agents come and go.
     side_shells: Mutex<HashMap<String, Arc<Live>>>,
+    /// The terminal signing Echo's own login in, by CLI name (features/0089).
+    logins: Mutex<HashMap<String, Arc<Live>>>,
     /// When each Normal session's waiting permission prompt was first seen, by agent id.
     agent_prompts: Mutex<HashMap<i64, i64>>,
     tick: Mutex<u64>,
@@ -150,6 +153,8 @@ fn run_usage(program: &str) -> Result<Vec<Value>> {
     let mut command = std::process::Command::new(program);
     command
         .args(["-p", "/usage"])
+        // The limits of the account agents run on: Echo's own while it is signed in.
+        .envs(accounts::env(&paths::state_dir()))
         .current_dir(paths::state_dir())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -223,6 +228,7 @@ pub fn run() -> Result<()> {
         agents: Mutex::new(HashMap::new()),
         shells: Mutex::new(HashMap::new()),
         side_shells: Mutex::new(HashMap::new()),
+        logins: Mutex::new(HashMap::new()),
         agent_prompts: Mutex::new(HashMap::new()),
         tick: Mutex::new(0),
         changed: Condvar::new(),
@@ -236,6 +242,13 @@ pub fn run() -> Result<()> {
     });
     hub.recover()?;
     remote::start_if_enabled(&hub);
+    // A login signed out outside Echo since the last run: agents go back to the human's.
+    {
+        let hub = Arc::clone(&hub);
+        std::thread::spawn(move || {
+            hub.providers();
+        });
+    }
     eprintln!("hubd {}: listening on {}", std::process::id(), socket.display());
 
     for stream in listener.incoming() {
@@ -692,6 +705,9 @@ impl Hub {
         if let Some(path) = p.get("side").and_then(Value::as_str) {
             return self.side_shell(path);
         }
+        if let Some(name) = p.get("login").and_then(Value::as_str) {
+            return self.login(cli::Cli::parse(name)?);
+        }
         if let Some(id) = p.get("agent").and_then(Value::as_i64) {
             return self.agent_live(id).or_else(|_| self.shell(id));
         }
@@ -1008,7 +1024,7 @@ impl Hub {
             program,
             args,
             cwd: home,
-            env: self.agent_env(None, Some(agent.id))?,
+            env: self.agent_launch_env(None, Some(agent.id))?,
             env_remove: inherited_agent_vars(),
         };
         // Its own worktree, started for the first time: the repo's setup runs there first.
@@ -1255,6 +1271,13 @@ impl Hub {
                 }
                 continue;
             }
+            // A sign-in left from the last run: the daemon that would read its result is gone.
+            if key.strip_prefix('l').is_some_and(|name| cli::Cli::parse(name).is_ok()) {
+                if let Ok(Some(live)) = Live::adopt(&key, 0, cli::Cli::Claude, |_| {}) {
+                    live.kill();
+                }
+                continue;
+            }
             let (Some(kind), Ok(id)) = (key.chars().next(), key[1..].parse::<i64>()) else {
                 continue;
             };
@@ -1394,6 +1417,19 @@ impl Hub {
                 Ok(json!({}))
             }
             "side.status" => self.side_status(p),
+            "providers" => Ok(self.providers()),
+            "providers.signout" => self.sign_out(p),
+            // Whether the sign-in terminal still runs.
+            "providers.login.live" => {
+                let cli = cli::Cli::parse(str_param(p, "cli")?)?;
+                let live = self
+                    .logins
+                    .lock()
+                    .unwrap()
+                    .get(cli.name())
+                    .is_some_and(|live| live.is_alive());
+                Ok(json!({ "live": live }))
+            }
             "side.stop" => self.side_stop(p),
             // Echo Remote's message box and keys: an agent's or Worker's running terminal only.
             "terminal.send" => {
@@ -2069,7 +2105,7 @@ impl Hub {
             program,
             args,
             cwd: PathBuf::from(&worker.cwd),
-            env: self.agent_env(Some(worker.id), None)?,
+            env: self.agent_launch_env(Some(worker.id), None)?,
             env_remove: inherited_agent_vars(),
         };
         Ok(match repo::prep(Path::new(&worker.repo))?.setup.filter(|_| fresh) {
@@ -2102,6 +2138,90 @@ impl Hub {
             env.push(("HUB_AGENT".into(), id.to_string()));
         }
         Ok(env)
+    }
+
+    /// An agent's or Worker's environment, on Echo's own logins while they are signed in
+    /// (features/0089); a plain shell keeps the human's.
+    fn agent_launch_env(&self, worker: Option<i64>, agent: Option<i64>) -> Result<Vec<(String, String)>> {
+        let state = paths::state_dir();
+        let mut env = self.agent_env(worker, agent)?;
+        for cli in accounts::ALL.into_iter().filter(|cli| accounts::own(&state, *cli)) {
+            // What the human's own config folder gained since the last start.
+            if let Err(error) = accounts::prepare(&state, cli) {
+                eprintln!("hubd: Echo's {} folder: {error:#}", cli.name());
+            }
+        }
+        env.extend(accounts::env(&state));
+        Ok(env)
+    }
+
+    /// The CLI the status reads and sign-ins run: the test agent under test.
+    fn account_program(&self, cli: cli::Cli) -> String {
+        self.test_agent.clone().unwrap_or_else(|| cli.program().to_string())
+    }
+
+    /// Each CLI's login as Settings shows it, read again, which also keeps Echo's markers right.
+    fn providers(&self) -> Value {
+        let state = paths::state_dir();
+        let reads: Vec<_> = accounts::ALL
+            .into_iter()
+            .map(|cli| {
+                let (state, program) = (state.clone(), self.account_program(cli));
+                std::thread::spawn(move || accounts::status(&state, cli, &program).view(cli))
+            })
+            .collect();
+        let providers: Vec<Value> = reads.into_iter().filter_map(|read| read.join().ok()).collect();
+        json!({ "providers": providers })
+    }
+
+    /// The terminal signing Echo's own login for `cli` in: the CLI's own sign-in, on Echo's config
+    /// folder. One already running is shown again; once it ends, the login is read again.
+    fn login(self: &Arc<Self>, cli: cli::Cli) -> Result<Arc<Live>> {
+        let args = accounts::login_args(cli)?;
+        let mut logins = self.logins.lock().unwrap();
+        if let Some(live) = logins.get(cli.name()).filter(|live| live.is_alive()) {
+            return Ok(Arc::clone(live));
+        }
+        let state = paths::state_dir();
+        let dir = accounts::prepare(&state, cli)?;
+        let mut env = self.agent_env(None, None)?;
+        env.extend(accounts::home_var(cli).map(|var| (var.to_string(), dir.display().to_string())));
+        let spawn = Spawn {
+            // Nothing reads its screen as an agent's.
+            cli,
+            program: self.account_program(cli),
+            args,
+            cwd: state.clone(),
+            env,
+            env_remove: inherited_agent_vars(),
+        };
+        let name = cli.name().to_string();
+        let hub: Weak<Hub> = Arc::downgrade(self);
+        let ended = name.clone();
+        let live = Live::spawn(&format!("l{name}"), 0, spawn, move |_| {
+            if let Some(hub) = hub.upgrade() {
+                let mut logins = hub.logins.lock().unwrap();
+                if logins.get(&ended).is_some_and(|live| !live.is_alive()) {
+                    logins.remove(&ended);
+                }
+                drop(logins);
+                accounts::status(&paths::state_dir(), cli, &hub.account_program(cli));
+                hub.notify();
+            }
+        })?;
+        logins.insert(name, Arc::clone(&live));
+        Ok(live)
+    }
+
+    /// Signs Echo's own login for the CLI out, and ends its sign-in terminal if one runs.
+    fn sign_out(&self, p: &Value) -> Result<Value> {
+        let cli = cli::Cli::parse(str_param(p, "cli")?)?;
+        if let Some(live) = self.logins.lock().unwrap().remove(cli.name()) {
+            live.kill();
+        }
+        accounts::sign_out(&paths::state_dir(), cli, &self.account_program(cli))?;
+        self.notify();
+        Ok(self.providers())
     }
 
     fn launch(self: &Arc<Self>, worker: &Worker, launch: Launch) -> Result<()> {
@@ -3166,6 +3286,7 @@ impl Hub {
                     "multiplexer",
                     "teams",
                     "agents",
+                    "providers",
                     "worktrees",
                     "memory",
                     "remote",

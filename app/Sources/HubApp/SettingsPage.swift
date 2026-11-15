@@ -4,7 +4,7 @@ import SwiftUI
 
 /// One part of Settings, listed down the page's left side.
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case window, theme, background, font, multiplexer, teams, worktrees, memory, remote
+    case window, theme, background, font, multiplexer, teams, providers, worktrees, memory, remote
 
     var id: String { rawValue }
 
@@ -25,6 +25,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .font: "Font"
         case .multiplexer: "Multiplexer"
         case .teams: "Teams"
+        case .providers: "Providers"
         case .worktrees: "Worktrees"
         case .memory: "Preferences and Lessons"
         case .remote: "Echo Remote"
@@ -39,6 +40,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .font: "textformat"
         case .multiplexer: "rectangle.split.2x1"
         case .teams: "person.3"
+        case .providers: "person.crop.circle"
         case .worktrees: "arrow.triangle.branch"
         case .memory: "text.book.closed"
         case .remote: "iphone"

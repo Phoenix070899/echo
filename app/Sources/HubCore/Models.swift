@@ -387,6 +387,50 @@ public struct Need: Decodable, Equatable, Identifiable, Sendable {
 }
 
 /// Echo Remote, the phone web app the daemon serves (ADR 0008).
+/// Who one agent CLI's agents run as (features/0089).
+public struct ProviderStatus: Decodable, Equatable, Sendable, Identifiable {
+    /// `claude`, `codex` or `kiro`.
+    public let cli: String
+    public let installed: Bool
+    /// Echo's own login is signed in, and agents run on it.
+    public let own: Bool
+    /// Agents can run, on Echo's login or the human's.
+    public let signedIn: Bool
+    /// An email, or how the CLI is signed in.
+    public let account: String?
+    /// The CLI keeps one login for the whole Mac (Kiro), so Echo has none of its own.
+    public let shared: Bool
+
+    public var id: String { cli }
+
+    public init(cli: String, installed: Bool, own: Bool, signedIn: Bool, account: String?, shared: Bool) {
+        self.cli = cli
+        self.installed = installed
+        self.own = own
+        self.signedIn = signedIn
+        self.account = account
+        self.shared = shared
+    }
+
+    public var name: String {
+        switch cli {
+        case "claude": "Claude"
+        case "codex": "Codex"
+        case "kiro": "Kiro"
+        default: cli
+        }
+    }
+
+    /// One line on who agents run as.
+    public var line: String {
+        let who = account.map { ", \($0)" } ?? ""
+        if !installed { return "Not installed on this Mac." }
+        if own { return "Echo's own login\(who)." }
+        if signedIn { return "Your own login\(who)." }
+        return "Not signed in. Agents on \(name) cannot start until one of you signs in."
+    }
+}
+
 public struct RemoteStatus: Decodable, Equatable, Sendable {
     public let enabled: Bool
     public let running: Bool
@@ -436,6 +480,8 @@ public enum TerminalTarget: Hashable, Sendable {
     case worker(id: Int)
     /// A checkout's own shell, shown under the Files column; it belongs to the folder, not to an agent.
     case side(root: String)
+    /// The terminal signing Echo's own login to a CLI in, shown in Settings > Providers.
+    case login(cli: String)
 
     /// The daemon's way of naming it in `attach` and `terminal.resize`.
     public var params: [String: Any] {
@@ -443,6 +489,7 @@ public enum TerminalTarget: Hashable, Sendable {
         case .agent(let id): return ["agent": id]
         case .worker(let id): return ["id": id]
         case .side(let root): return ["side": root]
+        case .login(let cli): return ["login": cli]
         }
     }
 
@@ -451,7 +498,7 @@ public enum TerminalTarget: Hashable, Sendable {
         switch self {
         case .agent(let id): return ["agent": id]
         case .worker(let id): return ["worker": id]
-        case .side: return [:]
+        case .side, .login: return [:]
         }
     }
 
@@ -462,6 +509,7 @@ public enum TerminalTarget: Hashable, Sendable {
         case .agent(let id): return "a\(id)"
         case .worker(let id): return "w\(id)"
         case .side(let root): return "t" + root.utf8.map { String(format: "%02x", $0) }.joined()
+        case .login(let cli): return "l" + cli
         }
     }
 }
