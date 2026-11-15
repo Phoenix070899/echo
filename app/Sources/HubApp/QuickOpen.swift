@@ -71,8 +71,8 @@ struct QuickOpen: View {
             try? await Task.sleep(for: .milliseconds(60))
             guard !Task.isCancelled else { return }
             let tree = model.checkoutFiles(root).tree
-            let query = search.query
-            let job = Task.detached(priority: .userInitiated) { quickOpenFiles(query, in: tree, limit: Self.shown) }
+            let (query, limit) = (search.query, Self.shown)
+            let job = Task.detached(priority: .userInitiated) { quickOpenFiles(query, in: tree, limit: limit) }
             let found = await withTaskCancellationHandler { await job.value } onCancel: { job.cancel() }
             guard !Task.isCancelled else { return }
             search.files = found.map { (root, $0.score, $0.path) }

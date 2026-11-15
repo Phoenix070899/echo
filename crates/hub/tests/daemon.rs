@@ -608,19 +608,21 @@ fn verifying_is_left_out_when_the_humans_settings_skip_the_review() {
 }
 
 #[test]
-fn a_worker_without_a_branch_closes_when_its_report_arrives_unless_kept() {
+fn a_done_worker_closes_once_its_turn_ends_unless_kept_and_a_next_task_reopens_it() {
     let hub = Hub::new("closeondone");
     hub.ok(&["worker", "start", "lee", "--spec", "done"]);
     hub.ok(&["worker", "start", "lee", "--spec", "done", "--keep"]);
     hub.ok(&["worker", "start", "lee", "--spec", "done", "--worktree", "new:feat/own"]);
+    hub.eventually("w1 and w3 to close", || {
+        let open = hub.ok(&["worker", "list"]);
+        !open.contains("w1") && !open.contains("w3")
+    });
+    assert!(hub.ok(&["worker", "list"]).contains("w2"), "kept");
     let told = hub.wait();
     assert_eq!(told.matches("done (done) from").count(), 3, "{told}");
-    hub.eventually("w1 to close", || !hub.ok(&["worker", "list"]).contains("w1"));
-    let open = hub.ok(&["worker", "list"]);
-    assert!(
-        open.contains("w2") && open.contains("w3"),
-        "kept, and on its own branch: {open}"
-    );
+    // Its branch's next Task resumes it, open again.
+    hub.ok(&["worker", "task", "w3", "--spec", "done again"]);
+    assert!(hub.ok(&["worker", "list"]).contains("w3"));
 }
 
 #[test]
@@ -3696,12 +3698,12 @@ fn a_worker_starts_as_the_member_a_name_stands_for_and_runs_with_its_choices() {
     let agent = open_orchestrator(&hub, Some("crew"));
 
     // A Member id, another Member of the same Profile, a Profile name (the first Member using it),
-    // and a Profile that no Member uses.
-    let by_id = start_under(&hub, agent, &["build-b", "--spec", "done quickly"]);
+    // and a Profile that no Member uses; kept, so `worker list` still shows them once done.
+    let by_id = start_under(&hub, agent, &["build-b", "--spec", "done quickly", "--keep"]);
     assert!(by_id.contains("(build-b from naruto:"), "{by_id}");
-    start_under(&hub, agent, &["build-a", "--spec", "done quickly"]);
-    start_under(&hub, agent, &["naruto", "--spec", "done quickly"]);
-    let bare = start_under(&hub, agent, &["hinata", "--spec", "done quickly"]);
+    start_under(&hub, agent, &["build-a", "--spec", "done quickly", "--keep"]);
+    start_under(&hub, agent, &["naruto", "--spec", "done quickly", "--keep"]);
+    let bare = start_under(&hub, agent, &["hinata", "--spec", "done quickly", "--keep"]);
     assert!(bare.contains("(hinata:"), "{bare}");
     hub.eventually("every Worker to finish", || {
         (1..=4).all(|n| row_of(&hub, n)["phase"] == "done")
@@ -4118,4 +4120,35 @@ fn a_worker_runs_on_echos_own_login_once_it_is_signed_in_and_on_the_humans_after
     // Kiro keeps one login for the Mac: Echo reads it and never signs it in.
     let kiro = hub.call("attach", serde_json::json!({ "login": "kiro" }));
     assert_eq!(kiro["ok"], false, "{kiro}");
+}
+
+#[test]
+fn settings_lists_each_clis_models_as_echo_names_them() {
+    let hub = Hub::new("models");
+    let claude = hub.state.join("human-claude");
+    std::fs::create_dir_all(&claude).unwrap();
+    std::fs::write(
+        claude.join(".claude.json"),
+        r#"{"additionalModelOptionsCache": [{"value": "claude-fable-5-1", "description": "Fable 5.1 · Most capable"}]}"#,
+    )
+    .unwrap();
+    let out = hub.run_with(&["status"], &[("CLAUDE_CONFIG_DIR", claude.to_str().unwrap())]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let listed = hub.call("models", serde_json::json!({}));
+    let models = &listed["result"]["models"];
+    let ids = |cli: &str| -> Vec<String> {
+        models[cli]
+            .as_array()
+            .unwrap_or_else(|| panic!("no {cli} in {listed}"))
+            .iter()
+            .map(|model| model["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        ids("claude")[..2],
+        ["anthropic/claude-fable-5-1", "anthropic/claude-opus-5-5"]
+    );
+    assert_eq!(models["claude"][0]["name"], "Fable 5.1");
+    assert_eq!(ids("codex"), ["openai/gpt-test"]);
+    assert_eq!(ids("kiro"), ["claude-haiku-5.5"]);
 }

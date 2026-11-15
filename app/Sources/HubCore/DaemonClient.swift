@@ -347,6 +347,13 @@ public struct DaemonClient: Sendable {
         return try JSONDecoder().decode([ProviderStatus].self, from: data)
     }
 
+    /// Each agent CLI's models, by CLI, as Echo names them (features/0091).
+    public func models() throws -> [String: [ModelOption]] {
+        let result = try call("models") as? [String: Any]
+        let data = try JSONSerialization.data(withJSONObject: result?["models"] ?? [:])
+        return try JSONDecoder().decode([String: [ModelOption]].self, from: data)
+    }
+
     /// Signs Echo's own login to `cli` out; its agents go back to the human's.
     public func signOut(_ cli: String) throws {
         try call("providers.signout", ["cli": cli])

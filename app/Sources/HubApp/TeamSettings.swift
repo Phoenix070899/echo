@@ -469,10 +469,8 @@ private struct TeamOrchestrator: View {
         InspectorGroup("Runs with") {
             InspectorField("CLI") { CliPicker(title: "CLI", selection: $teams.form.orchestratorCli) }
             InspectorField("Model") {
-                TextField("Model", text: $teams.form.orchestratorModel,
-                          prompt: Text(TeamForm.modelHint(cli: teams.effectiveCli(teams.form.orchestratorCli))))
-                    .labelsHidden()
-                    .squareField(.inspector)
+                ModelPicker(title: "Model", cli: teams.effectiveCli(teams.form.orchestratorCli),
+                            selection: $teams.form.orchestratorModel)
             }
             InspectorField("Effort") { EffortPicker(title: "Effort", selection: $teams.form.orchestratorEffort) }
             InspectorField("Renew at") {
@@ -495,10 +493,8 @@ private struct TeamWorkers: View {
         InspectorGroup("Workers") {
             InspectorField("CLI") { CliPicker(title: "CLI", selection: $teams.form.workersCli) }
             InspectorField("Model") {
-                TextField("Model", text: $teams.form.workersModel,
-                          prompt: Text(TeamForm.modelHint(cli: teams.effectiveCli(teams.form.workersCli))))
-                    .labelsHidden()
-                    .squareField(.inspector)
+                ModelPicker(title: "Model", cli: teams.effectiveCli(teams.form.workersCli),
+                            selection: $teams.form.workersModel)
             }
             InspectorField("Effort") { EffortPicker(title: "Effort", selection: $teams.form.workersEffort) }
             InspectorNote("Set for every Worker, over what its Profile says. Empty leaves it to the Profile.")
@@ -515,10 +511,8 @@ private struct TeamWorkers: View {
                             .help("Take this Profile out of the Team's own settings")
                     }
                     CliPicker(title: "CLI", selection: $row.cli)
-                    TextField("Model", text: $row.model,
-                              prompt: Text(TeamForm.modelHint(cli: teams.effectiveCli(row.cli.isEmpty ? teams.form.workersCli : row.cli))))
-                        .labelsHidden()
-                        .squareField(.inspector)
+                    ModelPicker(title: "Model", cli: teams.effectiveCli(row.cli.isEmpty ? teams.form.workersCli : row.cli),
+                                selection: $row.model)
                     EffortPicker(title: "Effort", selection: $row.effort)
                 }
                 .padding(.bottom, 8)
@@ -608,6 +602,47 @@ struct InspectorNote: View {
 
     var body: some View {
         SettingsNote(text, problem: problem, size: 12)
+    }
+}
+
+/// A model `cli` offers, from the daemon's list of them (features/0091), or none to leave it to the
+/// level below. A model set before that the CLI does not list stays, under its own name.
+struct ModelPicker: View {
+    let title: String
+    /// The CLI the model runs on; empty is Claude Code, the settings' own.
+    let cli: String
+    @Binding var selection: String
+    /// What the empty choice is called.
+    var unset = "The default"
+    var weight = FieldWeight.inspector
+    @ObservedObject private var catalog = ModelCatalog.shared
+
+    var body: some View {
+        let listed = catalog.models[cli.isEmpty ? "claude" : cli] ?? []
+        let kept = selection.isEmpty || listed.contains { $0.id == selection } ? [] : [(selection, selection)]
+        SquarePicker(selection: $selection,
+                     options: [("", unset)] + kept + listed.map { ($0.id, $0.name) },
+                     weight: weight, label: title)
+            .task { await catalog.load() }
+    }
+}
+
+/// Each CLI's models, as the daemon lists them; read once per Settings visit.
+@MainActor
+final class ModelCatalog: ObservableObject {
+    static let shared = ModelCatalog()
+    @Published private(set) var models: [String: [ModelOption]] = [:]
+    private var loading = false
+    private let client = DaemonClient()
+
+    func load() async {
+        guard !loading else { return }
+        loading = true
+        defer { loading = false }
+        let client = client
+        if let models = try? await Task.detached(operation: { try client.models() }).value {
+            self.models = models
+        }
     }
 }
 

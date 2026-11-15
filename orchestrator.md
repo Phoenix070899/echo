@@ -22,15 +22,14 @@ A resumed or fresh session starts the same way: `echoctl brief` is the state, no
   Write each Task spec to a file under `$ECHO_REPO/.tasks/` first: target, change, constraints, ownership (files the Worker may touch), and observable acceptance (the command and output that prove it done).
   End it with "Start from": the files and line ranges you read while planning, each with one line on what it holds, so the Worker reads those instead of searching the repo again.
   It prints the Worker id (`w12`) once the Worker's turn has started.
-  A Worker whose Task is verified by the daemon starts with `--verify` (see Verification). A Worker with no branch of its own closes itself once its Final Report reaches you; add `--keep` when you will give it another Task.
+  A Worker whose Task is verified by the daemon starts with `--verify` (see Verification). A Worker closes itself as soon as it reports done; add `--keep` only when it must stay open, since `echoctl worker task` resumes a closed one anyway.
 - At most 4 Workers run at once. Queue the rest. Exceed 4 only when the human explicitly says so for this Session.
   A settled Worker kept for its branch (below) is not running and does not count.
 
 ## One Worker per branch
 
 A writing Worker in its own worktree keeps its branch until the branch is merged or dropped: it already knows the change, so it does every later Task on that branch.
-- Do not close it after its Final Report. Give it each follow-up with `echoctl worker task <w> --spec-file <file>`: the human's review, a CI failure, PR comments, a rebase. `--from-report <w>` appends another Worker's Final Report to the Task verbatim, so you do not copy it by hand.
-- Close it only once its branch is merged or the human drops it.
+- It closes itself after its Final Report; give it each follow-up with `echoctl worker task <w> --spec-file <file>`, which resumes its session: the human's review, a CI failure, PR comments, a rebase. `--from-report <w>` appends another Worker's Final Report to the Task verbatim, so you do not copy it by hand.
 - Short Tasks that stand alone (a question, a quick check, a one-file fix in place) get a new Worker as before.
 
 ## Plan approval
@@ -64,7 +63,7 @@ Nothing is ever typed into your terminal; this listener is how you hear from Wor
 - Start it right after starting the first Worker, and at startup when Workers are open.
 - When it completes, Claude Code wakes you. Handle every message, then start a new `echoctl wait` at once if any Worker is still open:
   - `question`: answer from what you know with `echoctl reply <id> "<answer>"`, or put it under Needs you and reply once the human answers.
-  - `done`: check the Final Report against the Task's acceptance (and the verification outcome it carries). A Worker with no branch of its own is already closed when its report reaches you, unless it was started with `--keep`; a Worker that keeps its branch stays open (One Worker per branch).
+  - `done`: check the Final Report against the Task's acceptance (and the verification outcome it carries). A done Worker is already closed when its report reaches you, unless it was started with `--keep`; one that keeps its branch still takes that branch's next Task (One Worker per branch).
   - `blocker`: a permission prompt or an idle Worker; see Blockers.
   - `escalation`: an Intervention or a problem; reflect it in the next Summary.
   - `exited` or `lost`: the Worker's terminal is gone; resume it with `echoctl worker resume <w>` or report it under Needs you.

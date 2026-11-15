@@ -388,6 +388,18 @@ public struct Need: Decodable, Equatable, Identifiable, Sendable {
 
 /// Echo Remote, the phone web app the daemon serves (ADR 0008).
 /// Who one agent CLI's agents run as (features/0089).
+/// A model an agent CLI offers: `id` as Echo names it (`anthropic/claude-opus-5-5`,
+/// `openai/gpt-5.6-terra`, Kiro's `claude-sonnet-5.5`), `name` as the CLI shows it.
+public struct ModelOption: Decodable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let name: String
+
+    public init(id: String, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
 public struct ProviderStatus: Decodable, Equatable, Sendable, Identifiable {
     /// `claude`, `codex` or `kiro`.
     public let cli: String

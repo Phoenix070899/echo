@@ -56,7 +56,7 @@ pub fn env(state: &Path) -> Vec<(String, String)> {
 }
 
 /// The human's own config folder for `cli`, as the daemon's environment names it.
-fn source(cli: Cli) -> Option<PathBuf> {
+pub(crate) fn source(cli: Cli) -> Option<PathBuf> {
     let var = home_var(cli)?;
     let default = match cli {
         Cli::Claude => ".claude",
@@ -269,7 +269,7 @@ fn codex_email(folder: &Path) -> Option<String> {
 
 /// Runs `program args` with `home` set, if given; None when the program is not there. Gives the
 /// exit status and what it printed.
-fn run(program: &str, args: &[&str], home: Option<(&str, &Path)>) -> Result<Option<(bool, String)>> {
+pub(crate) fn run(program: &str, args: &[&str], home: Option<(&str, &Path)>) -> Result<Option<(bool, String)>> {
     let mut command = Command::new(program);
     command
         .args(args)
@@ -285,10 +285,18 @@ fn run(program: &str, args: &[&str], home: Option<(&str, &Path)>) -> Result<Opti
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).with_context(|| format!("running {program} {}", args.join(" "))),
     };
+    // Read while it runs: one that prints more than the pipe holds (`codex debug models`, 300 KB)
+    // waits for its reader before it exits (bugs/0086).
+    let mut stdout = child.stdout.take().context("its output")?;
+    let reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut stdout, &mut out);
+        out
+    });
     let deadline = Instant::now() + STATUS_LIMIT;
-    loop {
-        if child.try_wait()?.is_some() {
-            break;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -300,12 +308,9 @@ fn run(program: &str, args: &[&str], home: Option<(&str, &Path)>) -> Result<Opti
             );
         }
         std::thread::sleep(Duration::from_millis(25));
-    }
-    let output = child.wait_with_output()?;
-    Ok(Some((
-        output.status.success(),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-    )))
+    };
+    let out = reader.join().unwrap_or_default();
+    Ok(Some((status.success(), String::from_utf8_lossy(&out).into_owned())))
 }
 
 #[cfg(test)]
