@@ -185,6 +185,8 @@ struct SettingsView: View {
                 agents.refresh()
                 refreshTeams()
             }
+        case .providers:
+            page { ProvidersSettings() }
         case .worktrees:
             page { WorktreeSettings() }
         case .memory:

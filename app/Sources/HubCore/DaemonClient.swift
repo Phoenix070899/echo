@@ -340,6 +340,23 @@ public struct DaemonClient: Sendable {
 
     /// Echo Remote (ADR 0008): `remote.status`, `remote.enable`, `remote.disable`, or
     /// `remote.pair` (a new pairing link, which unpairs every phone); each answers with the status.
+    /// Who each agent CLI's agents run as, read again (features/0089).
+    public func providers() throws -> [ProviderStatus] {
+        let result = try call("providers") as? [String: Any]
+        let data = try JSONSerialization.data(withJSONObject: result?["providers"] ?? [])
+        return try JSONDecoder().decode([ProviderStatus].self, from: data)
+    }
+
+    /// Signs Echo's own login to `cli` out; its agents go back to the human's.
+    public func signOut(_ cli: String) throws {
+        try call("providers.signout", ["cli": cli])
+    }
+
+    /// Whether the terminal signing Echo in to `cli` still runs.
+    public func loginLive(_ cli: String) throws -> Bool {
+        (try call("providers.login.live", ["cli": cli]) as? [String: Any])?["live"] as? Bool ?? false
+    }
+
     public func remote(_ method: String) throws -> RemoteStatus {
         let result = try call(method)
         return try JSONDecoder().decode(RemoteStatus.self, from: JSONSerialization.data(withJSONObject: result))

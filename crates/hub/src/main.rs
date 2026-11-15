@@ -1,5 +1,6 @@
 //! `echoctl`: the Echo CLI. With no command it starts the Orchestrator for the repo here.
 
+mod accounts;
 mod action;
 mod attach;
 mod brief;
@@ -155,6 +156,9 @@ enum Command {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Which account each agent CLI runs on: Echo's own login, signed in from Settings > Providers,
+    /// or yours.
+    Providers,
     /// Have Echo show something: a file, a Worker or agent, a Worker's diff, a notification, or a
     /// new Orchestrator. Echo changes what it shows but never comes to the front.
     #[command(subcommand)]
@@ -217,7 +221,8 @@ enum UiCommand {
     Show { target: String },
     /// Show a Worker's diff, ready for review.
     Diff { worker: String },
-    /// Show a part of Settings (window, theme, background, font, multiplexer, teams, worktrees, memory, remote),
+    /// Show a part of Settings (window, theme, background, font, multiplexer, teams, providers, worktrees,
+    /// memory, remote),
     /// for a change only the human makes there, like which model Profiles run with.
     Settings {
         #[arg(default_value = "teams")]
@@ -599,6 +604,29 @@ fn print_json(value: &Value) -> Result<()> {
     Ok(())
 }
 
+/// One line per CLI: who its agents run as.
+fn print_providers(answer: &Value) {
+    for provider in answer["providers"].as_array().into_iter().flatten() {
+        let name = provider["cli"].as_str().unwrap_or("");
+        let account = provider["account"].as_str().unwrap_or("");
+        let line = if provider["installed"] != json!(true) {
+            "not installed".to_string()
+        } else if provider["own"] == json!(true) {
+            format!("Echo's own login, {account}")
+        } else if provider["signedIn"] == json!(true) {
+            let note = if provider["shared"] == json!(true) {
+                " (Kiro keeps one login for this Mac)"
+            } else {
+                ""
+            };
+            format!("your own login, {account}{note}")
+        } else {
+            "not signed in".to_string()
+        };
+        println!("{name:<7} {line}");
+    }
+}
+
 fn print_remote(status: &Value) {
     let on = status["enabled"].as_bool() == Some(true);
     println!("Echo Remote is {}.", if on { "on" } else { "off" });
@@ -670,6 +698,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 holder::quit();
             }
         }
+        Command::Providers => print_providers(&proto::call("providers", json!({}))?),
         Command::Remote { action, port } => {
             let status = match action {
                 RemoteAction::On => proto::call("remote.enable", json!({ "port": port }))?,
