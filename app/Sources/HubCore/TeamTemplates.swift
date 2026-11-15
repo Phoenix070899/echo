@@ -68,7 +68,7 @@ public enum TeamTemplate: String, CaseIterable, Sendable {
         }
     }
 
-    /// The Members, in tree order.
+    /// The Members, in file order.
     public var members: [Team.Member] {
         switch self {
         case .blank: []
@@ -81,12 +81,12 @@ public enum TeamTemplate: String, CaseIterable, Sendable {
     }
 
     private static var writer: [Team.Member] {
-        member("build", "execute") + member("check", "verify", under: "build")
+        member("build", "execute") + member("check", "verify", after: "build")
     }
 
-    private static func member(_ id: String, _ action: String, under parent: String? = nil) -> [Team.Member] {
+    private static func member(_ id: String, _ action: String, after source: String? = nil) -> [Team.Member] {
         let profile = Action.shipped.first { $0.id == action }?.profile ?? ""
-        return [Team.Member(id: id, action: action, profile: profile, parent: parent)]
+        return [Team.Member(id: id, action: action, profile: profile, after: source.map { [Team.HandOff(from: $0)] })]
     }
 }
 

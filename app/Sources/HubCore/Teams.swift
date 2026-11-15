@@ -50,15 +50,44 @@ public struct Team: Decodable, Equatable, Identifiable, Sendable {
         }
     }
 
-    /// One Worker slot of the Team's tree (features/0084): an Action, the Profile it starts from,
-    /// and the changes this Team makes to that Profile. A field left out is nil (or empty, for a
-    /// list) and means the level below.
+    /// The `from` of a Hand-off out of the Orchestrator; no Member may take it as its id.
+    public static let orchestratorID = "orchestrator"
+
+    /// A line into a Member from the Orchestrator or another Member, saying what follows: a hint the
+    /// Orchestrator reads, or with `auto` one the daemon carries out itself (features/0092, 0093).
+    public struct HandOff: Decodable, Equatable, Hashable, Sendable {
+        /// A Member's id, or `Team.orchestratorID`.
+        public var from: String
+        public var auto: Bool
+
+        public init(from: String, auto: Bool = false) {
+            self.from = from
+            self.auto = auto
+        }
+
+        private enum Key: String, CodingKey { case from, auto }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: Key.self)
+            from = try values.decode(String.self, forKey: .from)
+            auto = try values.decodeIfPresent(Bool.self, forKey: .auto) ?? false
+        }
+    }
+
+    /// One Worker slot of the Team (features/0084): an Action, the Profile it starts from, and the
+    /// changes this Team makes to that Profile. A field left out is nil (or empty, for a list) and
+    /// means the level below.
     public struct Member: Decodable, Equatable, Identifiable, Sendable {
         public var id: String
         public var action: String
         public var profile: String
-        /// The `id` of the Member above; nil at level 1.
-        public var parent: String?
+        /// The Hand-offs into it (features/0092): nil hangs it from the Orchestrator alone, and an
+        /// empty list leaves it unreachable, which the Team refuses. A file's `parent` from before
+        /// Hand-offs is read as one Hand-off from it.
+        public var after: [HandOff]?
+        /// Its place on the Teams canvas, in points; nil lets Echo lay it out.
+        public var x: Int?
+        public var y: Int?
         public var instructions: String?
         public var replaceRole: Bool?
         public var cli: String?
@@ -72,15 +101,17 @@ public struct Team: Decodable, Equatable, Identifiable, Sendable {
         /// "current" or "new".
         public var worktree: String?
 
-        public init(id: String, action: String, profile: String, parent: String? = nil,
+        public init(id: String, action: String, profile: String, after: [HandOff]? = nil,
                     instructions: String? = nil, replaceRole: Bool? = nil, cli: String? = nil,
                     model: String? = nil, effort: String? = nil, tools: [String] = [],
                     skills: [String] = [], context: [String] = [], lessons: Bool? = nil,
-                    writes: Bool? = nil, worktree: String? = nil) {
+                    writes: Bool? = nil, worktree: String? = nil, x: Int? = nil, y: Int? = nil) {
             self.id = id
             self.action = action
             self.profile = profile
-            self.parent = parent
+            self.after = after
+            self.x = x
+            self.y = y
             self.instructions = instructions
             self.replaceRole = replaceRole
             self.cli = cli
@@ -95,7 +126,7 @@ public struct Team: Decodable, Equatable, Identifiable, Sendable {
         }
 
         private enum Key: String, CodingKey {
-            case id, action, profile, parent, instructions, replaceRole, cli, model, effort
+            case id, action, profile, parent, after, x, y, instructions, replaceRole, cli, model, effort
             case tools, skills, context, lessons, writes, worktree
         }
 
@@ -104,7 +135,12 @@ public struct Team: Decodable, Equatable, Identifiable, Sendable {
             id = try values.decode(String.self, forKey: .id)
             action = try values.decode(String.self, forKey: .action)
             profile = try values.decode(String.self, forKey: .profile)
-            parent = try values.decodeIfPresent(String.self, forKey: .parent)
+            after = try values.decodeIfPresent([HandOff].self, forKey: .after)
+            if after == nil, let parent = try values.decodeIfPresent(String.self, forKey: .parent) {
+                after = [HandOff(from: parent)]
+            }
+            x = try values.decodeIfPresent(Int.self, forKey: .x)
+            y = try values.decodeIfPresent(Int.self, forKey: .y)
             instructions = try values.decodeIfPresent(String.self, forKey: .instructions)
             replaceRole = try values.decodeIfPresent(Bool.self, forKey: .replaceRole)
             cli = try values.decodeIfPresent(String.self, forKey: .cli)
@@ -116,6 +152,11 @@ public struct Team: Decodable, Equatable, Identifiable, Sendable {
             lessons = try values.decodeIfPresent(Bool.self, forKey: .lessons)
             writes = try values.decodeIfPresent(Bool.self, forKey: .writes)
             worktree = try values.decodeIfPresent(String.self, forKey: .worktree)
+        }
+
+        /// The Hand-offs into it; a Member without `after` hangs from the Orchestrator.
+        public var handOffs: [HandOff] {
+            after ?? [HandOff(from: Team.orchestratorID)]
         }
     }
 
@@ -132,7 +173,7 @@ public struct Team: Decodable, Equatable, Identifiable, Sendable {
     public let workers: Workers?
     public let rules: Rules?
     public let instructions: String?
-    /// The tree of Workers, flat and in tree order; a Member's `parent` names the Member above.
+    /// The Team's Workers, flat and in file order; a Member's `after` names the Hand-offs into it.
     public let members: [Member]
 
     public var id: String { name }

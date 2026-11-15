@@ -4,7 +4,8 @@ import Foundation
 /// short names of the models its Members run on, and the two letters on a Member's node.
 extension TeamForm {
     /// How many things differ from `saved`: each field of the Team's own, and each Member added,
-    /// removed or changed; Members only put in another order count once.
+    /// removed or changed; Members only put in another order count once. A Member that only gained
+    /// the place Echo had laid it out at is not changed (`placedMembers`).
     public func changeCount(from saved: TeamForm) -> Int {
         let a = self, b = saved
         let fields: [Bool] = [
@@ -19,15 +20,23 @@ extension TeamForm {
         var count = fields.filter { $0 }.count
         var ids = b.members.map(\.id)
         for member in a.members where !ids.contains(member.id) { ids.append(member.id) }
-        let changedMembers = ids.filter { a.member($0) != b.member($0) }.count
+        let changedMembers = ids.filter { a.memberChanged($0, from: b) }.count
         count += changedMembers
-        if changedMembers == 0, a.members != b.members { count += 1 }
+        if changedMembers == 0, a.members.map(\.id) != b.members.map(\.id) { count += 1 }
         return count
     }
 
-    /// Whether the Member `id` is new or differs from `saved`'s.
+    /// Whether the Member `id` is new or differs from `saved`'s, its laid-out place aside.
     public func memberChanged(_ id: String, from saved: TeamForm) -> Bool {
-        member(id) != saved.member(id)
+        guard var now = member(id), let before = saved.member(id) else { return member(id) != saved.member(id) }
+        // A saved Member without a place counts as at the place Echo laid it out at, which the
+        // first edit on the canvas writes into every Member.
+        if before.x == nil || before.y == nil, now.x != nil,
+           let laid = TeamGraph.positions(saved.members)[id], now.x == laid.x, now.y == laid.y {
+            now.x = nil
+            now.y = nil
+        }
+        return now != before
     }
 }
 

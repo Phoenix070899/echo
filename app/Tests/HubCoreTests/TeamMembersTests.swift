@@ -2,14 +2,14 @@ import Foundation
 import Testing
 @testable import HubCore
 
-/// scan, then build with its check under it, then run: the Standard Team's tree.
+/// scan, then build with its check after it, then run: the Standard Team.
 private func standard() -> TeamForm {
     var form = TeamForm()
     form.name = "mine"
     form.members = [
         Team.Member(id: "scan", action: "scan", profile: "hinata"),
         Team.Member(id: "build", action: "execute", profile: "naruto"),
-        Team.Member(id: "check", action: "verify", profile: "sasuke", parent: "build"),
+        Team.Member(id: "check", action: "verify", profile: "sasuke", after: [Team.HandOff(from: "build", auto: false)]),
         Team.Member(id: "run", action: "run", profile: "lee"),
     ]
     return form
@@ -27,11 +27,11 @@ private func profile(_ name: String, cli: String? = nil, model: String? = nil, e
 
 // MARK: Rename
 
-@Test func renamingAMemberPointsItsChildrenAtTheNewId() {
+@Test func renamingAMemberPointsTheHandOffsFromItAtTheNewId() {
     var form = standard()
     #expect(form.renameMember("build", to: "write-code") == nil)
     #expect(form.members.map(\.id) == ["scan", "write-code", "check", "run"])
-    #expect(form.member("check")?.parent == "write-code")
+    #expect(form.member("check")?.after == [Team.HandOff(from: "write-code")])
     #expect(form.blocker == nil)
 }
 
@@ -67,10 +67,10 @@ private func profile(_ name: String, cli: String? = nil, model: String? = nil, e
 @Test func anActionThatBreaksTheTreeIsRefused() {
     var form = standard()
     let before = form.members
-    #expect(form.changeMemberAction("build", to: "run")?.contains("verify Member sits under an execute Member") == true,
-            "A writer cannot change while a verifier sits under it")
+    #expect(form.changeMemberAction("build", to: "run")?.contains("verify Member comes only after execute Members") == true,
+            "A writer cannot change while a verifier comes after it")
     #expect(form.changeMemberAction("check", to: "verify") == nil)
-    #expect(form.changeMemberAction("run", to: "verify")?.contains("sits under an execute Member") == true)
+    #expect(form.changeMemberAction("run", to: "verify")?.contains("comes only after execute Members") == true)
     #expect(form.changeMemberAction("scan", to: "deploy")?.contains("not an Action") == true)
     #expect(form.members == before)
 }
@@ -138,22 +138,24 @@ private func profile(_ name: String, cli: String? = nil, model: String? = nil, e
 
 // MARK: Custom Members
 
-@Test func aCustomMemberIsNamedAfterItsProfileAtLevelOne() {
+@Test func aCustomMemberIsNamedAfterItsProfileAfterTheOrchestrator() {
     var form = standard()
     #expect(form.addCustomMember(profile: "code-reviewer") == "code-reviewer")
-    #expect(form.members.last == Team.Member(id: "code-reviewer", action: "custom", profile: "code-reviewer"))
+    let added = form.members.last
+    #expect(added?.id == "code-reviewer" && added?.action == "custom" && added?.profile == "code-reviewer")
+    #expect(added?.after == nil && added?.x != nil, "it hangs from the Orchestrator, at a place on the canvas")
     #expect(form.addCustomMember(profile: "code-reviewer") == "code-reviewer-2")
     #expect(form.blocker == nil)
     #expect(form.addCustomMember(profile: "  ") == nil)
 }
 
-@Test func aCustomMemberCanGoUnderAMember() {
+@Test func aCustomMemberCanComeAfterAMember() {
     var form = TeamForm()
     form.name = "tree"
     form.members = [Team.Member(id: "build", action: "execute", profile: "naruto")]
-    #expect(form.addCustomMember(profile: "code-reviewer", under: "build") == "code-reviewer")
-    #expect(form.members.last?.parent == "build")
-    #expect(form.addCustomMember(profile: "lost", under: "ghost") == nil)
+    #expect(form.addCustomMember(profile: "code-reviewer", after: "build") == "code-reviewer")
+    #expect(form.members.last?.after == [Team.HandOff(from: "build")])
+    #expect(form.addCustomMember(profile: "lost", after: "ghost") == nil)
     #expect(form.blocker == nil)
 }
 

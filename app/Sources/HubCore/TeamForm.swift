@@ -1,8 +1,8 @@
 import Foundation
 
 /// The Teams page's editor, as plain values: a Team loaded into fields, and the fields turned
-/// back into the `team.save` request. The name and the shape of the tree of Members are checked
-/// here, the same way the daemon checks them (features/0084); the daemon validates everything
+/// back into the `team.save` request. The name and the Members with their Hand-offs are checked
+/// here, the same way the daemon checks them (features/0084, 0092); the daemon validates everything
 /// else and its message is shown as it is (features/0081).
 public struct TeamForm: Equatable, Sendable {
     /// One Profile whose Worker setup differs from the Team's Workers.
@@ -50,7 +50,7 @@ public struct TeamForm: Equatable, Sendable {
     public var review: Bool?
     public var mergeWithoutAsking: Bool?
     public var instructions = ""
-    /// The Team's Members in tree order. The form keeps every field a Member came with, so a Team
+    /// The Team's Members in file order. The form keeps every field a Member came with, so a Team
     /// saved without edits sends them all back; `team.save` replaces the file with what it gets.
     public var members: [Team.Member] = []
     private var nextOverrideID = 0
@@ -140,12 +140,11 @@ public struct TeamForm: Equatable, Sendable {
         return membersBlocker
     }
 
-    /// The most Members a Team holds, and the deepest its tree goes (level 1 is depth 1).
+    /// The most Members a Team holds.
     public static let maxMembers = 24
-    public static let maxDepth = 3
 
-    /// The daemon's checks of the tree, in its order: the count, then each id, then each Action
-    /// and Profile, then each parent, verifier and depth. Each message names the Member.
+    /// The daemon's checks of the Members, in its order: the count, then each id, then each Action
+    /// and Profile, then each Member's Hand-offs, then loops. Each message names the Member.
     private var membersBlocker: String? {
         if members.count > Self.maxMembers {
             return "A Team holds at most \(Self.maxMembers) Members; this one has \(members.count)."
@@ -158,6 +157,9 @@ public struct TeamForm: Equatable, Sendable {
             if members[..<at].contains(where: { $0.id == member.id }) {
                 return "\(member.id): another Member has this id. Give each Member its own."
             }
+            if member.id == Team.orchestratorID {
+                return "\(member.id) is the Orchestrator's own id. Give the Member another."
+            }
         }
         for member in members {
             if !Action.isAction(member.action) {
@@ -169,30 +171,46 @@ public struct TeamForm: Equatable, Sendable {
             }
         }
         for member in members {
-            let parent = member.parent.flatMap { id in members.first { $0.id == id } }
-            if let id = member.parent, parent == nil {
-                return "\(member.id): its parent \"\(id)\" is not a Member of this Team."
+            let handOffs = member.handOffs
+            if handOffs.isEmpty {
+                return "\(member.id): no Hand-off comes into it, so the Orchestrator cannot reach it."
             }
-            if member.action == "verify", parent?.action != "execute" {
-                return "\(member.id): a verify Member sits under an execute Member."
-            }
-            var depth = 1
-            var above = parent
-            while let up = above {
-                if up.id == member.id || depth > members.count {
-                    return "\(member.id): its parents lead back to itself."
+            for (at, handOff) in handOffs.enumerated() {
+                if handOffs[..<at].contains(where: { $0.from == handOff.from }) {
+                    return "\(member.id): two Hand-offs come from \(handOff.from)."
                 }
-                depth += 1
-                above = up.parent.flatMap { id in members.first { $0.id == id } }
+                let source = handOff.from == Team.orchestratorID ? nil : members.first { $0.id == handOff.from }
+                if handOff.from != Team.orchestratorID, source == nil {
+                    return "\(member.id): it comes after \"\(handOff.from)\", which is not a Member of this Team."
+                }
+                if member.action == "verify", source?.action != "execute" {
+                    return "\(member.id): a verify Member comes only after execute Members."
+                }
+                if handOff.auto, source == nil {
+                    return "\(member.id): a Hand-off from the Orchestrator cannot be automatic."
+                }
+                if handOff.auto, member.action == "verify" {
+                    return "\(member.id): a Hand-off into a verify Member runs through --verify and cannot be automatic."
+                }
             }
-            if depth > Self.maxDepth {
-                return "\(member.id): the tree is \(depth) deep here; at most \(Self.maxDepth)."
+            if handOffs.filter(\.auto).count > 1 {
+                return "\(member.id): at most one automatic Hand-off comes into a Member."
             }
+        }
+        for member in members where Self.loops(from: member.id, in: members, path: []) {
+            return "\(member.id): its Hand-offs lead back to itself."
         }
         return nil
     }
 
-    /// Why `members` cannot be a Team's tree, in the words of `blocker`; nil when they can.
+    /// Whether walking back from `id` along the Hand-offs into it ever comes to a Member on `path`.
+    private static func loops(from id: String, in members: [Team.Member], path: [String]) -> Bool {
+        if path.contains(id) { return true }
+        guard let member = members.first(where: { $0.id == id }) else { return false }
+        return (member.after ?? []).contains { loops(from: $0.from, in: members, path: path + [id]) }
+    }
+
+    /// Why `members` cannot be a Team's Members, in the words of `blocker`; nil when they can.
     public static func problem(with members: [Team.Member]) -> String? {
         var form = TeamForm()
         form.name = "team"
@@ -238,7 +256,13 @@ public struct TeamForm: Equatable, Sendable {
     /// One Member as the file holds it: `id`, `action` and `profile` always, the rest only when set.
     private func memberFields(_ member: Team.Member) -> [String: Any] {
         var out: [String: Any] = ["id": member.id, "action": member.action, "profile": member.profile]
-        if let text = member.parent, !text.isEmpty { out["parent"] = text }
+        if let after = member.after {
+            out["after"] = after.map { handOff -> [String: Any] in
+                handOff.auto ? ["from": handOff.from, "auto": true] : ["from": handOff.from]
+            }
+        }
+        if let x = member.x { out["x"] = x }
+        if let y = member.y { out["y"] = y }
         if let text = member.instructions, !trimmed(text).isEmpty { out["instructions"] = text }
         if let flag = member.replaceRole { out["replaceRole"] = flag }
         if let text = member.cli.flatMap(present) { out["cli"] = text }

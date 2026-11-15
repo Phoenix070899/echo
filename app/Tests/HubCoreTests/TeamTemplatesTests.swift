@@ -9,7 +9,7 @@ private var actionsFolder: URL {
 }
 
 private func shape(_ members: [Team.Member]) -> [String] {
-    members.map { "\($0.id):\($0.action):\($0.profile):\($0.parent ?? "-")" }
+    members.map { "\($0.id):\($0.action):\($0.profile):\($0.after?.map(\.from).joined(separator: ",") ?? "-")" }
 }
 
 @Test func theShippedActionsTableEqualsTheActionFiles() throws {
@@ -46,7 +46,7 @@ private func shape(_ members: [Team.Member]) -> [String] {
         for preset in ProviderPreset.allCases {
             let form = TeamForm.starting(template: template, preset: preset, name: "mine")
             #expect(form.blocker == nil, "\(template) on \(preset)")
-            #expect(TeamTree.isValid(form.members))
+            #expect(TeamForm.problem(with: form.members) == nil)
         }
     }
 }

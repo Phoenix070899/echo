@@ -17,6 +17,7 @@ struct MemberInspector: View {
     var body: some View {
         Group {
             MemberIdentity(teams: teams, member: member, profile: profile)
+            MemberAfter(teams: teams, member: member)
             MemberRuns(teams: teams, member: member, setting: setting)
             MemberRole(teams: teams, member: member, profile: profile)
             MemberToolList(teams: teams, member: member, profile: profile, cli: setting(.cli).value)
@@ -70,6 +71,76 @@ private struct MemberIdentity: View {
             } else if let problem = profile?.problem {
                 InspectorNote(problem, problem: true)
             }
+        }
+    }
+}
+
+/// The Hand-offs into the Member (features/0092, ui-ux/0144): one row per Member it comes after,
+/// with an Automatic switch and Remove, then Add to draw one more, so a drag on the canvas is never
+/// the only way. A line into a verify Member runs through --verify and has no switch.
+private struct MemberAfter: View {
+    @ObservedObject var teams: TeamSettingsModel
+    let member: Team.Member
+
+    var body: some View {
+        InspectorField("After") {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(member.handOffs, id: \.from) { handOff in
+                    HStack(spacing: 10) {
+                        Text(handOff.from == Team.orchestratorID ? "Orchestrator" : handOff.from)
+                            .font(handOff.from == Team.orchestratorID ? Ledger.font(13) : Ledger.monoFont(12))
+                            .foregroundStyle(Ledger.ink)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 0)
+                        if member.action == "verify" {
+                            Text("via --verify")
+                                .font(Ledger.monoFont(11))
+                                .foregroundStyle(Ledger.ink3)
+                        } else if handOff.from != Team.orchestratorID {
+                            Checkbox("Automatic", isOn: Binding(
+                                get: { handOff.auto },
+                                set: { teams.setAutomatic($0, from: handOff.from, to: member.id) }), size: 12)
+                                .fixedSize()
+                                .help("The daemon starts this Member itself when that one ends done")
+                        }
+                        Button("Remove") { teams.disconnect(handOff.from, to: member.id) }
+                            .buttonStyle(.ledgerLink)
+                            .fixedSize()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
+                }
+                if member.handOffs.isEmpty {
+                    Text("No Hand-off comes in: the Orchestrator cannot reach it.")
+                        .font(Ledger.font(13))
+                        .foregroundStyle(SettingsLook.problem)
+                        .padding(10)
+                        .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
+                }
+                let sources = TeamGraph.sources(for: member.id, in: teams.form.members)
+                MenuButton(label: "Add a Hand-off", entries: {
+                    sources.map { id in
+                        .item(id == Team.orchestratorID ? "The Orchestrator" : id) { teams.connect(id, to: member.id) }
+                    }
+                }) {
+                    HStack(spacing: 8) {
+                        Text("+ Add a Hand-off")
+                            .font(Ledger.font(13))
+                            .foregroundStyle(sources.isEmpty ? Ledger.ink3 : Ledger.ink)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(sources.isEmpty)
+            }
+            .overlay(Rectangle().strokeBorder(Ledger.ink3, lineWidth: Ledger.hairline))
+            InspectorNote("An automatic Hand-off starts this Member when that one ends done, with its Task and Final Report.")
         }
     }
 }

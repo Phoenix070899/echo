@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Settings' Teams section, across the whole width beside the section list (ui-ux/0101, laid out
 /// as ui-ux/0121 says): the list of Teams with the section's head on the left, the picked Team's
-/// tree in the middle, the inspector of the picked row on the right, and the bar with Save under
+/// canvas in the middle (ui-ux/0144), the inspector of the picked row on the right, and the bar with Save under
 /// all three columns.
 struct TeamsSection: View {
     @ObservedObject var teams: TeamSettingsModel
@@ -27,7 +27,7 @@ struct TeamsSection: View {
                     DefaultsPane(agents: agents)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .team:
-                    TeamTreeColumn(teams: teams)
+                    TeamCanvasColumn(teams: teams)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     Rectangle()
                         .fill(Ledger.rule)
@@ -182,7 +182,7 @@ private struct TeamRow: View {
     }
 }
 
-/// The bar under the list, the tree and the inspector: how many edits are not saved, Revert and Save; a
+/// The bar under the list, the canvas and the inspector: how many edits are not saved, Revert and Save; a
 /// shipped Team offers Duplicate in Save's place (ui-ux/0100), and the daemon's refusal shows here.
 private struct TeamSaveBar: View {
     @ObservedObject var teams: TeamSettingsModel
@@ -202,7 +202,7 @@ private struct TeamSaveBar: View {
                 Button("Revert", action: teams.revert)
                     .buttonStyle(.settings)
                     .disabled(!teams.changed)
-                // Return renames in the tree, so Save gives up the key while the tree has it.
+                // Return renames on the canvas, so Save gives up the key while the canvas has it.
                 Button(teams.form.name.isEmpty ? "Save" : "Save \(teams.form.name)") { teams.save() }
                     .buttonStyle(.settingsPrimary)
                     .keyboardShortcut(teams.treeFocused ? nil : .defaultAction)
