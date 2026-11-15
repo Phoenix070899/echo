@@ -24,6 +24,9 @@ enum Ledger {
     static let selected = dynamic(0xD8D5CE, 0x3A3936) { CustomLook.mix($0.surface, $0.accent, 0.12) }
     /// The human's message bubble: the sunk grey, darker than the canvas in both modes.
     static let bubble = dynamic(0xD8D5CE, 0x141413) { CustomLook.mix($0.surface, $0.text, 0.07) }
+    /// The human's own message: ink in light mode, near black in dark, with white text (ui-ux/0134).
+    static let sent = dynamic(0x2B2B29, 0x141413) { $0.dark ? CustomLook.mix($0.surface, "#000000", 0.5) : $0.text }
+    static let onSent = rgb(0xFFFFFF)
     // Areas are told apart by fills and rules.
     static let strip = dynamic(0xE6E4DF, 0x1F1E1D) { CustomLook.mix($0.background, $0.surface, 0.4) }
     static let pill = dynamic(0xEFEEEA, 0x30302E) { CustomLook.mix($0.surface, $0.dark ? $0.text : "#ffffff", 0.1) }
@@ -43,6 +46,9 @@ enum Ledger {
     /// Foundry's muted safety orange: marks, meters, the picked row's edge, the button's offset. Never
     /// text in light mode (3.1:1 on the sheet).
     static let accent = dynamic(0xC8642E, 0xD9773F) { $0.accent }
+    /// The accent a shade deeper, the same in both modes, so white text on it is 4.7:1: a chat
+    /// reply that needs the human (ui-ux/0134).
+    static let accentDeep = dynamic(0xB45A29, 0xB45A29) { CustomLook.mix($0.accent, "#000000", 0.1) }
     /// The hard block a raised sheet casts (a menu, a modal): ink in light mode, black in dark,
     /// where ink is the light text colour.
     static let cast = dynamic(0x2B2B29, 0x000000)

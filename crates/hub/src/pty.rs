@@ -7,7 +7,7 @@ use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -60,6 +60,9 @@ pub struct Live {
     /// When output last arrived, as milliseconds since `started`; a side shell is busy while it
     /// is recent.
     last_output: std::sync::atomic::AtomicU64,
+    /// How many output chunks have arrived, and its signal, for `wait_output`.
+    outputs: Mutex<u64>,
+    output_arrived: Condvar,
 }
 
 impl Live {
@@ -149,6 +152,8 @@ impl Live {
             alive: AtomicBool::new(true),
             started,
             last_output: std::sync::atomic::AtomicU64::new(0),
+            outputs: Mutex::new(0),
+            output_arrived: Condvar::new(),
         });
         let reading = Arc::clone(&live);
         std::thread::spawn(move || {
@@ -162,6 +167,7 @@ impl Live {
             }
             reading.alive.store(false, Ordering::SeqCst);
             reading.subscribers.lock().unwrap().clear();
+            reading.signal_output();
             on_exit(reading.id);
         });
         live
@@ -180,6 +186,23 @@ impl Live {
             .unwrap()
             .retain(|subscriber| subscriber.try_send(Arc::clone(&chunk)).is_ok());
         feed(&mut parser, bytes);
+        drop(parser);
+        self.signal_output();
+    }
+
+    fn signal_output(&self) {
+        *self.outputs.lock().unwrap() += 1;
+        self.output_arrived.notify_all();
+    }
+
+    /// Waits until output arrives after `seen` (or the terminal ends), or `timeout` passes; the
+    /// count it is at now. `seen` None only reads the count.
+    pub fn wait_output(&self, seen: Option<u64>, timeout: Duration) -> u64 {
+        let count = self.outputs.lock().unwrap();
+        match seen {
+            Some(seen) if *count == seen => *self.output_arrived.wait_timeout(count, timeout).unwrap().0,
+            _ => *count,
+        }
     }
 
     pub fn is_alive(&self) -> bool {

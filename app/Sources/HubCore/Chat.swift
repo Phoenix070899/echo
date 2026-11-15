@@ -52,7 +52,7 @@ public struct ChatItem: Equatable, Identifiable, Sendable {
     }
 
     /// A reply whose Needs you section lists something other than "Nothing" or "None", drawn
-    /// with an amber edge; the same rule as the mod's `needsHuman` (`mod/hooks/report.ts`).
+    /// on a soft fill; the same rule as the mod's `needsHuman` (`mod/hooks/report.ts`).
     public var needsHuman: Bool {
         guard kind == .reply else { return false }
         let section = #/^\s*(?:#+\s*|\*\*)?(?i:(needs you|done|running))\b/#
@@ -101,6 +101,14 @@ public struct ChatState: Equatable, Sendable {
         look = Look(rawValue: raw?["look"] as? String ?? "") ?? .stopped
         spinner = raw?["spinner"] as? String
         step = raw?["step"] as? String
+    }
+
+    /// As `chat.read` sends it, so a waiting read can say what Echo already shows.
+    public var raw: [String: Any] {
+        var raw: [String: Any] = ["live": live, "look": look.rawValue]
+        raw["spinner"] = spinner
+        raw["step"] = step
+        return raw
     }
 
     /// The Working row's text: the step, else the spinner, while a turn runs.

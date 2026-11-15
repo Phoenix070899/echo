@@ -2921,6 +2921,72 @@ fn an_orchestrators_chat_reads_its_transcript_then_only_new_lines() {
 }
 
 #[test]
+fn a_waiting_chat_read_is_held_until_a_line_is_written() {
+    let hub = Hub::new("chatwait");
+    let claude = hub.state.join("claude");
+    let config = claude.display().to_string();
+    hub.run_with(&["status"], &[("CLAUDE_CONFIG_DIR", &config)]);
+    let opened = hub.call(
+        "agent.open",
+        serde_json::json!({ "repo": hub.repo_key(), "kind": "orchestrator", "name": "chat" }),
+    );
+    let agent = opened["result"]["agent"].as_i64().unwrap();
+    let read = |params: serde_json::Value| hub.call("chat.read", params)["result"].clone();
+    let session = read(serde_json::json!({ "agent": agent }))["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let file = claude.join("projects").join("repo").join(format!("{session}.jsonl"));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let line = |v: serde_json::Value| format!("{v}\n");
+    std::fs::write(
+        &file,
+        line(serde_json::json!({ "type": "user", "uuid": "u1", "message": { "content": "build it" } })),
+    )
+    .unwrap();
+    let mut last = read(serde_json::json!({ "agent": agent }));
+    assert_eq!(last["items"].as_array().map(Vec::len), Some(1));
+    // Reads on from `last` until it brings items, each held up to `wait`; the items, how many reads
+    // came back with none, and how long it all took.
+    let follow = |last: &mut serde_json::Value, wait: u64, until: Duration| {
+        let began = Instant::now();
+        let mut empty = 0;
+        while began.elapsed() < until {
+            let reply = read(
+                serde_json::json!({ "agent": agent, "session": session, "after": last["end"],
+                                                  "state": last["state"], "wait": wait }),
+            );
+            let items = reply["items"].as_array().cloned().unwrap_or_default();
+            *last = reply;
+            if !items.is_empty() {
+                return (items, empty, began.elapsed());
+            }
+            empty += 1;
+        }
+        (vec![], empty, began.elapsed())
+    };
+    // Nothing written: each read is held, so a second holds few of them (the spinner may still
+    // change the Working state, ten times a second at most).
+    let (items, empty, _) = follow(&mut last, 300, Duration::from_secs(1));
+    assert!(items.is_empty());
+    assert!(empty <= 11, "{empty} reads in a second");
+    let writer = {
+        let file = file.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            let mut more = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+            let thanks = serde_json::json!({ "type": "user", "uuid": "u2", "message": { "content": "thanks" } });
+            std::io::Write::write_all(&mut more, format!("{thanks}\n").as_bytes()).unwrap();
+        })
+    };
+    // A line written while a read waits answers it, within the second a quiet terminal is read again.
+    let (items, _, took) = follow(&mut last, 10_000, Duration::from_secs(5));
+    writer.join().unwrap();
+    assert_eq!(items[0]["text"], "thanks");
+    assert!(took < Duration::from_millis(1600), "took {took:?}");
+}
+
+#[test]
 fn a_chat_message_is_typed_at_the_orchestrator_and_its_turn_shows_as_working() {
     let hub = Hub::new("chatsend");
     let claude = hub.state.join("claude");

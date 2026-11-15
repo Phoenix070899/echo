@@ -514,7 +514,26 @@ impl Hub {
         }]
     }
 
+    /// `chat.read`, held while `wait` (milliseconds, 15 s at most) lets it until something the
+    /// chat shows changes: new items, another session, or another Working state than `state`.
     fn chat_read(&self, p: &Value) -> Result<Value> {
+        let wait = p
+            .get("wait")
+            .and_then(Value::as_u64)
+            .map(Duration::from_millis)
+            .unwrap_or_default()
+            .min(CHAT_WAIT);
+        let began = Instant::now();
+        loop {
+            let (reply, watch) = self.chat_read_once(p)?;
+            if p.get("before").is_some() || began.elapsed() >= wait || chat_news(p, &reply) {
+                return Ok(reply);
+            }
+            watch.wait(&reply["state"], began, wait);
+        }
+    }
+
+    fn chat_read_once(&self, p: &Value) -> Result<(Value, ChatWatch)> {
         // Whose transcript, its CLI, its running terminal, the texts Echo or others typed in, and
         // (for an agent) its earlier sessions, oldest first.
         let (session, cli, live, inputs, earlier) = match p.get("worker").and_then(Value::as_i64) {
@@ -573,7 +592,10 @@ impl Hub {
             let mut renewed = None;
             if before.is_none() {
                 let Some(prev) = previous(&page_session) else {
-                    return Ok(json!({ "items": [], "start": 0, "page_session": page_session, "more": false }));
+                    return Ok((
+                        json!({ "items": [], "start": 0, "page_session": page_session, "more": false }),
+                        ChatWatch::default(),
+                    ));
                 };
                 renewed = Some(chat::renewed(&page_session));
                 page_session = prev;
@@ -590,31 +612,44 @@ impl Hub {
             chat::mark_origins(&mut items, &inputs);
             items.extend(renewed);
             let more = page.start > 0 || previous(&page_session).is_some();
-            return Ok(json!({ "items": items, "start": page.start, "page_session": page_session, "more": more }));
+            return Ok((
+                json!({ "items": items, "start": page.start, "page_session": page_session, "more": more }),
+                ChatWatch::default(),
+            ));
         }
         let state = chat_state(live.as_deref());
         let more = !earlier.is_empty();
+        let mut watch = ChatWatch {
+            live,
+            ..ChatWatch::default()
+        };
         if matches!(cli, None | Some(cli::Cli::Codex)) {
-            return Ok(
+            return Ok((
                 json!({ "session": session, "supported": false, "items": [], "end": 0, "start": 0,
                               "more": false, "state": state }),
-            );
+                watch,
+            ));
         }
         let Some(path) = transcript(&session) else {
-            return Ok(
+            return Ok((
                 json!({ "session": session, "supported": true, "items": [], "end": 0, "start": 0,
                               "more": more, "state": state }),
-            );
+                watch,
+            ));
         };
         let same = p.get("session").and_then(Value::as_str) == Some(session.as_str());
         let after = p.get("after").and_then(Value::as_u64).filter(|_| same);
+        // Its size before the read, so a line written during it still counts as growth after.
+        watch.size = file_len(&path);
         let page = read(&path, after, None)?;
+        watch.path = Some(path);
         let mut items = page.items;
         chat::mark_origins(&mut items, &inputs);
-        Ok(
+        Ok((
             json!({ "session": session, "supported": true, "items": items, "end": page.end, "start": page.start,
                    "more": more || page.start > 0, "state": state }),
-        )
+            watch,
+        ))
     }
 
     /// Re-runs `check` after every change until it yields, `timeout` passes, or `gone` says stop.
@@ -3817,6 +3852,20 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn a_chat_read_has_news_only_for_items_another_session_or_another_working_state() {
+        let state = json!({ "live": true, "look": "working", "spinner": "✻ Baking…", "step": null });
+        let reply = json!({ "session": "s1", "items": [], "state": state });
+        // Echo leaves out a field it has none of; the daemon sends it as null.
+        let asked = json!({ "session": "s1", "state": { "live": true, "look": "working", "spinner": "✻ Baking…" } });
+        assert!(!chat_news(&asked, &reply));
+        assert!(chat_news(&json!({ "session": "s0", "state": state }), &reply));
+        let spun = json!({ "session": "s1", "items": [], "state": { "live": true, "look": "working", "spinner": "✢ Baking…" } });
+        assert!(chat_news(&asked, &spun));
+        let said = json!({ "session": "s1", "items": [{ "kind": "user" }], "state": state });
+        assert!(chat_news(&asked, &said));
+    }
+
     fn agent_of(kind: &str, cli: Option<&str>, model: Option<&str>) -> db::Agent {
         db::Agent {
             id: 1,
@@ -4449,6 +4498,68 @@ fn chat_state(live: Option<&Live>) -> Value {
     };
     let (spinner, step) = screen::activity(&screen);
     json!({ "live": true, "look": look, "spinner": spinner, "step": step })
+}
+
+/// The longest a `chat.read` with `wait` holds its call with nothing new.
+const CHAT_WAIT: Duration = Duration::from_secs(15);
+/// How often a held `chat.read` reads again whatever its terminal does: for a transcript line
+/// written with no output, a transcript that appeared, or an agent that started.
+const CHAT_LOOK_AGAIN: Duration = Duration::from_secs(1);
+/// The least a held `chat.read` waits before answering with only a new Working state, so the
+/// spinner redraws ten times a second at most.
+const CHAT_STATE_EVERY: Duration = Duration::from_millis(100);
+
+/// What a `chat.read` with nothing new watches for a change: its terminal and its transcript.
+#[derive(Default)]
+struct ChatWatch {
+    live: Option<Arc<Live>>,
+    path: Option<PathBuf>,
+    size: Option<u64>,
+}
+
+impl ChatWatch {
+    /// Waits until the transcript grows, the Working state is no longer `state`, the terminal
+    /// ends, or a second passes, so the caller reads again; never past `began` plus `wait`.
+    fn wait(&self, state: &Value, began: Instant, wait: Duration) {
+        let look_again = Instant::now() + CHAT_LOOK_AGAIN;
+        let deadline = (began + wait).min(look_again);
+        let Some(live) = self.live.as_ref().filter(|live| live.is_alive()) else {
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+            return;
+        };
+        let mut seen = live.wait_output(None, Duration::ZERO);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() || !live.is_alive() || self.path.as_deref().and_then(file_len) != self.size {
+                return;
+            }
+            if !same_state(&chat_state(Some(live)), state) {
+                std::thread::sleep(CHAT_STATE_EVERY.saturating_sub(began.elapsed()));
+                return;
+            }
+            seen = live.wait_output(Some(seen), left);
+        }
+    }
+}
+
+/// Whether a `chat.read` reply holds anything the asker does not have: items, another session, or
+/// another Working state than the `state` it sent.
+fn chat_news(p: &Value, reply: &Value) -> bool {
+    reply["items"].as_array().is_some_and(|items| !items.is_empty())
+        || p.get("session").unwrap_or(&Value::Null) != &reply["session"]
+        || !same_state(&reply["state"], p.get("state").unwrap_or(&Value::Null))
+}
+
+/// Two Working states alike, a missing field the same as null (Echo leaves out what it has none of).
+fn same_state(a: &Value, b: &Value) -> bool {
+    ["live", "look", "spinner", "step"].iter().all(|key| {
+        let field = |state: &Value| state.get(key).filter(|value| !value.is_null()).cloned();
+        field(a) == field(b)
+    })
+}
+
+fn file_len(path: &Path) -> Option<u64> {
+    std::fs::metadata(path).ok().map(|meta| meta.len())
 }
 
 /// How the human is told to answer a permission prompt before typing: Esc denies it for claude

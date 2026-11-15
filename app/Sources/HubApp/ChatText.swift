@@ -30,6 +30,8 @@ struct ChatText: NSViewRepresentable {
     /// Inline `code`, a little smaller than the text around it.
     var code: CGFloat = 13
     var color: Color = Ledger.ink
+    /// Drawn on the accent: every mark, link, and fill in `color` or a shade of it (ui-ux/0134).
+    var onAccent = false
     @Environment(\.colorScheme) private var scheme
 
     private struct Key: Equatable {
@@ -38,11 +40,12 @@ struct ChatText: NSViewRepresentable {
         let leading: CGFloat
         let code: CGFloat
         let color: Color
+        let onAccent: Bool
         let scheme: ColorScheme
     }
 
     private func key(_ scheme: ColorScheme) -> Key {
-        Key(source: source, size: size, leading: leading, code: code, color: color, scheme: scheme)
+        Key(source: source, size: size, leading: leading, code: code, color: color, onAccent: onAccent, scheme: scheme)
     }
 
     func makeNSView(context: Context) -> EchoTextView {
@@ -60,7 +63,11 @@ struct ChatText: NSViewRepresentable {
         let key = key(scheme)
         guard view.appliedKey as? Key != key else { return }
         view.appliedKey = key
-        let builder = ChatTextBuilder(size: size, leading: leading, code: code, color: color, appearance: view.effectiveAppearance)
+        // Its colours, like code's wash, follow the scheme it is told, which a reply on the accent
+        // sets apart from the window's.
+        view.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+        let builder = ChatTextBuilder(size: size, leading: leading, code: code, color: color, onAccent: onAccent,
+                                      appearance: view.effectiveAppearance)
         let hugs: Bool
         if case .plain = source { hugs = true } else { hugs = false }
         view.show(builder.build(source), hugs: hugs)
@@ -102,19 +109,33 @@ struct ChatTextBuilder {
 
     /// A code card's padding, above and below its text.
     static let codePad: CGFloat = 10
+    /// How far an inline code chip reaches past its text, and the extra space kept on either side.
+    static let chipPad: CGFloat = 3
+    static let chipGap: CGFloat = 5
 
-    init(size: CGFloat, leading: CGFloat, code: CGFloat, color: Color, appearance: NSAppearance) {
+    init(size: CGFloat, leading: CGFloat, code: CGFloat, color: Color, onAccent: Bool = false, appearance: NSAppearance) {
         self.size = size
         self.leading = leading
         self.code = code
         ink = Self.resolve(Ledger.ink, appearance)
-        ink2 = Self.resolve(Ledger.ink2, appearance)
-        ink3 = Self.resolve(Ledger.ink3, appearance)
-        done = Self.resolve(Ledger.done, appearance)
-        wash = Self.resolve(Ledger.wash, appearance)
-        rule = Self.resolve(Ledger.rule, appearance)
-        link = Self.resolve(Ledger.run, appearance)
         base = Self.resolve(color, appearance)
+        if onAccent {
+            // The ink's quieter shades, the run blue, and the done green all fall under 3:1 on the
+            // accent; markers and links take the text's own colour, and fills darken the accent.
+            ink2 = base
+            ink3 = base
+            done = base
+            link = base
+            wash = NSColor.black.withAlphaComponent(0.28)
+            rule = base.withAlphaComponent(0.5)
+        } else {
+            ink2 = Self.resolve(Ledger.ink2, appearance)
+            ink3 = Self.resolve(Ledger.ink3, appearance)
+            done = Self.resolve(Ledger.done, appearance)
+            wash = Self.resolve(Ledger.wash, appearance)
+            rule = Self.resolve(Ledger.rule, appearance)
+            link = Self.resolve(Ledger.run, appearance)
+        }
     }
 
     private static func resolve(_ color: Color, _ appearance: NSAppearance) -> NSColor {
@@ -267,7 +288,7 @@ struct ChatTextBuilder {
             var font = (base[.font] as? NSFont) ?? Ledger.nsFont(size)
             if intent.contains(.code) {
                 font = Ledger.nsMono(code, .regular)
-                attributes[.backgroundColor] = wash
+                // Its chip is drawn by the view, one font-height tall on every line.
                 attributes[.echoInlineCode] = true
             }
             if intent.contains(.stronglyEmphasized) { font = manager.convert(font, toHaveTrait: .boldFontMask) }
@@ -276,6 +297,12 @@ struct ChatTextBuilder {
             attributes[.font] = font
             if let link = run.link { attributes[.link] = link }
             out.append(NSAttributedString(string: String(parsed[run.range].characters), attributes: attributes))
+        }
+        // Room between a code chip and the text on either side of it.
+        out.enumerateAttribute(.echoInlineCode, in: NSRange(location: 0, length: out.length)) { value, range, _ in
+            guard value != nil else { return }
+            if range.location > 0 { out.addAttribute(.kern, value: Self.chipGap, range: NSRange(location: range.location - 1, length: 1)) }
+            if NSMaxRange(range) < out.length { out.addAttribute(.kern, value: Self.chipGap, range: NSRange(location: NSMaxRange(range) - 1, length: 1)) }
         }
         return linkified(out)
     }
@@ -391,6 +418,27 @@ final class EchoTextView: NSTextView, NSTextViewDelegate {
                               height: box.height + 2 * ChatTextBuilder.codePad)
             NSBezierPath(roundedRect: card, xRadius: Ledger.radiusElement, yRadius: Ledger.radiusElement).fill()
         }
+        // Inline code's chip: the span's width, and the code font's height around its baseline, so
+        // a chip on a wrapped line is no taller than one on a paragraph's last line.
+        storage.enumerateAttribute(.echoInlineCode, in: whole) { value, range, _ in
+            guard value != nil, let font = storage.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont,
+                  let textContainer else { return }
+            let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            wash.setFill()
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { line, _, _, lineGlyphs, _ in
+                let part = NSIntersectionRange(glyphs, lineGlyphs)
+                guard part.length > 0 else { return }
+                var span = layoutManager.boundingRect(forGlyphRange: part, in: textContainer)
+                // The gap after the span is kerning on its last character, not part of the code.
+                let last = layoutManager.characterIndexForGlyph(at: NSMaxRange(part) - 1)
+                span.size.width -= storage.attribute(.kern, at: last, effectiveRange: nil) as? CGFloat ?? 0
+                let baseline = line.minY + layoutManager.location(forGlyphAt: part.location).y
+                let pad = ChatTextBuilder.chipPad
+                let chip = NSRect(x: span.minX - pad, y: baseline - font.ascender - 2,
+                                  width: span.width + 2 * pad, height: font.ascender - font.descender + 4)
+                NSBezierPath(roundedRect: chip.offsetBy(dx: origin.x, dy: origin.y), xRadius: 3, yRadius: 3).fill()
+            }
+        }
         storage.enumerateAttribute(.echoQuote, in: whole) { value, range, _ in
             guard value != nil, let box = box(range) else { return }
             rule.setFill()
@@ -446,6 +494,8 @@ struct ChatMarkdown: View {
     var leading: CGFloat = 6
     var code: CGFloat = 13
     var color: Color = Ledger.ink
+    /// Drawn on the accent: marks, links, and fills follow `color` (ui-ux/0134).
+    var onAccent = false
 
     private struct Run {
         var blocks: [MarkdownBlock]
@@ -475,7 +525,12 @@ struct ChatMarkdown: View {
                 let run = runs[index]
                 Group {
                     if run.isText {
-                        ChatText(source: .markdown(run.blocks), size: size, leading: leading, code: code, color: color)
+                        ChatText(source: .markdown(run.blocks), size: size, leading: leading, code: code, color: color,
+                                 onAccent: onAccent)
+                    } else if onAccent {
+                        MarkdownBlockView(block: run.blocks[0], leading: leading, codeSize: code)
+                            .foregroundStyle(color)
+                            .tint(color)
                     } else {
                         MarkdownBlockView(block: run.blocks[0], leading: leading, codeSize: code)
                     }

@@ -45,8 +45,11 @@ struct ChatView: View {
     /// Kept by the model per agent, so showing the agent again draws what it read before.
     @ObservedObject var feed: ChatFeed
 
-    /// How often a shown chat asks the daemon for new lines; a read with nothing new is a stat.
-    private static let poll = Duration.milliseconds(800)
+    /// How long the daemon holds a shown chat's read with nothing new (features/0088).
+    private static let wait = Duration.seconds(15)
+    /// The least time between two reads that changed nothing, and the retry while the daemon is away.
+    private static let idle = Duration.milliseconds(100)
+    private static let retry = Duration.milliseconds(800)
 
     var body: some View {
         content
@@ -64,7 +67,7 @@ struct ChatView: View {
             FinalReportView(worker: worker)
         } else if !feed.supported {
             EmptyNote(title: "No chat for this agent", detail: "Its CLI keeps no transcript Echo reads yet. Press ⇧⌘T for its terminal.")
-        } else if feed.loaded && feed.rows.isEmpty && !feed.more && worker?.finalReport == nil {
+        } else if feed.loaded && feed.rows.isEmpty && feed.pending.isEmpty && !feed.more && worker?.finalReport == nil {
             VStack(spacing: 0) {
                 EmptyNote(title: "Nothing said yet", detail: "Messages show here once the conversation starts.")
                     .frame(maxHeight: .infinity)
@@ -90,6 +93,13 @@ struct ChatView: View {
                     }
                     ForEach(feed.rows) { row in
                         ChatRowView(row: row, feed: feed)
+                            .transition(.opacity)
+                    }
+                    // What the human just sent, until the transcript has it (ui-ux/0137).
+                    ForEach(feed.pending) { message in
+                        UserBubble(text: message.text, fromOrchestrator: false)
+                            .opacity(0.6)
+                            .transition(.opacity)
                     }
                     if let worker, !worker.isActive {
                         FinalReportCard(worker: worker)
@@ -130,12 +140,22 @@ struct ChatView: View {
         let client = model.client
         let target = target
         while !Task.isCancelled {
-            let log = feed.log
-            let result = await Task.detached { try? client.chat(target, after: log) }.value
-            if let result, !Task.isCancelled { feed.take(result) }
-            try? await Task.sleep(for: Self.poll)
+            // The first read answers at once; after it, the daemon holds each until something changes.
+            let wait = feed.loaded ? Self.wait : .zero
+            guard let result = try? await client.chat(target, after: feed.log, wait: wait) else {
+                try? await Task.sleep(for: Self.retry)
+                continue
+            }
+            if Task.isCancelled { return }
+            if !feed.take(result) { try? await Task.sleep(for: Self.idle) }
         }
     }
+}
+
+/// A message sent from the chat, shown until the transcript has it.
+struct PendingMessage: Identifiable, Equatable {
+    let id = UUID()
+    let text: String
 }
 
 /// One chat's items and which rows the human opened. Only a read that changes what shows
@@ -153,18 +173,70 @@ final class ChatFeed: ObservableObject {
     @Published private(set) var more = false
     @Published private(set) var loadingOlder = false
     @Published var open: Set<String> = []
+    /// Messages sent from the chat that the transcript has not shown yet, oldest first.
+    @Published private(set) var pending: [PendingMessage] = []
     /// Each reply's Markdown, parsed once.
     private var parsed: [String: [MarkdownBlock]] = [:]
 
-    func take(_ result: [String: Any]) {
-        if log.apply(result) {
+    /// Takes a `chat.read` result in; true when it changed anything.
+    @discardableResult
+    func take(_ result: [String: Any]) -> Bool {
+        let before = log
+        let changed = log.apply(result)
+        // Each message the human typed that the transcript now has stands for the oldest one sent;
+        // a new session starts over.
+        var arrived = 0
+        if changed, !pending.isEmpty {
+            arrived = log.session != before.session ? pending.count
+                : log.items.filter(Self.typedByHuman).count - before.items.filter(Self.typedByHuman).count
+            arrived = min(max(arrived, 0), pending.count)
+        }
+        if changed {
             let rows = log.rows
-            if rows != self.rows { self.rows = rows }
+            if arrived > 0 {
+                // The message takes its dimmed copy's place in one step, so nothing moves.
+                pending.removeFirst(arrived)
+                if rows != self.rows { self.rows = rows }
+            } else if rows != self.rows {
+                // A row added below the ones shown fades in (ui-ux/0133); a new session or the
+                // first read just shows.
+                if loaded, self.rows.first?.id == rows.first?.id, !Self.reduceMotion {
+                    withAnimation(Self.rowAnimation) { self.rows = rows }
+                } else {
+                    self.rows = rows
+                }
+            }
             if supported != log.supported { supported = log.supported }
             if more != log.more { more = log.more }
             if live.state != log.state { live.state = log.state }
         }
         if !loaded { loaded = true }
+        return changed
+    }
+
+    /// How a row arriving below the others fades in (ui-ux/0133).
+    static let rowAnimation = Animation.easeOut(duration: 0.15)
+
+    private static func typedByHuman(_ item: ChatItem) -> Bool {
+        item.kind == .user && (item.from == nil || item.from == "human")
+    }
+
+    /// Shows `text` as sent until the transcript has it; its id, to drop it if the send fails.
+    func addPending(_ text: String) -> UUID {
+        let message = PendingMessage(text: text)
+        // The first message swaps the empty note for the list, which must not cross-fade.
+        if Self.reduceMotion || rows.isEmpty {
+            pending.append(message)
+        } else {
+            withAnimation(Self.rowAnimation) { pending.append(message) }
+        }
+        return message.id
+    }
+
+    private static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    func dropPending(_ id: UUID) {
+        pending.removeAll { $0.id == id }
     }
 
     /// Loads the page before the oldest shown: earlier in this session, or the session before a renewal.
@@ -490,12 +562,17 @@ private struct ChatBottom: View {
         let client = model.client
         let target = target
         let composer = composer
+        // Shows at once, dimmed, until the transcript has it; a slash command may never write a
+        // message, so it shows only from the transcript.
+        let feed = model.chatFeed(target)
+        let pending = typed.hasPrefix("/") ? nil : feed.addPending(text)
         Task {
             let failure = await Task.detached { () -> String? in
                 do { try client.chatSend(target, text: text); return nil } catch { return "\(error)" }
             }.value
             composer.sending = false
             if let failure {
+                if let pending { feed.dropPending(pending) }
                 composer.error = failure
                 if composer.text.isEmpty { composer.text = typed }
                 if composer.files.isEmpty { composer.files = files }
@@ -589,12 +666,13 @@ private struct UserBubble: View {
                 if fromOrchestrator {
                     MonoLabel("From Orchestrator")
                 }
-                ChatText(source: .plain(text), size: 15, leading: 8)
+                ChatText(source: .plain(text), size: 15, leading: 8, color: fromOrchestrator ? Ledger.ink : Ledger.onSent)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(Ledger.bubble, in: RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous))
+            .background(fromOrchestrator ? Ledger.bubble : Ledger.sent,
+                        in: RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous))
             // Foundry's bubble stops at 560 pt (ui-ux/0117).
             .frame(maxWidth: 560, alignment: fromOrchestrator ? .leading : .trailing)
             if fromOrchestrator { Spacer(minLength: 80) }
@@ -638,21 +716,22 @@ private struct FinalReportCard: View {
     }
 }
 
-/// The agent's text, full width; an amber edge when its Needs you section lists something.
+/// The agent's text, full width; on the deep accent, in white, when its Needs you section lists
+/// something (ui-ux/0134).
 private struct ReplyView: View {
     let item: ChatItem
     let blocks: [MarkdownBlock]
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        ChatMarkdown(blocks: blocks)
+        ChatMarkdown(blocks: blocks, color: item.needsHuman ? Ledger.onSent : Ledger.ink, onAccent: item.needsHuman)
+        // On the accent its tables take their dark-mode fills in both modes.
+        .environment(\.colorScheme, item.needsHuman ? .dark : scheme)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, item.needsHuman ? 14 : 0)
-        .overlay(alignment: .leading) {
-            if item.needsHuman {
-                Rectangle().fill(Ledger.accent).frame(width: 3)
-            }
-        }
+        .padding(item.needsHuman ? 16 : 0)
+        .background(item.needsHuman ? Ledger.accentDeep : .clear,
+                    in: RoundedRectangle(cornerRadius: Ledger.radiusCard, style: .continuous))
     }
 }
 

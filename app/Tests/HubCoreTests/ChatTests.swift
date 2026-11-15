@@ -107,3 +107,37 @@ import Testing
     #expect(log.items[3].denied && log.items[3].failed && log.items[3].output == "Denied")
     #expect(!log.items[4].denied)
 }
+
+@Test func theStateAWaitingReadSendsReadsBackTheSame() {
+    let working = ChatState(live: true, look: .working, spinner: "✻ Baking…", step: nil)
+    #expect(ChatState(working.raw) == working)
+    #expect(working.raw["step"] == nil)
+    #expect(ChatState(ChatState().raw) == ChatState())
+}
+
+@Test func cancellingAHeldChatReadEndsTheCall() async throws {
+    // A daemon that takes the call and never answers.
+    let path = "/tmp/echo-held-\(getpid()).sock"
+    unlink(path)
+    let server = socket(AF_UNIX, SOCK_STREAM, 0)
+    defer { close(server); unlink(path) }
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+    withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+        raw.copyBytes(from: Array(path.utf8))
+        raw[path.utf8.count] = 0
+    }
+    let bound = withUnsafePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(server, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+    }
+    #expect(bound == 0)
+    listen(server, 1)
+    let client = DaemonClient(socketPath: path)
+    let read = Task { try await client.chat(.agent(id: 1), after: ChatLog(), wait: .seconds(15)) }
+    let taken = accept(server, nil, nil)
+    defer { close(taken) }
+    let began = ContinuousClock.now
+    read.cancel()
+    await #expect(throws: (any Error).self) { try await read.value }
+    #expect(ContinuousClock.now - began < .seconds(1))
+}

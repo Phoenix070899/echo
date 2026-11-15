@@ -149,12 +149,35 @@ public struct DaemonClient: Sendable {
         return (line, result?["session"] as? String)
     }
 
-    /// The next part of an agent's or Worker's conversation, for `ChatLog.apply`.
-    public func chat(_ target: TerminalTarget, after log: ChatLog) throws -> [String: Any] {
+    /// The next part of an agent's or Worker's conversation, for `ChatLog.apply`: held by the daemon
+    /// until something the chat shows changes or `wait` passes, so a new line shows as soon as it is
+    /// written. Cancelling the task ends the call.
+    public func chat(_ target: TerminalTarget, after log: ChatLog, wait: Duration) async throws -> [String: Any] {
         var params = log.request
         params.merge(target.chatParams) { _, new in new }
-        guard let result = try call("chat.read", params) as? [String: Any] else { throw HubError.badResponse }
-        return result
+        params["state"] = log.state.raw
+        params["wait"] = Int(wait / .milliseconds(1))
+        let call = HeldCall()
+        let client = self
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                // Its own thread, not the task's: the call blocks for up to `wait`.
+                Thread.detachNewThread {
+                    do {
+                        let socket = try client.open("chat.read", params)
+                        guard call.hold(socket) else { throw CancellationError() }
+                        guard let result = try Self.result(of: socket.readLine()) as? [String: Any] else {
+                            throw HubError.badResponse
+                        }
+                        continuation.resume(returning: result)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        } onCancel: {
+            call.cancel()
+        }
     }
 
     /// The page before the oldest loaded, for `ChatLog.applyOlder`; nil when there is none.
@@ -350,5 +373,28 @@ public struct SideStatus: Equatable, Sendable {
     public init(live: Bool, busy: Bool) {
         self.live = live
         self.busy = busy
+    }
+}
+
+/// The connection of a held call, so cancelling its task closes it instead of leaving a thread
+/// waiting on the daemon.
+private final class HeldCall: @unchecked Sendable {
+    private let lock = NSLock()
+    private var socket: HubSocket?
+    private var cancelled = false
+
+    /// Keeps `socket` to close on cancel; false when the call was cancelled already.
+    func hold(_ socket: HubSocket) -> Bool {
+        lock.withLock {
+            self.socket = socket
+            return !cancelled
+        }
+    }
+
+    func cancel() {
+        lock.withLock {
+            cancelled = true
+            socket?.shutdown()
+        }
     }
 }
