@@ -26,11 +26,13 @@ final class TeamSettingsModel: ObservableObject {
     @Published var selectedMember: String?
     /// Why the last Member edit was refused, until the next edit or pick.
     @Published var memberNotice: String?
-    /// Why the last command on the tree was refused: the one line under the tree (ui-ux/0102).
+    /// Why the last command on the canvas was refused: the one line under it (ui-ux/0144).
     @Published var treeNotice: String?
-    /// The tree has the keyboard, so the page leaves Up and Down to it, and Save gives up Return.
+    /// The canvas has the keyboard, so the page leaves the arrows to it, and Save gives up Return.
     @Published var treeFocused = false
-    /// Each change asks the view that owns that focus to take it: the tree, the Member's name
+    /// Each change asks the canvas to frame the whole Team.
+    @Published var fitRequest = 0
+    /// Each change asks the view that owns that focus to take it: the canvas, the Member's name
     /// field, and the settings page's own keys.
     @Published var treeFocusRequest = 0
     @Published var nameFocusRequest = 0
@@ -206,7 +208,7 @@ final class TeamSettingsModel: ObservableObject {
         run({ try client.saveTeam(params) }, then: { name in
             self.saving = false
             self.refresh(select: name) {
-                // The Team is read again from its file, which drops the pick; the tree keeps it.
+                // The Team is read again from its file, which drops the pick; the canvas keeps it.
                 if let keep, self.form.member(keep) != nil { self.selectedMember = keep }
                 done?(true)
             }
@@ -278,10 +280,9 @@ final class TeamSettingsModel: ObservableObject {
     }
 
     /// Asks for a name, creates a Profile of that name and opens its file to fill in, then adds a
-    /// `custom` Member on it to the draft, under `parent` or at level 1, and picks it. The Profile's
-    /// file is written at once; the Member is held in the draft until Save. A drop between rows
-    /// passes `placed`, so the Member goes there among its siblings and not last.
-    func newCustomWorker(under parent: String? = nil, placed: DropPlacement? = nil) {
+    /// `custom` Member on it to the draft, after `source` or after the Orchestrator, and picks it.
+    /// The Profile's file is written at once; the Member is held in the draft until Save.
+    func newCustomWorker(after source: String? = nil) {
         let question = FoundryQuestion(
             "New custom Worker",
             message: "Name its Profile with lowercase letters, digits, and -, like code-reviewer. "
@@ -289,22 +290,19 @@ final class TeamSettingsModel: ObservableObject {
             answers: [FoundryAnswer("Create", role: .primary)], field: "code-reviewer")
         FoundryAsk.shared.ask(question) { answer, text in
             guard answer != nil else { return }
-            self.createCustomWorker(text.trimmingCharacters(in: .whitespaces), under: parent, placed: placed)
+            self.createCustomWorker(text.trimmingCharacters(in: .whitespaces), after: source)
         }
     }
 
-    private func createCustomWorker(_ name: String, under parent: String?, placed: DropPlacement?) {
+    private func createCustomWorker(_ name: String, after source: String?) {
         let (client, repo) = (client, repo)
         run({ try client.profile("new", name: name, repo: repo) }) { path in
             if !path.isEmpty { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
-            if let id = self.form.addCustomMember(profile: name, under: parent) {
-                if let placed, let moved = TeamTree.drop(id, onto: placed.target, as: placed.position, in: self.form.members) {
-                    self.form.members = moved
-                }
+            if let id = self.form.addCustomMember(profile: name, after: source) {
                 self.selectMember(id)
             } else {
                 self.treeNotice = "The Profile \(name) is made, but no Member could be added for it: a Team holds at most "
-                    + "\(TeamForm.maxMembers) Members and the tree goes \(TeamForm.maxDepth) deep."
+                    + "\(TeamForm.maxMembers) Members."
             }
             self.refreshProfiles()
         }
@@ -345,7 +343,7 @@ final class TeamSettingsModel: ObservableObject {
     }
 }
 
-/// The inspector of what is picked in the tree (ui-ux/0101, ui-ux/0121): a head naming the picked
+/// The inspector of what is picked on the canvas (ui-ux/0101, ui-ux/0121): a head naming the picked
 /// row, then the Orchestrator's fields (the Team's name and rules among them) or the picked
 /// Member's, as Foundry fields: a mono capital label over a square control.
 struct TeamInspectorColumn: View {
@@ -387,11 +385,11 @@ struct TeamInspectorColumn: View {
     }
 
     private var title: String {
-        guard let member = teams.member else { return "Orchestrator" }
-        return ActionLook.title(for: member.action)
+        // The row's name, as ui-ux/0121 has it; the Action leads the line under it.
+        teams.member?.id ?? "Orchestrator"
     }
 
-    /// "Under Write code · what Verify does", or the Team's name and where it comes from.
+    /// "Verify · After build · what Verify does", or the Team's name and where it comes from.
     private var subtitle: String {
         guard let member = teams.member else {
             let name = teams.form.name.isEmpty ? "New Team" : teams.form.name
@@ -399,10 +397,10 @@ struct TeamInspectorColumn: View {
             let from = team.replaces.isEmpty ? team.origin : "\(team.origin), replaces \(team.replaces.joined(separator: ", "))"
             return "\(name) · \(from)"
         }
-        let above = member.parent.flatMap(teams.form.member).map { "Under \(ActionLook.title(for: $0.action))" }
-            ?? "Under the Orchestrator"
+        let sources = member.handOffs.map { $0.from == Team.orchestratorID ? "the Orchestrator" : $0.from }
+        let above = sources.isEmpty ? "Reached by no Hand-off" : "After " + sources.joined(separator: ", ")
         let about = Action.shipped.first { $0.id == member.action }?.description ?? "On a Profile of your own."
-        return "\(above) · \(about)"
+        return "\(ActionLook.title(for: member.action)) · \(above) · \(about)"
     }
 }
 

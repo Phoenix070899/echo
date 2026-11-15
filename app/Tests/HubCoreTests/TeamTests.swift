@@ -119,18 +119,23 @@ private func team(_ json: String) throws -> Team {
       {"id":"build","action":"execute","profile":"naruto","instructions":"Small commits.","replaceRole":true,
        "cli":"kiro","model":"claude-sonnet-5.5","effort":"high","tools":["read","write"],"skills":["tdd"],
        "context":["CONTEXT.md"],"lessons":false,"writes":true,"worktree":"new","future":1},
-      {"id":"check","action":"verify","profile":"sasuke","parent":"build"}]}
+      {"id":"check","action":"verify","profile":"sasuke","parent":"build"},
+      {"id":"test","action":"run","profile":"lee","after":[{"from":"build","auto":true},{"from":"orchestrator"}],"x":-96,"y":272}]}
     """)
-    #expect(decoded.members.map(\.id) == ["build", "check"])
+    #expect(decoded.members.map(\.id) == ["build", "check", "test"])
     let build = decoded.members[0]
-    #expect(build.action == "execute" && build.profile == "naruto" && build.parent == nil)
+    #expect(build.action == "execute" && build.profile == "naruto" && build.after == nil)
+    #expect(build.handOffs == [Team.HandOff(from: "orchestrator")], "no after hangs it from the Orchestrator")
     #expect(build.instructions == "Small commits." && build.replaceRole == true)
     #expect(build.cli == "kiro" && build.model == "claude-sonnet-5.5" && build.effort == "high")
     #expect(build.tools == ["read", "write"] && build.skills == ["tdd"] && build.context == ["CONTEXT.md"])
     #expect(build.lessons == false && build.writes == true && build.worktree == "new")
     let check = decoded.members[1]
-    #expect(check.parent == "build")
+    #expect(check.after == [Team.HandOff(from: "build")], "a parent is read as one Hand-off")
     #expect(check.instructions == nil && check.replaceRole == nil && check.tools.isEmpty && check.lessons == nil)
+    let test = decoded.members[2]
+    #expect(test.after == [Team.HandOff(from: "build", auto: true), Team.HandOff(from: "orchestrator")])
+    #expect(test.x == -96 && test.y == 272 && check.x == nil)
 }
 
 @Test func aTeamWithoutMembersHasNone() throws {

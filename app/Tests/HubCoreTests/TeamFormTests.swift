@@ -170,13 +170,19 @@ private func crew(_ members: [Team.Member]) -> TeamForm {
     return form
 }
 
-private func member(_ id: String, _ action: String = "execute", parent: String? = nil) -> Team.Member {
-    Team.Member(id: id, action: action, profile: "naruto", parent: parent)
+private func member(_ id: String, _ action: String = "execute", after: String...) -> Team.Member {
+    Team.Member(id: id, action: action, profile: "naruto", after: after.isEmpty ? nil : after.map { Team.HandOff(from: $0) })
+}
+
+private func member(_ id: String, _ action: String = "execute", handOffs: [Team.HandOff]) -> Team.Member {
+    Team.Member(id: id, action: action, profile: "naruto", after: handOffs)
 }
 
 @Test func aFormSavedWithoutEditsSendsEveryMemberFieldBack() throws {
-    let check = Team.Member(id: "check", action: "verify", profile: "sasuke", parent: "build")
-    let loaded = Team(name: "crew", origin: "user", members: [everyField, check])
+    let check = Team.Member(id: "check", action: "verify", profile: "sasuke", after: [Team.HandOff(from: "build")])
+    let test = Team.Member(id: "test", action: "run", profile: "lee",
+                           after: [Team.HandOff(from: "build", auto: true), Team.HandOff(from: "orchestrator")], x: -96, y: 272)
+    let loaded = Team(name: "crew", origin: "user", members: [everyField, check, test])
     let params = TeamForm(team: loaded).saveParams(repo: nil)
     let sent = try #require(params["team"] as? [String: Any])
     let members = try #require(sent["members"] as? [[String: Any]])
@@ -185,13 +191,15 @@ private func member(_ id: String, _ action: String = "execute", parent: String? 
     "instructions":"Small commits.","lessons":false,"model":"claude-sonnet-5.5","profile":"naruto",\
     "replaceRole":true,"skills":["tdd"],"tools":["read","write"],"worktree":"new","writes":true}
     """)
-    #expect(try json(members[1]) == #"{"action":"verify","id":"check","parent":"build","profile":"sasuke"}"#)
+    #expect(try json(members[1]) == #"{"action":"verify","after":[{"from":"build"}],"id":"check","profile":"sasuke"}"#)
+    #expect(try json(members[2])
+        == #"{"action":"run","after":[{"auto":true,"from":"build"},{"from":"orchestrator"}],"id":"test","profile":"lee","x":-96,"y":272}"#)
     let decoded = try JSONDecoder().decode([Team.Member].self, from: JSONSerialization.data(withJSONObject: members))
     #expect(decoded == loaded.members, "What is sent decodes to the Members that were loaded")
 }
 
 @Test func membersAreSentInOrderAndOnlyWhenThereAreAny() throws {
-    let form = crew([member("b"), member("a"), member("c", "run", parent: "b")])
+    let form = crew([member("b"), member("a"), member("c", "run", after: "b")])
     let members = try #require(form.fields["members"] as? [[String: Any]])
     #expect(members.compactMap { $0["id"] as? String } == ["b", "a", "c"])
     #expect(TeamForm().fields["members"] == nil)
@@ -202,7 +210,6 @@ private func member(_ id: String, _ action: String = "execute", parent: String? 
     blank.instructions = "  \n"
     blank.model = ""
     blank.cli = " "
-    blank.parent = ""
     let sent = try #require(crew([blank]).fields["members"] as? [[String: Any]])
     #expect(try json(sent[0]) == #"{"action":"execute","id":"a","profile":"naruto"}"#)
 }
@@ -225,10 +232,11 @@ private func member(_ id: String, _ action: String = "execute", parent: String? 
     #expect(copy.members == [everyField])
 }
 
-@Test func aSoundTreeHasNoBlocker() {
-    let form = crew([member("a"), member("b", parent: "a"), member("v", "verify", parent: "b"),
-                     member("x", "custom"), member("r", "run", parent: "x")])
-    #expect(form.blocker == nil)
+@Test func aSoundGraphHasNoBlocker() {
+    let form = crew([member("a"), member("b", after: "a"), member("v", "verify", after: "b", "a"),
+                     member("x", "custom"), member("r", "run", handOffs: [.init(from: "x", auto: true), .init(from: "b")]),
+                     member("d", "scan", after: "r")])
+    #expect(form.blocker == nil, "no depth limit, and a Member may come after several")
 }
 
 @Test func aBadMemberIdBlocks() {
@@ -242,28 +250,44 @@ private func member(_ id: String, _ action: String = "execute", parent: String? 
     #expect(crew([member("a"), member("a")]).blocker == "a: another Member has this id. Give each Member its own.")
 }
 
-@Test func aParentThatIsNoMemberBlocks() {
-    #expect(crew([member("a", parent: "ghost")]).blocker == #"a: its parent "ghost" is not a Member of this Team."#)
+@Test func aHandOffFromNoMemberBlocks() {
+    #expect(crew([member("a", after: "ghost")]).blocker == #"a: it comes after "ghost", which is not a Member of this Team."#)
 }
 
-@Test func parentsThatLoopBlock() {
-    #expect(crew([member("a", parent: "a")]).blocker == "a: its parents lead back to itself.")
-    let loop = crew([member("a", parent: "c"), member("b", parent: "a"), member("c", parent: "b")])
-    #expect(loop.blocker?.hasSuffix("its parents lead back to itself.") == true)
+@Test func aMemberWithNoHandOffInBlocks() {
+    #expect(crew([member("a", handOffs: [])]).blocker == "a: no Hand-off comes into it, so the Orchestrator cannot reach it.")
 }
 
-@Test func aTreeDeeperThanThreeBlocks() {
-    let three = crew([member("a"), member("b", parent: "a"), member("c", parent: "b")])
-    #expect(three.blocker == nil)
-    let four = crew([member("a"), member("b", parent: "a"), member("c", parent: "b"), member("d", parent: "c")])
-    #expect(four.blocker == "d: the tree is 4 deep here; at most 3.")
+@Test func theOrchestratorsIdIsNotAMembers() {
+    #expect(crew([member("orchestrator")]).blocker == "orchestrator is the Orchestrator's own id. Give the Member another.")
 }
 
-@Test func aVerifyMemberNeedsAnExecuteMemberAbove() {
-    let message = "v: a verify Member sits under an execute Member."
+@Test func twoHandOffsFromOneMemberBlock() {
+    let form = crew([member("a"), member("b", handOffs: [.init(from: "a"), .init(from: "a", auto: true)])])
+    #expect(form.blocker == "b: two Hand-offs come from a.")
+}
+
+@Test func handOffsThatLoopBlock() {
+    #expect(crew([member("a", after: "a")]).blocker == "a: its Hand-offs lead back to itself.")
+    let loop = crew([member("a", after: "orchestrator", "c"), member("b", after: "a"), member("c", after: "b")])
+    #expect(loop.blocker == "a: its Hand-offs lead back to itself.")
+}
+
+@Test func aVerifyMemberComesOnlyAfterExecuteMembers() {
+    let message = "v: a verify Member comes only after execute Members."
     #expect(crew([member("v", "verify")]).blocker == message)
-    #expect(crew([member("s", "scan"), member("v", "verify", parent: "s")]).blocker == message)
-    #expect(crew([member("e"), member("v", "verify", parent: "e")]).blocker == nil)
+    #expect(crew([member("s", "scan"), member("v", "verify", after: "s")]).blocker == message)
+    #expect(crew([member("e"), member("s", "scan"), member("v", "verify", after: "e", "s")]).blocker == message)
+    #expect(crew([member("e"), member("v", "verify", after: "e")]).blocker == nil)
+}
+
+@Test func automaticHandOffsKeepTheirRules() {
+    #expect(crew([member("a", handOffs: [.init(from: "orchestrator", auto: true)])]).blocker
+        == "a: a Hand-off from the Orchestrator cannot be automatic.")
+    #expect(crew([member("e"), member("v", "verify", handOffs: [.init(from: "e", auto: true)])]).blocker
+        == "v: a Hand-off into a verify Member runs through --verify and cannot be automatic.")
+    let twice = crew([member("a"), member("b"), member("c", "run", handOffs: [.init(from: "a", auto: true), .init(from: "b", auto: true)])])
+    #expect(twice.blocker == "c: at most one automatic Hand-off comes into a Member.")
 }
 
 @Test func anUnknownActionBlocks() {
@@ -283,7 +307,7 @@ private func member(_ id: String, _ action: String = "execute", parent: String? 
 }
 
 @Test func theNameIsAskedForBeforeTheTreeIsChecked() {
-    var form = crew([member("a", parent: "ghost")])
+    var form = crew([member("a", after: "ghost")])
     form.name = ""
     #expect(form.blocker == "Name the Team.")
 }

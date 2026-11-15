@@ -1,14 +1,14 @@
 import Testing
 @testable import HubCore
 
-private func member(_ id: String, _ action: String = "execute", parent: String? = nil, model: String? = nil) -> Team.Member {
-    Team.Member(id: id, action: action, profile: "naruto", parent: parent, model: model)
+private func member(_ id: String, _ action: String = "execute", after: String? = nil, model: String? = nil) -> Team.Member {
+    Team.Member(id: id, action: action, profile: "naruto", after: after.map { [Team.HandOff(from: $0)] }, model: model)
 }
 
 @Test func changeCountCountsFieldsAndMembers() {
     var saved = TeamForm()
     saved.name = "lean"
-    saved.members = [member("build"), member("check", "verify", parent: "build")]
+    saved.members = [member("build"), member("check", "verify", after: "build")]
     var form = saved
     #expect(form.changeCount(from: saved) == 0)
     form.description = "fast"
@@ -47,4 +47,17 @@ private func member(_ id: String, _ action: String = "execute", parent: String? 
     #expect(ActionLook.initials("Write code") == "WC")
     #expect(ActionLook.initials("Research") == "RE")
     #expect(ActionLook.initials("Custom") == "CU")
+}
+
+@Test func movingOneNodeIsOneChangeThoughEveryNodeGetsItsPlace() {
+    var saved = TeamForm()
+    saved.name = "t"
+    saved.members = [Team.Member(id: "a", action: "scan", profile: "hinata"),
+                     Team.Member(id: "b", action: "run", profile: "lee")]
+    var form = saved
+    form.members = TeamGraph.placed(saved.members)
+    #expect(form.changeCount(from: saved) == 0)
+    form.members[1].x! += 16
+    #expect(form.changeCount(from: saved) == 1)
+    #expect(!form.memberChanged("a", from: saved) && form.memberChanged("b", from: saved))
 }

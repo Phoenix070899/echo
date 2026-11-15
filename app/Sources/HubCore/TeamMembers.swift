@@ -67,7 +67,7 @@ extension TeamForm {
         updateMember(id) { $0.clear(field) }
     }
 
-    /// Gives the Member a new id and points its children's `parent` at it. A refusal names why in
+    /// Gives the Member a new id and points the Hand-offs from it at the new one. A refusal names why in
     /// one plain line and changes nothing; nil means it is done (also when the id is unchanged).
     public mutating func renameMember(_ id: String, to newID: String) -> String? {
         let name = newID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -81,14 +81,14 @@ extension TeamForm {
         }
         for at in members.indices {
             if members[at].id == id { members[at].id = name }
-            if members[at].parent == id { members[at].parent = name }
+            members[at].after = members[at].after?.map { $0.from == id ? Team.HandOff(from: name, auto: $0.auto) : $0 }
         }
         return nil
     }
 
-    /// Makes the Member do `action`. A change that leaves the tree broken is refused with the
-    /// reason and changes nothing: a `verify` Member needs an `execute` parent, and an `execute`
-    /// Member cannot change while a `verify` Member sits under it. The Profile stays as it is;
+    /// Makes the Member do `action`. A change that leaves the Team broken is refused with the
+    /// reason and changes nothing: a `verify` Member comes only after `execute` Members, and an
+    /// `execute` Member cannot change while a `verify` Member comes after it. The Profile stays as it is;
     /// `offeredProfile` says when the Action has another default.
     public mutating func changeMemberAction(_ id: String, to action: String) -> String? {
         guard let member = member(id) else { return "That Member is not in the tree." }
@@ -119,16 +119,17 @@ extension TeamForm {
         return profile
     }
 
-    /// Adds a `custom` Member on `profile` as the last child of `parent` (level 1 when nil), named
-    /// after the Profile, and returns its id; nil when the Team already holds as many Members as
-    /// it can, the tree has no room under `parent`, or `profile` is empty.
-    public mutating func addCustomMember(profile: String, under parent: String? = nil) -> String? {
+    /// Adds a `custom` Member on `profile` after `source` (the Orchestrator when nil), named after
+    /// the Profile, and returns its id; nil when the Team already holds as many Members as it can
+    /// or `profile` is empty.
+    public mutating func addCustomMember(profile: String, after source: String? = nil) -> String? {
         let profile = profile.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !profile.isEmpty,
-              let added = TeamTree.add(action: Action.custom, profile: profile, under: parent, to: members) else { return nil }
+        guard !profile.isEmpty else { return nil }
+        let added = TeamGraph.add(action: Action.custom, profile: profile, after: source, to: members)
+        guard added.notice == nil, let addedID = added.selected else { return nil }
         members = added.members
-        let id = TeamTree.uniqueID(from: profile, taking: Set(members.map(\.id)))
-        return renameMember(added.id, to: id) == nil ? id : added.id
+        let id = TeamGraph.uniqueID(from: profile, taking: Set(members.map(\.id)))
+        return renameMember(addedID, to: id) == nil ? id : addedID
     }
 }
 
