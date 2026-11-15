@@ -265,6 +265,27 @@ extension View {
     func listRowHover() -> some View { modifier(ListRowHover()) }
 }
 
+/// A control or row with no square shows the pointer by its fill alone (ui-ux/0127, ui-ux/0131).
+private struct HoverFill: ViewModifier {
+    let fill: Color
+    let active: Bool
+    @StateObject private var hover = Flag()
+
+    func body(content: Content) -> some View {
+        content
+            .background(active && hover.on ? fill : .clear)
+            .onHover { hover.on = $0 }
+    }
+}
+
+extension View {
+    /// Fills the view while the pointer is over it, unless `active` is false (a picked row keeps
+    /// its own fill).
+    func hoverFill(_ fill: Color = Ledger.wash, active: Bool = true) -> some View {
+        modifier(HoverFill(fill: fill, active: active))
+    }
+}
+
 /// Something in progress: an arc turning once a second (slower for work only waiting in the
 /// background), in the colour of what it stands for. Under Reduce Motion it stands still.
 /// Core Animation turns it, off the main thread: a SwiftUI animation laid the whole window out
@@ -524,11 +545,15 @@ struct LedgerButtonStyle: ButtonStyle {
         let primary: Bool
         let height: CGFloat
         @Environment(\.isEnabled) private var isEnabled
+        @StateObject private var hover = Flag()
 
         var body: some View {
             let tall = height > 30
             let shift: CGFloat = tall ? 3 : 2
-            let pressed: CGFloat = primary && configuration.isPressed ? shift : 0
+            // As Foundry's button: hovered, the primary moves halfway onto its block and pressed, all the
+            // way; the secondary takes the hover fill (ui-ux/0131).
+            let hovered = hover.on && isEnabled
+            let pressed: CGFloat = !primary ? 0 : configuration.isPressed ? shift : hovered ? shift / 2 : 0
             configuration.label
                 .font(Ledger.monoFont(tall ? 11 : 10, .bold))
                 .tracking(0.6)
@@ -539,7 +564,7 @@ struct LedgerButtonStyle: ButtonStyle {
                 .padding(.horizontal, tall ? 14 : 12)
                 .frame(minHeight: height)
                 .foregroundStyle(primary ? Ledger.onPrimary : Ledger.ink)
-                .background(primary ? Ledger.primary : Color.clear)
+                .background(primary ? Ledger.primary : hovered ? Ledger.wash : Color.clear)
                 .overlay(Rectangle().strokeBorder(primary ? Color.clear : Ledger.ink, lineWidth: Ledger.ruleStrong))
                 .offset(x: pressed, y: pressed)
                 // The offset is a solid block behind the button, not a blurred shadow (ui-ux/0106);
@@ -551,6 +576,7 @@ struct LedgerButtonStyle: ButtonStyle {
                 .padding(.bottom, primary ? shift : 0)
                 .opacity(isEnabled ? 1 : 0.45)
                 .contentShape(Rectangle())
+                .onHover { hover.on = $0 }
         }
     }
 }
@@ -593,12 +619,13 @@ extension View {
     }
 }
 
-/// One choice of a segmented control, picked or not.
+/// One choice of a segmented control, picked or not; a choice not picked takes the hover fill.
 struct SegmentLabel: View {
     let title: String
     let on: Bool
     var large = false
     var inset: CGFloat?
+    @StateObject private var hover = Flag()
 
     var body: some View {
         Text(title)
@@ -607,24 +634,36 @@ struct SegmentLabel: View {
             .textCase(.uppercase)
             .lineLimit(1)
             .fixedSize()
-            .foregroundStyle(on ? Ledger.ink : Ledger.ink3)
+            .foregroundStyle(on || hover.on ? Ledger.ink : Ledger.ink3)
             .padding(.horizontal, inset ?? (large ? 14 : 10))
             .frame(height: large ? 28 : 24)
-            .background(on ? Ledger.field : .clear)
+            .background(on ? Ledger.field : hover.on ? Ledger.wash : .clear)
             .overlay(Rectangle().strokeBorder(on ? Ledger.ink : .clear, lineWidth: 2))
             .contentShape(Rectangle())
+            .onHover { hover.on = $0 }
     }
 }
 
 /// A text link, for quiet actions like Show all: ink, underlined in the accent.
+/// Hovered, it turns the muted ink, as Foundry's link.
 struct LinkButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Ledger.font(13, .semibold))
-            .foregroundStyle(Ledger.ink)
-            .underline(true, color: Ledger.accent)
-            .opacity(configuration.isPressed ? 0.6 : 1)
-            .contentShape(Rectangle())
+        Styled(configuration: configuration)
+    }
+
+    private struct Styled: View {
+        let configuration: ButtonStyleConfiguration
+        @StateObject private var hover = Flag()
+
+        var body: some View {
+            configuration.label
+                .font(Ledger.font(13, .semibold))
+                .foregroundStyle(hover.on ? Ledger.ink3 : Ledger.ink)
+                .underline(true, color: Ledger.accent)
+                .opacity(configuration.isPressed ? 0.6 : 1)
+                .contentShape(Rectangle())
+                .onHover { hover.on = $0 }
+        }
     }
 }
 

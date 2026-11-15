@@ -1021,7 +1021,7 @@ final class FindBar: NSView, NSTextFieldDelegate {
         super.init(frame: NSRect(x: 0, y: 0, width: 260, height: 30))
         isHidden = true
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = 0
         layer?.borderWidth = 1
         field.placeholderString = "Find"
         field.font = .systemFont(ofSize: 12)

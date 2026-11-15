@@ -280,6 +280,7 @@ private struct FilesSearchField: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Ledger.ink3)
+                .hoverFill()
                 .accessibilityLabel("Clear search")
             }
         }
@@ -327,6 +328,7 @@ private struct FileSearchResults: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .hoverFill()
                     .foregroundStyle(model.searchIgnoredFiles ? Ledger.ink : Ledger.ink3)
                     .help(model.searchIgnoredFiles ? "Stop searching text in ignored files" : "Search text in ignored files too (slower)")
                     .accessibilityLabel("Search ignored files")
@@ -523,6 +525,7 @@ private struct FilesTabBar: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .hoverFill(active: !picked)
                 .accessibilityAddTraits(picked ? .isSelected : [])
             }
             Spacer(minLength: 0)
@@ -836,7 +839,7 @@ private struct CommitRow: View {
         .padding(.trailing, 12)
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Claude's rows: a rounded fill inset from the column's edges, no bar.
+        // A square fill inset from the column's edges, no bar.
         .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
@@ -889,7 +892,7 @@ private struct ChangedFileRow: View {
         .padding(.trailing, 12)
         .frame(height: 24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Claude's rows: a rounded fill inset from the column's edges, no bar.
+        // A square fill inset from the column's edges, no bar.
         .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
         .padding(.horizontal, 8)
         .contentShape(Rectangle())

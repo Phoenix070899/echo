@@ -224,6 +224,7 @@ private struct ChatBottom: View {
     @ObservedObject var composer: Composer
     @FocusState private var focused: Bool
     @StateObject private var pasteWatch = PasteWatch()
+    @StateObject private var sendHover = Flag()
 
     /// The chat's column, shared by the messages and the box under them.
     static let width: CGFloat = 1200
@@ -305,7 +306,8 @@ private struct ChatBottom: View {
     private func box(_ state: ChatState) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if !matches.isEmpty {
-                CommandList(commands: Array(matches.prefix(8)), pick: min(composer.pick, min(matches.count, 8) - 1)) { command in
+                CommandList(commands: Array(matches.prefix(8)), pick: min(composer.pick, min(matches.count, 8) - 1),
+                            point: { composer.pick = $0 }) { command in
                     complete(command)
                 }
             }
@@ -372,6 +374,7 @@ private struct ChatBottom: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .hoverFill()
                 .help("Attach files or images")
                 .accessibilityLabel("Attach")
                 Spacer(minLength: 8)
@@ -385,12 +388,14 @@ private struct ChatBottom: View {
                         .foregroundStyle(Ledger.onPrimary)
                         .frame(width: 28, height: 28)
                         .background(Ledger.primary)
+                        .offset(x: sendHover.on && canSend ? 1 : 0, y: sendHover.on && canSend ? 1 : 0)
                         .background(Rectangle().fill(Ledger.accent).offset(x: 2, y: 2))
                         .opacity(canSend ? 1 : 0.4)
                         .padding(.trailing, 2)
                         .padding(.bottom, 2)
                 }
                 .buttonStyle(.plain)
+                .onHover { sendHover.on = $0 }
                 .disabled(!canSend)
                 .help("Send (Return). Shift-Return adds a line.")
                 .accessibilityLabel("Send")
@@ -725,6 +730,7 @@ private struct ToolGroup: View {
                 }
             }
             .buttonStyle(.plain)
+            .hoverFill()
             if open {
                 ForEach(run) { item in
                     Hairline()
@@ -757,6 +763,7 @@ private struct ToolRow: View {
                 }
             }
             .buttonStyle(.plain)
+            .hoverFill()
             if open {
                 Hairline()
                 ToolDetail(item: item).padding(12)
@@ -865,10 +872,12 @@ private extension Array where Element == String {
     }
 }
 
-/// Under the box while a `/` is typed: the commands it completes, the highlighted one filled.
+/// Under the box while a `/` is typed: the commands it completes, the highlighted one filled. The
+/// pointer moves the highlight, as in Foundry's popover (ui-ux/0127).
 private struct CommandList: View {
     let commands: [SlashCommand]
     let pick: Int
+    let point: (Int) -> Void
     let choose: (SlashCommand) -> Void
 
     var body: some View {
@@ -886,10 +895,11 @@ private struct CommandList: View {
                     .font(Ledger.font(12.5))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(index == pick ? Ledger.selected : .clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
+                    .background(index == pick ? Ledger.selected : .clear)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .onHover { if $0 { point(index) } }
             }
         }
         .padding(4)
@@ -910,15 +920,20 @@ private struct FileChips: View {
                     HStack(spacing: 6) {
                         Image(systemName: ChatAttachments.isImage(file) ? "photo" : "doc")
                         Text(file.lastPathComponent).lineLimit(1)
-                        Button { remove(file) } label: { Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)) }
+                        Button { remove(file) } label: {
+                            Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                                .frame(width: 14, height: 14)
+                                .contentShape(Rectangle())
+                        }
                             .buttonStyle(.plain)
+                            .hoverFill(Ledger.rule)
                             .accessibilityLabel("Remove \(file.lastPathComponent)")
                     }
                     .font(Ledger.font(12))
                     .foregroundStyle(Ledger.ink2)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
-                    .background(Ledger.wash, in: Capsule())
+                    .background(Ledger.wash)
                     .help(file.path)
                 }
             }

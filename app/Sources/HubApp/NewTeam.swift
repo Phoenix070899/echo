@@ -202,6 +202,7 @@ private struct StartCard: View {
     let picked: Bool
     let focused: Bool
     let pick: () -> Void
+    @StateObject private var hover = Flag()
 
     var body: some View {
         Button(action: pick) {
@@ -221,11 +222,11 @@ private struct StartCard: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(picked ? (focused ? Ledger.chosen : Ledger.selected) : Ledger.wash,
-                        in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+            .background(picked ? (focused ? Ledger.chosen : Ledger.selected) : hover.on ? Ledger.selected : Ledger.wash)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hover.on = $0 }
         .accessibilityAddTraits(picked ? .isSelected : [])
     }
 }
@@ -255,6 +256,7 @@ struct FlatSegmented<Value: Hashable>: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .hoverFill(active: !on)
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }

@@ -113,6 +113,7 @@ struct CreateFromSection: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .hoverFill()
         .fixedSize()
         .help("New branches start from \(form.base.isEmpty ? "the repo's checkout" : form.base)")
         .accessibilityLabel("Start new branches from \(form.base)")

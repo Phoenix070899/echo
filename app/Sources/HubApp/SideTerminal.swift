@@ -41,6 +41,7 @@ struct SideTerminalSection: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .hoverFill()
             .help(open ? "Hide the terminal (⌃`). Its commands keep running." : "Open a terminal in this folder (⌃`)")
             .accessibilityLabel(open ? "Hide terminal" : "Open terminal")
             if status?.live == true {
@@ -52,6 +53,7 @@ struct SideTerminalSection: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .hoverFill()
                 .help("End this terminal")
                 .accessibilityLabel("End terminal")
             }
@@ -102,7 +104,7 @@ private struct HeightResizer: View {
             .frame(height: 8)
             .frame(maxWidth: .infinity)
             .overlay {
-                Capsule().fill(Ledger.rule).frame(width: 36, height: 3)
+                Rectangle().fill(Ledger.rule).frame(width: 36, height: 3)
                     .opacity(hover.on || drag.width != nil ? 1 : 0)
             }
             .contentShape(Rectangle())

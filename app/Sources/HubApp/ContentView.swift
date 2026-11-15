@@ -330,6 +330,7 @@ struct RepoGroup: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .hoverFill()
                     .accessibilityLabel(folded ? "Show \(session.name)'s agents" : "Fold \(session.name)'s agents")
                 }
             }
@@ -367,6 +368,7 @@ struct NewSessionMenu: View {
     @EnvironmentObject private var model: AppModel
     /// The sidebar's full-width "New session" button; else the bare +.
     var row = false
+    @StateObject private var hover = Flag()
 
     var body: some View {
         Button { model.newSessionMenuShown.toggle() } label: {
@@ -384,6 +386,8 @@ struct NewSessionMenu: View {
                 .padding(.horizontal, 10)
                 .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32, alignment: .leading)
                 .background(Ledger.primary)
+                // Hovered, it moves halfway onto its block, as the primary button does (ui-ux/0131).
+                .offset(x: hover.on ? 1.5 : 0, y: hover.on ? 1.5 : 0)
                 .background(Rectangle().fill(Ledger.accent).offset(x: 3, y: 3))
                 .contentShape(Rectangle())
             } else {
@@ -395,6 +399,8 @@ struct NewSessionMenu: View {
             }
         }
         .buttonStyle(.plain)
+        .background(!row && hover.on ? Ledger.wash : .clear)
+        .onHover { hover.on = $0 }
         .foundryPopover(isPresented: $model.newSessionMenuShown, width: 432, gap: 16) { NewSessionPopup() }
         .help("New session")
         .accessibilityLabel("New session")
@@ -460,6 +466,7 @@ struct LedgerColumn: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .hoverFill()
                     .help(model.stoppedShown ? "Hide the stopped repos" : "Show the stopped repos")
                 }
                 Spacer()
@@ -487,6 +494,7 @@ struct LedgerToggle: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .hoverFill()
         .accessibilityLabel(title)
         .help("\(title) (⌘L)")
     }
@@ -505,6 +513,7 @@ struct SettingsButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .hoverFill()
         .accessibilityLabel("Settings")
         .help("Settings (⌘,)")
     }
@@ -574,10 +583,11 @@ struct RailAgent: View {
             AgentGlyph(kind: agent.kind)
                 .foregroundStyle(agent.live ? Ledger.ink : Ledger.ink3)
                 .frame(width: 32, height: 28)
-                .background(selected ? Ledger.selected : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
+                .background(selected ? Ledger.selected : Color.clear)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .hoverFill(active: !selected)
         .prewarmsTerminal(.agent(id: agent.id), epoch: "\(agent.live)")
         .help("\(agent.displayName), \(agent.live ? "live" : agent.isOrchestrator ? "stopped" : "ended")")
     }
@@ -593,10 +603,11 @@ struct RailWorker: View {
         Button { model.select(.worker(repo: repo, id: worker.id)) } label: {
             WorkerMark(worker: worker)
                 .frame(width: 32, height: 22)
-                .background(selected ? Ledger.selected : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusInner, style: .continuous))
+                .background(selected ? Ledger.selected : Color.clear)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .hoverFill(active: !selected)
         .prewarmsTerminal(model.terminalTarget(repo, worker))
         .help("\(worker.id) \(worker.profile): \(worker.title)\n\(worker.phaseLabel), quiet for \(formatAge(worker.quietFor()))")
     }
@@ -689,6 +700,7 @@ struct AgentLine: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .hoverFill()
                 .accessibilityLabel(folded ? "Show \(agent.displayName)'s Workers" : "Fold \(agent.displayName)'s Workers")
             }
             // How many of this agent's Workers (or it itself) wait on the human (ui-ux/0094).
@@ -1439,6 +1451,7 @@ struct StatsInline: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .hoverFill(active: !shown.on)
             .help("Workers, last 7 days")
             .accessibilityLabel("Workers, last 7 days")
             .foundryPopover(isPresented: $shown.on, width: 520, trailing: true) { StatsReport(stats: stats) }
@@ -1556,6 +1569,7 @@ struct UsageInline: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .hoverFill()
         .help(helpText)
     }
 
@@ -1622,8 +1636,11 @@ struct ErrorBanner: View {
             Image(systemName: "exclamationmark.triangle")
             Text(text).lineLimit(2).textSelection(.enabled)
             Spacer(minLength: 8)
-            Button { model.error = nil } label: { Image(systemName: "xmark") }
+            Button { model.error = nil } label: {
+                Image(systemName: "xmark").frame(width: 20, height: 20).contentShape(Rectangle())
+            }
                 .buttonStyle(.plain)
+                .hoverFill(Ledger.fill)
                 .accessibilityLabel("Dismiss")
         }
         .font(Ledger.font(12.5))

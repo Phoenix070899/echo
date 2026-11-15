@@ -169,14 +169,25 @@ private struct SectionRow: View {
     }
 }
 
-/// Done: Archivo semibold in ink, underlined 2 pt in the accent, 4 pt below the text.
+/// Done: Archivo semibold in ink, underlined 2 pt in the accent, 4 pt below the text; hovered or
+/// pressed, the muted ink, as Foundry's link.
 private struct DoneLinkStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Ledger.font(14, .semibold))
-            .foregroundStyle(configuration.isPressed ? Ledger.ink3 : Ledger.ink)
-            .padding(.bottom, 3)
-            .overlay(alignment: .bottom) { Rectangle().fill(Ledger.accent).frame(height: 2) }
-            .contentShape(Rectangle())
+        Styled(configuration: configuration)
+    }
+
+    private struct Styled: View {
+        let configuration: ButtonStyleConfiguration
+        @StateObject private var hover = Flag()
+
+        var body: some View {
+            configuration.label
+                .font(Ledger.font(14, .semibold))
+                .foregroundStyle(configuration.isPressed || hover.on ? Ledger.ink3 : Ledger.ink)
+                .padding(.bottom, 3)
+                .overlay(alignment: .bottom) { Rectangle().fill(Ledger.accent).frame(height: 2) }
+                .contentShape(Rectangle())
+                .onHover { hover.on = $0 }
+        }
     }
 }

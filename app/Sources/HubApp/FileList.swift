@@ -132,7 +132,7 @@ final class FileListView: NSView, NSViewToolTipOwner {
 
     // MARK: Drawing
 
-    /// The cursor's row and the hovered one get Claude's rounded fill, inset from the column's edges;
+    /// The cursor's row and the hovered one get a square fill, inset from the column's edges;
     /// the cursor's wins where they meet.
     private func placeFills() {
         for (fill, index) in [(picked, cursorIndex), (hover, hovered)] {

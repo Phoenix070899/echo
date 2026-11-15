@@ -521,6 +521,7 @@ struct PreviewTabs: View {
                             Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).frame(width: 12, height: 12).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .hoverFill(Ledger.rule)
                         .accessibilityLabel("Close \(file.name)")
                     }
                 }
@@ -538,6 +539,7 @@ struct PreviewTabs: View {
             .frame(height: Self.height)
             .foregroundStyle(active ? Ledger.ink : Ledger.ink3)
             .background(active ? Ledger.paper : Color.clear)
+            .hoverFill(active: !active)
             .overlay(alignment: .bottom) {
                 Rectangle().fill(active ? Ledger.accent : .clear).frame(height: 3)
             }

@@ -45,7 +45,7 @@ struct QuickOpen: View {
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(results.enumerated()), id: \.element.id) { index, item in
-                            QuickOpenRow(item: item, picked: index == search.picked) {
+                            QuickOpenRow(item: item, picked: index == search.picked, point: { search.picked = index }) {
                                 search.picked = index
                                 run(results)
                             }
@@ -205,6 +205,8 @@ struct QuickOpenItem: Identifiable {
 struct QuickOpenRow: View {
     let item: QuickOpenItem
     let picked: Bool
+    /// The pointer moves the highlight, as in Foundry's popover (ui-ux/0127).
+    let point: () -> Void
     let run: () -> Void
 
     var body: some View {
@@ -228,6 +230,7 @@ struct QuickOpenRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { if $0 { point() } }
         .accessibilityAddTraits(picked ? .isSelected : [])
     }
 }

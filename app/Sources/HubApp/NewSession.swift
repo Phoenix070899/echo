@@ -343,6 +343,7 @@ struct TeamPicker: View {
 struct FieldMenu<Items: View>: View {
     let title: String
     @ViewBuilder var items: () -> Items
+    @StateObject private var hover = Flag()
 
     var body: some View {
         Menu {
@@ -355,13 +356,14 @@ struct FieldMenu<Items: View>: View {
             }
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38)
-            .background(Ledger.field)
+            .background(hover.on ? Ledger.wash : Ledger.field)
             .overlay(Rectangle().strokeBorder(Ledger.ink3, lineWidth: Ledger.hairline))
             .contentShape(Rectangle())
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
+        .onHover { hover.on = $0 }
     }
 }
 
@@ -430,6 +432,7 @@ struct ModalHead: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .hoverFill()
             .accessibilityLabel("Cancel")
         }
         .padding(.horizontal, 24)

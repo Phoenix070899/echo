@@ -192,9 +192,12 @@ struct SettingsButtonStyle: ButtonStyle {
         let height: CGFloat
         let fill: Bool
         @Environment(\.isEnabled) private var isEnabled
+        @StateObject private var hover = Flag()
 
         var body: some View {
-            let pressed: CGFloat = primary && configuration.isPressed ? 3 : 0
+            // Hovered, the primary moves halfway onto its block, the secondary takes the hover fill (ui-ux/0131).
+            let hovered = hover.on && isEnabled
+            let pressed: CGFloat = !primary ? 0 : configuration.isPressed ? 3 : hovered ? 1.5 : 0
             configuration.label
                 .font(Ledger.monoFont(11, .bold))
                 .tracking(0.66)
@@ -204,7 +207,7 @@ struct SettingsButtonStyle: ButtonStyle {
                 .padding(.horizontal, primary ? 18 : 12)
                 .frame(maxWidth: fill ? .infinity : nil, minHeight: height)
                 .foregroundStyle(primary ? Ledger.onPrimary : Ledger.ink)
-                .background(primary ? Ledger.primary : configuration.isPressed ? Ledger.wash : Color.clear)
+                .background(primary ? Ledger.primary : configuration.isPressed ? Ledger.fill : hovered ? Ledger.wash : Color.clear)
                 .overlay(Rectangle().strokeBorder(primary ? Color.clear : Ledger.ink, lineWidth: Ledger.ruleStrong))
                 .offset(x: pressed, y: pressed)
                 .background {
@@ -214,6 +217,7 @@ struct SettingsButtonStyle: ButtonStyle {
                 .padding(.bottom, primary ? 3 : 0)
                 .opacity(isEnabled ? 1 : 0.4)
                 .contentShape(Rectangle())
+                .onHover { hover.on = $0 }
         }
     }
 }
@@ -327,6 +331,7 @@ struct SquarePicker<Value: Hashable>: View {
     var weight = FieldWeight.page
     var label = ""
     @Environment(\.isEnabled) private var isEnabled
+    @StateObject private var hover = Flag()
 
     var body: some View {
         MenuButton(entries: {
@@ -347,12 +352,13 @@ struct SquarePicker<Value: Hashable>: View {
             }
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, minHeight: weight.height)
-            .background(Ledger.paper)
+            .background(hover.on && isEnabled ? Ledger.wash : Ledger.paper)
             .overlay(Rectangle().strokeBorder(weight.frameColor, lineWidth: weight.frame))
             .opacity(isEnabled ? 1 : 0.5)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hover.on = $0 }
         .accessibilityLabel(label)
         .accessibilityValue(options.first { $0.value == selection }?.title ?? "")
     }
@@ -440,6 +446,7 @@ struct SquareToggleStyle: ToggleStyle {
         let configuration: ToggleStyleConfiguration
         let size: CGFloat
         @Environment(\.isEnabled) private var isEnabled
+        @StateObject private var hover = Flag()
 
         var body: some View {
             Button { configuration.isOn.toggle() } label: {
@@ -456,13 +463,14 @@ struct SquareToggleStyle: ToggleStyle {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .onHover { hover.on = $0 }
             .accessibilityAddTraits(configuration.isOn ? .isSelected : [])
             .accessibilityValue(configuration.isOn ? "on" : "off")
         }
 
         private var box: some View {
             Rectangle()
-                .fill(configuration.isOn ? Ledger.ink : Ledger.paper)
+                .fill(configuration.isOn ? Ledger.ink : hover.on && isEnabled ? Ledger.wash : Ledger.paper)
                 .overlay(Rectangle().strokeBorder(Ledger.ink, lineWidth: Ledger.ruleStrong))
                 .overlay {
                     if configuration.isOn {
@@ -584,6 +592,7 @@ struct FillSegmented: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .hoverFill(active: !on)
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
@@ -611,6 +620,7 @@ struct SquareColorWell: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .hoverFill()
         .accessibilityLabel(label)
         .accessibilityValue(hex)
     }
