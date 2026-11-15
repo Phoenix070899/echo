@@ -58,6 +58,10 @@ P1 foo.rs:1 broken" ;;
       *NOVERDICT*) echoctl done --state done "looks fine to me" ;;
       *) echoctl done --state done "Verdict: pass" ;;
     esac ;;
+  "Take over from"*)
+    # What an automatic Hand-off starts (features/0093): its report is its Task's first line.
+    echoctl done --state done "took over. $(printf '%s\n' "$1" | head -n 1)" ;;
+  block*) echoctl done --state blocked "cannot go on" ;;
   ask*) answer=$(echoctl ask "Which color?") && echoctl done --state done "answer was $answer" ;;
   done*)
     echoctl done --state done "finished"

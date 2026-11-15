@@ -26,7 +26,8 @@ pub struct Team {
     pub workers: Option<WorkersSetup>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rules: Option<RulesSetup>,
-    /// The Team's tree of Workers, flat and in tree order; a Member's `parent` names the Member above.
+    /// The Team's Workers, flat and in file order; a Member's `after` names the Hand-offs into it
+    /// (features/0092).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<Member>,
     /// Text added to the end of the Orchestrator's prompt, after the rules.
@@ -78,9 +79,19 @@ pub struct Member {
     pub id: String,
     pub action: String,
     pub profile: String,
-    /// The `id` of the Member above; absent at level 1.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The Member above in a Team from before Hand-offs; `parse` turns it into `after`, and it is
+    /// never written.
+    #[serde(skip_serializing)]
     pub parent: Option<String>,
+    /// The Hand-offs into this Member; absent, it hangs from the Orchestrator alone, and empty it
+    /// cannot be reached, which `validate` refuses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<Vec<HandOff>>,
+    /// Its place on the Teams canvas, in points; absent, Echo lays it out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<i64>,
     /// Added after the Profile's role, or in its place when `replace_role`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
@@ -112,11 +123,22 @@ pub struct Member {
     pub worktree: Option<String>,
 }
 
+/// A line into a Member from the Orchestrator or another Member, saying what follows: a hint the
+/// Orchestrator reads, or with `auto` one the daemon carries out itself (features/0093).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct HandOff {
+    /// A Member's `id`, or `ORCHESTRATOR`.
+    pub from: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub auto: bool,
+}
+
+/// The `from` of a Hand-off out of the Orchestrator; no Member may take it as its `id`.
+pub const ORCHESTRATOR: &str = "orchestrator";
+
 /// The most Members a Team holds.
 pub const MAX_MEMBERS: usize = 24;
-
-/// The deepest a tree goes; level 1 is depth 1.
-pub const MAX_DEPTH: usize = 3;
 
 impl Team {
     /// The Member a name stands for: a Member `id` first, else the first Member in tree order whose
@@ -128,17 +150,31 @@ impl Team {
             .or_else(|| self.members.iter().find(|member| member.profile == name))
     }
 
-    /// The Members directly under `id`, in tree order.
-    pub fn children(&self, id: &str) -> Vec<&Member> {
+    /// The Members with a Hand-off from `id` (a Member's, or `ORCHESTRATOR`), in file order.
+    pub fn following(&self, id: &str) -> Vec<&Member> {
         self.members
             .iter()
-            .filter(|member| member.parent.as_deref() == Some(id))
+            .filter(|member| member.hand_offs().iter().any(|hand_off| hand_off.from == id))
             .collect()
     }
 
-    /// The Member that verifies the writer `id`: its first child whose Action is `verify`.
+    /// The Members the daemon starts itself when a Worker of `id` ends done (features/0093).
+    pub fn automatic_after(&self, id: &str) -> Vec<&Member> {
+        self.members
+            .iter()
+            .filter(|member| {
+                member
+                    .hand_offs()
+                    .iter()
+                    .any(|hand_off| hand_off.from == id && hand_off.auto)
+            })
+            .collect()
+    }
+
+    /// The Member that verifies the writer `id`: the first, in file order, with a Hand-off from it
+    /// whose Action is `verify` (features/0092).
     pub fn verifier_of(&self, id: &str) -> Option<&Member> {
-        self.children(id).into_iter().find(|member| member.action == "verify")
+        self.following(id).into_iter().find(|member| member.action == "verify")
     }
 
     /// What the Team names for a Worker of `profile`: first for all its Workers, then for that
@@ -151,6 +187,18 @@ impl Team {
             workers.all.clone(),
             workers.profiles.get(profile).cloned().unwrap_or_default(),
         )
+    }
+}
+
+impl Member {
+    /// The Hand-offs into it; a Member without `after` hangs from the Orchestrator.
+    pub fn hand_offs(&self) -> Vec<HandOff> {
+        self.after.clone().unwrap_or_else(|| {
+            vec![HandOff {
+                from: ORCHESTRATOR.into(),
+                auto: false,
+            }]
+        })
     }
 }
 
@@ -467,28 +515,30 @@ pub fn check_profiles<S: AsRef<str>>(team: &Team, known: &[S]) -> Result<()> {
     Ok(())
 }
 
-/// The tree as lines, one per Member, children indented under their parent. A Member whose parent
-/// cannot be reached (a Team that does not validate) follows at the top level instead of vanishing.
+/// The Members as lines, one per Member in file order, each with the Hand-offs into it.
 fn member_lines(team: &Team) -> Vec<String> {
-    fn walk<'a>(team: &'a Team, member: &'a Member, depth: usize, seen: &mut Vec<&'a str>, lines: &mut Vec<String>) {
-        if seen.contains(&member.id.as_str()) {
-            return;
-        }
-        seen.push(&member.id);
-        lines.push(format!("{}{}", "  ".repeat(depth), member_line(member)));
-        for child in team.children(&member.id) {
-            walk(team, child, depth + 1, seen, lines);
-        }
-    }
-    let mut seen = Vec::new();
-    let mut lines = Vec::new();
-    for member in team.members.iter().filter(|member| member.parent.is_none()) {
-        walk(team, member, 1, &mut seen, &mut lines);
-    }
-    for member in &team.members {
-        walk(team, member, 1, &mut seen, &mut lines);
-    }
-    lines
+    team.members
+        .iter()
+        .map(|member| {
+            let from: Vec<String> = member
+                .hand_offs()
+                .iter()
+                .map(|hand_off| {
+                    if hand_off.auto {
+                        format!("{} (automatic)", hand_off.from)
+                    } else {
+                        hand_off.from.clone()
+                    }
+                })
+                .collect();
+            let after = if from.is_empty() {
+                "nothing".to_string()
+            } else {
+                from.join(", ")
+            };
+            format!("  {}  after {after}", member_line(member))
+        })
+        .collect()
 }
 
 /// `build  execute  naruto  claude-sonnet-5-5  high`: the id, Action and Profile, then the CLI, model
@@ -551,7 +601,23 @@ fn read(name: &str, path: &Path) -> Result<Team> {
 /// A Team's fields from its JSON; unknown fields are left out, a wrong type is an error. The name
 /// is the file's, so it is left empty here.
 pub fn parse(text: &str) -> Result<Team> {
-    Ok(serde_json::from_str(text)?)
+    from_value(serde_json::from_str(text)?)
+}
+
+/// A Team from JSON already read, a `parent` from before Hand-offs read as one Hand-off from it.
+pub fn from_value(value: serde_json::Value) -> Result<Team> {
+    let mut team: Team = serde_json::from_value(value)?;
+    for member in &mut team.members {
+        if let Some(parent) = member.parent.take() {
+            if member.after.is_none() {
+                member.after = Some(vec![HandOff {
+                    from: parent,
+                    auto: false,
+                }]);
+            }
+        }
+    }
+    Ok(team)
 }
 
 /// What is wrong with the Team's fields, if anything. `fallback` is the CLI a model with no `cli`
@@ -661,32 +727,61 @@ fn validate_members(team: &Team, fallback: Cli) -> Result<()> {
     }
     for member in members {
         let field = format!("members.{}", member.id);
-        let parent = match &member.parent {
-            None => None,
-            Some(id) => Some(
-                members
-                    .iter()
-                    .find(|other| other.id == *id)
-                    .ok_or_else(|| anyhow!("{field}: parent {id:?} is not a Member"))?,
-            ),
-        };
-        if member.action == "verify" && parent.is_none_or(|parent| parent.action != "execute") {
-            bail!("{field}: a verify Member sits under an execute Member");
+        if member.id == ORCHESTRATOR {
+            bail!("{field}: {ORCHESTRATOR} is the Orchestrator's id; pick another");
         }
-        let mut depth = 1;
-        let mut above = parent;
-        while let Some(up) = above {
-            if up.id == member.id || depth > members.len() {
-                bail!("{field}: parent leads back to itself");
+        let hand_offs = member.hand_offs();
+        if hand_offs.is_empty() {
+            bail!("{field}: no Hand-off comes into it, so the Orchestrator cannot reach it");
+        }
+        for (at, hand_off) in hand_offs.iter().enumerate() {
+            if hand_offs[..at].iter().any(|before| before.from == hand_off.from) {
+                bail!("{field}: two Hand-offs come from {}", hand_off.from);
             }
-            depth += 1;
-            above = up
-                .parent
-                .as_deref()
-                .and_then(|id| members.iter().find(|other| other.id == id));
+            let source = if hand_off.from == ORCHESTRATOR {
+                None
+            } else {
+                Some(
+                    members
+                        .iter()
+                        .find(|other| other.id == hand_off.from)
+                        .ok_or_else(|| anyhow!("{field}: after {:?} is not a Member", hand_off.from))?,
+                )
+            };
+            if member.action == "verify" && source.is_none_or(|source| source.action != "execute") {
+                bail!("{field}: a verify Member comes only after execute Members");
+            }
+            if hand_off.auto && source.is_none() {
+                bail!("{field}: a Hand-off from the Orchestrator cannot be automatic");
+            }
+            if hand_off.auto && member.action == "verify" {
+                bail!("{field}: a Hand-off into a verify Member runs through --verify and cannot be automatic");
+            }
         }
-        if depth > MAX_DEPTH {
-            bail!("{field}: the tree is {depth} deep; at most {MAX_DEPTH}");
+        if hand_offs.iter().filter(|hand_off| hand_off.auto).count() > 1 {
+            bail!("{field}: at most one automatic Hand-off comes into a Member");
+        }
+    }
+    // Hand-offs never loop: walking back from any Member along them always ends at the Orchestrator.
+    fn loops<'a>(members: &'a [Member], id: &'a str, path: &mut Vec<&'a str>) -> bool {
+        if path.contains(&id) {
+            return true;
+        }
+        let Some(member) = members.iter().find(|member| member.id == id) else {
+            return false;
+        };
+        path.push(id);
+        let found = member
+            .after
+            .iter()
+            .flatten()
+            .any(|hand_off| loops(members, &hand_off.from, path));
+        path.pop();
+        found
+    }
+    for member in members {
+        if loops(members, &member.id, &mut Vec::new()) {
+            bail!("members.{}: its Hand-offs lead back to itself", member.id);
         }
     }
     Ok(())
@@ -871,7 +966,7 @@ mod tests {
                     m.id.as_str(),
                     m.action.as_str(),
                     m.profile.as_str(),
-                    m.parent.as_deref(),
+                    m.after.as_ref().map(|after| after[0].from.as_str()),
                 )
             })
             .collect()
@@ -1234,7 +1329,8 @@ mod tests {
             {"id": "build", "action": "execute", "profile": "naruto", "model": "claude-sonnet-5-5", "effort": "high"},
             {"id": "check", "action": "verify", "profile": "sasuke", "parent": "build",
              "instructions": "Run the suite.", "replaceRole": true, "tools": ["Read", "Bash"], "lessons": false},
-            {"id": "docs", "action": "scribe", "profile": "ino", "parent": "build", "writes": true, "worktree": "current"}
+            {"id": "docs", "action": "scribe", "profile": "ino", "after": [{"from": "build", "auto": true}], "writes": true,
+             "worktree": "current", "x": 120, "y": 240}
         ]
     }"#;
 
@@ -1252,19 +1348,31 @@ mod tests {
             (build.id.as_str(), build.action.as_str(), build.profile.as_str()),
             ("build", "execute", "naruto")
         );
-        assert_eq!(build.parent, None);
+        assert_eq!((build.parent.as_deref(), build.after.as_deref()), (None, None));
         assert_eq!(build.model.as_deref(), Some("claude-sonnet-5-5"));
         let check = &team.members[1];
-        assert_eq!(check.parent.as_deref(), Some("build"));
+        assert_eq!(check.parent, None, "a parent is read as a Hand-off");
+        assert_eq!(
+            check.after.as_deref(),
+            Some(
+                &[HandOff {
+                    from: "build".into(),
+                    auto: false
+                }][..]
+            )
+        );
         assert!(check.replace_role);
         assert_eq!(check.tools, ["Read", "Bash"]);
         assert_eq!(check.lessons, Some(false));
         let docs = &team.members[2];
         assert_eq!(docs.writes, Some(true));
         assert_eq!(docs.worktree.as_deref(), Some("current"));
+        assert_eq!((docs.x, docs.y), (Some(120), Some(240)));
+        assert!(docs.hand_offs()[0].auto);
 
         let text = serde_json::to_string_pretty(&team).unwrap();
         assert!(!text.contains("null") && !text.contains("\"skills\""), "{text}");
+        assert!(!text.contains("parent") && text.contains(r#""after""#), "{text}");
         assert_eq!(named("t", &text), team);
     }
 
@@ -1311,7 +1419,51 @@ mod tests {
         }
 
         let missing = members_problem(&format!(r#"[{}]"#, a(r#", "parent": "x""#)));
-        assert_eq!(missing, r#"members.a: parent "x" is not a Member"#);
+        assert_eq!(missing, r#"members.a: after "x" is not a Member"#);
+        let after = members_problem(&format!(r#"[{}]"#, a(r#", "after": [{"from": "x"}]"#)));
+        assert_eq!(after, r#"members.a: after "x" is not a Member"#);
+        let none = members_problem(&format!(r#"[{}]"#, a(r#", "after": []"#)));
+        assert!(none.contains("members.a") && none.contains("cannot reach"), "{none}");
+        let named_so = members_problem(r#"[{"id": "orchestrator", "action": "scan", "profile": "hinata"}]"#);
+        assert!(named_so.contains("Orchestrator's id"), "{named_so}");
+        let doubled = members_problem(&format!(
+            r#"[{}, {}]"#,
+            a(""),
+            b(r#", "after": [{"from": "a"}, {"from": "a", "auto": true}]"#)
+        ));
+        assert!(doubled.contains("two Hand-offs come from a"), "{doubled}");
+        let from_top = members_problem(&format!(
+            r#"[{}]"#,
+            a(r#", "after": [{"from": "orchestrator", "auto": true}]"#)
+        ));
+        assert!(
+            from_top.contains("from the Orchestrator cannot be automatic"),
+            "{from_top}"
+        );
+        let c = |extra: &str| format!(r#"{{"id": "c", "action": "run", "profile": "lee"{extra}}}"#);
+        let two_auto = members_problem(&format!(
+            r#"[{}, {}, {}]"#,
+            a(""),
+            b(""),
+            c(r#", "after": [{"from": "a", "auto": true}, {"from": "b", "auto": true}]"#)
+        ));
+        assert!(
+            two_auto.contains("members.c") && two_auto.contains("at most one automatic"),
+            "{two_auto}"
+        );
+        validate(
+            &named(
+                "t",
+                &format!(
+                    r#"{{"members": [{}, {}, {}]}}"#,
+                    a(""),
+                    b(""),
+                    c(r#", "after": [{"from": "a", "auto": true}, {"from": "b"}, {"from": "orchestrator"}], "x": 40, "y": -8"#)
+                ),
+            ),
+            Cli::Claude,
+        )
+        .unwrap();
 
         let cycle = members_problem(&format!(
             r#"[{}, {}]"#,
@@ -1321,13 +1473,22 @@ mod tests {
         assert!(cycle.contains("back to itself"), "{cycle}");
         let own = members_problem(&format!(r#"[{}]"#, a(r#", "parent": "a""#)));
         assert!(own.contains("members.a") && own.contains("back to itself"), "{own}");
-        let c = r#"{"id": "c", "action": "scan", "profile": "hinata", "parent": "a"}"#;
         let tail = members_problem(&format!(
-            r#"[{}, {}, {c}]"#,
+            r#"[{}, {}, {}]"#,
             a(r#", "parent": "b""#),
-            b(r#", "parent": "a""#)
+            b(r#", "parent": "a""#),
+            c(r#", "parent": "a""#)
         ));
         assert!(tail.contains("back to itself"), "{tail}");
+        let side = members_problem(&format!(
+            r#"[{}, {}]"#,
+            a(r#", "after": [{"from": "orchestrator"}, {"from": "b"}]"#),
+            b(r#", "after": [{"from": "a"}]"#)
+        ));
+        assert!(
+            side.contains("back to itself"),
+            "a loop beside a line from the Orchestrator: {side}"
+        );
 
         let deep = |n: usize| {
             let members: Vec<String> = (1..=n)
@@ -1341,9 +1502,8 @@ mod tests {
                 .collect();
             format!("[{}]", members.join(","))
         };
-        validate(&named("t", &format!(r#"{{"members": {}}}"#, deep(3))), Cli::Claude).unwrap();
-        let four = members_problem(&deep(4));
-        assert!(four.contains("members.m4") && four.contains("at most 3"), "{four}");
+        validate(&named("t", &format!(r#"{{"members": {}}}"#, deep(8))), Cli::Claude)
+            .expect("a graph has no depth limit");
 
         let under_scan = members_problem(&format!(
             r#"[{}, {{"id": "v", "action": "verify", "profile": "sasuke", "parent": "b"}}]"#,
@@ -1355,6 +1515,17 @@ mod tests {
         );
         let top = members_problem(r#"[{"id": "v", "action": "verify", "profile": "sasuke"}]"#);
         assert!(top.contains("members.v") && top.contains("execute"), "{top}");
+        let mixed = members_problem(&format!(
+            r#"[{}, {}, {{"id": "v", "action": "verify", "profile": "sasuke", "after": [{{"from": "a"}}, {{"from": "b"}}]}}]"#,
+            a(""),
+            b("")
+        ));
+        assert!(mixed.contains("members.v") && mixed.contains("execute"), "{mixed}");
+        let auto_verify = members_problem(&format!(
+            r#"[{}, {{"id": "v", "action": "verify", "profile": "sasuke", "after": [{{"from": "a", "auto": true}}]}}]"#,
+            a("")
+        ));
+        assert!(auto_verify.contains("--verify"), "{auto_verify}");
 
         let action = members_problem(r#"[{"id": "a", "action": "deploy", "profile": "naruto"}]"#);
         assert!(action.contains("members.a") && action.contains("deploy"), "{action}");
@@ -1434,25 +1605,30 @@ mod tests {
     }
 
     #[test]
-    fn a_writers_verifier_is_its_first_verify_child() {
+    fn a_writers_verifier_is_its_first_verify_member_after_it() {
         let team = named(
             "t",
             r#"{"members": [
                 {"id": "build", "action": "execute", "profile": "naruto"},
-                {"id": "docs", "action": "scribe", "profile": "ino", "parent": "build"},
+                {"id": "docs", "action": "scribe", "profile": "ino", "after": [{"from": "build", "auto": true}]},
                 {"id": "check", "action": "verify", "profile": "sasuke", "parent": "build"},
-                {"id": "recheck", "action": "verify", "profile": "sasuke", "parent": "build"},
-                {"id": "other", "action": "execute", "profile": "naruto"}
+                {"id": "recheck", "action": "verify", "profile": "sasuke", "after": [{"from": "build"}]},
+                {"id": "other", "action": "execute", "profile": "naruto"},
+                {"id": "test", "action": "run", "profile": "lee", "after": [{"from": "other"}, {"from": "build"}]}
             ]}"#,
         );
         validate(&team, Cli::Claude).unwrap();
-        let ids = |id: &str| -> Vec<&str> { team.children(id).iter().map(|m| m.id.as_str()).collect() };
-        assert_eq!(ids("build"), ["docs", "check", "recheck"]);
-        assert!(ids("other").is_empty());
+        let ids = |id: &str| -> Vec<&str> { team.following(id).iter().map(|m| m.id.as_str()).collect() };
+        assert_eq!(ids("build"), ["docs", "check", "recheck", "test"]);
+        assert_eq!(ids("other"), ["test"]);
+        assert_eq!(ids(ORCHESTRATOR), ["build", "other"]);
+        let auto: Vec<&str> = team.automatic_after("build").iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(auto, ["docs"]);
+        assert!(team.automatic_after("other").is_empty());
         assert_eq!(team.verifier_of("build").unwrap().id, "check");
         assert!(
             team.verifier_of("other").is_none(),
-            "no child means sasuke, decided by the caller"
+            "no verify Member after it means sasuke, decided by the caller"
         );
         assert!(team.verifier_of("nobody").is_none());
         assert!(Team::default().verifier_of("build").is_none());
@@ -1478,9 +1654,9 @@ mod tests {
             details(&team),
             "workers.cli: claude\n\
              members:\n  \
-             build  execute  naruto  claude-sonnet-5-5  high\n    \
-             check  verify  sasuke  instructions (replace role)  tools=Read,Bash  lessons=false\n    \
-             docs  scribe  ino  writes=true  worktree=current"
+             build  execute  naruto  claude-sonnet-5-5  high  after orchestrator\n  \
+             check  verify  sasuke  instructions (replace role)  tools=Read,Bash  lessons=false  after build\n  \
+             docs  scribe  ino  writes=true  worktree=current  after build (automatic)"
         );
         assert_eq!(
             summary(&team),
@@ -1502,18 +1678,18 @@ mod tests {
     }
 
     #[test]
-    fn details_keep_a_member_whose_parent_is_missing() {
+    fn details_keep_a_member_whose_hand_offs_are_broken() {
         let team = named(
             "t",
             r#"{"members": [
                 {"id": "a", "action": "scan", "profile": "hinata", "parent": "gone"},
                 {"id": "b", "action": "scan", "profile": "hinata", "parent": "c"},
-                {"id": "c", "action": "scan", "profile": "hinata", "parent": "b"}
+                {"id": "c", "action": "scan", "profile": "hinata", "after": []}
             ]}"#,
         );
         assert_eq!(
             details(&team),
-            "members:\n  a  scan  hinata\n  b  scan  hinata\n    c  scan  hinata"
+            "members:\n  a  scan  hinata  after gone\n  b  scan  hinata  after c\n  c  scan  hinata  after nothing"
         );
     }
 }

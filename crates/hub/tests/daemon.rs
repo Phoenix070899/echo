@@ -1200,7 +1200,7 @@ fn a_team_is_saved_listed_started_with_and_deleted_over_the_socket() {
             .as_array()
             .unwrap_or_else(|| panic!("a shipped Team is a tree of Members: {team}"))
             .iter()
-            .map(|m| (m["id"].as_str().unwrap(), m["parent"].as_str()))
+            .map(|m| (m["id"].as_str().unwrap(), m["after"][0]["from"].as_str()))
             .collect();
         assert_eq!(
             tree,
@@ -1360,7 +1360,7 @@ fn a_team_with_members_keeps_them_in_order_and_one_on_an_unknown_profile_is_refu
             "effort": "low", "tools": ["Read", "Edit"], "skills": ["echo"], "context": ["CONTEXT.md"],
             "lessons": false, "writes": true, "worktree": "new"
         },
-        { "id": "check", "action": "verify", "profile": "sasuke", "parent": "build" },
+        { "id": "check", "action": "verify", "profile": "sasuke", "after": [{ "from": "build" }], "x": 96, "y": 280 },
     ]);
     let saved = hub.call(
         "team.save",
@@ -1400,21 +1400,15 @@ fn a_team_with_members_keeps_them_in_order_and_one_on_an_unknown_profile_is_refu
 }
 
 #[test]
-fn echoctl_team_show_prints_the_members_as_a_tree() {
+fn echoctl_team_show_prints_each_member_with_its_hand_offs() {
     let hub = Hub::new("teamshow");
     hub.ok(&["sessions"]);
     let shown = hub.ok(&["team", "show", "claude-lean"]);
-    let build = shown
-        .lines()
-        .position(|l| l.trim_start().starts_with("build"))
-        .unwrap_or_else(|| panic!("{shown}"));
-    let check = shown
-        .lines()
-        .position(|l| l.trim_start().starts_with("check"))
-        .unwrap_or_else(|| panic!("{shown}"));
-    let indent = |i: usize| shown.lines().nth(i).unwrap().len() - shown.lines().nth(i).unwrap().trim_start().len();
-    assert_eq!(check, build + 1, "{shown}");
-    assert!(indent(check) > indent(build), "{shown}");
+    assert!(
+        shown.contains("\n  build  execute  naruto  after orchestrator\n"),
+        "{shown}"
+    );
+    assert!(shown.contains("\n  check  verify  sasuke  after build\n"), "{shown}");
 }
 
 #[test]
@@ -4022,18 +4016,9 @@ fn a_team_of_members_is_built_used_edited_and_resumed_end_to_end() {
             .position(|l| l.trim_start().starts_with(id))
             .unwrap_or_else(|| panic!("no {id} in {shown}"))
     };
-    let indent = |shown: &str, i: usize| {
-        let line = shown.lines().nth(i).unwrap();
-        line.len() - line.trim_start().len()
-    };
     let (build, check) = (line_of(&shown, "build"), line_of(&shown, "check"));
     assert_eq!(check, build + 1, "{shown}");
-    assert!(indent(&shown, check) > indent(&shown, build), "{shown}");
-    assert!(
-        indent(&shown, line_of(&shown, "scan")) == indent(&shown, build)
-            && indent(&shown, line_of(&shown, "run")) == indent(&shown, build),
-        "{shown}"
-    );
+    assert!(shown.lines().nth(check).unwrap().ends_with("after build"), "{shown}");
 
     let agent = open_orchestrator(&hub, Some("smoke"));
 
@@ -4151,4 +4136,78 @@ fn settings_lists_each_clis_models_as_echo_names_them() {
     assert_eq!(models["claude"][0]["name"], "Fable 5.1");
     assert_eq!(ids("codex"), ["openai/gpt-test"]);
     assert_eq!(ids("kiro"), ["claude-haiku-5.5"]);
+}
+
+/// A Team whose `build` hands off to `test` and `test` to `notes`, both automatically, and
+/// `build` to `docs` as a hint.
+const HAND_OFFS: &str = r#"{
+    "rules": {"maxWorkers": 2},
+    "members": [
+        {"id": "build", "action": "execute", "profile": "naruto", "worktree": "current"},
+        {"id": "test", "action": "run", "profile": "lee", "after": [{"from": "build", "auto": true}]},
+        {"id": "notes", "action": "scribe", "profile": "ino", "after": [{"from": "test", "auto": true}]},
+        {"id": "docs", "action": "scribe", "profile": "ino", "after": [{"from": "build"}]},
+        {"id": "idle", "action": "run", "profile": "lee"}
+    ]
+}"#;
+
+#[test]
+fn an_automatic_hand_off_starts_the_next_member_with_the_chains_first_task() {
+    let hub = Hub::new("handoff");
+    hub.ok(&["status"]);
+    put_team(&hub, "chain", HAND_OFFS);
+    let agent = open_orchestrator(&hub, Some("chain"));
+
+    start_under(&hub, agent, &["build", "--spec", "done ROOTTASK"]);
+    hub.eventually("the chain to reach notes", || {
+        snapshot(&hub)["workers"].as_array().unwrap().len() >= 3 && row_of(&hub, 3)["phase"] == "done"
+    });
+    let who = |n: u32| row_of(&hub, n)["member"].clone();
+    assert_eq!((who(2), who(3)), ("test".into(), "notes".into()));
+    assert_eq!(
+        snapshot(&hub)["workers"].as_array().unwrap().len(),
+        3,
+        "a hint starts nothing"
+    );
+    // `notes` got the chain's first Task and `test`'s report, not `build`'s.
+    let db = rusqlite::Connection::open(hub.state.join("hub.db")).unwrap();
+    let spec = |n: i64| -> String {
+        db.query_row("select spec from workers where id = ?1", [n], |row| row.get(0))
+            .unwrap()
+    };
+    let notes = spec(3);
+    assert!(
+        notes.starts_with("Take over from w2 (test: test after w1: done ROOTTASK)"),
+        "{notes}"
+    );
+    assert!(notes.contains("The Task it was given:\n\ndone ROOTTASK\n"), "{notes}");
+    assert!(
+        notes.contains("Its Final Report:\n\ntook over. Take over from w1 (build: done ROOTTASK)"),
+        "{notes}"
+    );
+    assert!(
+        !notes.contains("finished"),
+        "build's report stays out of a later step: {notes}"
+    );
+    assert!(spec(2).contains("Its Final Report:\n\nfinished\n"), "{}", spec(2));
+    hub.wait();
+
+    // A blocked Worker hands off nothing.
+    start_under(&hub, agent, &["build", "--spec", "block here"]);
+    hub.eventually("the writer to settle", || row_of(&hub, 4)["phase"] == "blocked");
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(snapshot(&hub)["workers"].as_array().unwrap().len(), 4);
+
+    // At its maxWorkers the start is skipped and the Orchestrator is told.
+    start_under(&hub, agent, &["idle", "--spec", "sleep"]);
+    start_under(&hub, agent, &["idle", "--spec", "sleep"]);
+    start_under(&hub, agent, &["build", "--spec", "done again"]);
+    let told = hub.wait();
+    assert!(
+        told.contains("handoff from w7")
+            && told.contains("from `build` to `test` did not start after w7")
+            && told.contains("its most"),
+        "{told}"
+    );
+    assert_eq!(snapshot(&hub)["workers"].as_array().unwrap().len(), 7);
 }

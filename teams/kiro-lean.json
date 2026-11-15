@@ -32,7 +32,11 @@
       "id": "check",
       "action": "verify",
       "profile": "sasuke",
-      "parent": "build",
+      "after": [
+        {
+          "from": "build"
+        }
+      ],
       "model": "claude-sonnet-5.5",
       "effort": "medium"
     },

@@ -365,7 +365,7 @@ fn team_save(hub: &Path, state: &Path, repo: Option<&Path>, p: &Value) -> Result
         "shipped" => team::Origin::User,
         level => team::Origin::parse(level)?,
     };
-    let mut team: team::Team = serde_json::from_value(param(p, "team")?.clone())
+    let mut team = team::from_value(param(p, "team")?.clone())
         .map_err(|e| anyhow::anyhow!("the team's fields are not a Team: {e}"))?;
     team.name = str_param(p, "name")?.to_string();
     let known: Vec<String> = profile::entries(hub, state, repo)
@@ -1937,6 +1937,10 @@ impl Hub {
                 }
                 drop(db);
                 self.notify();
+                // A verified writer hands off once its verdict passes, in `verified`.
+                if worker.verifies.is_none() && !verifying && final_state == state::DONE {
+                    self.hand_off(id);
+                }
                 let hub = Arc::clone(self);
                 if let Some(writer) = worker.verifies {
                     let final_state = final_state.to_string();
@@ -2412,6 +2416,9 @@ impl Hub {
             flag("verify") && review,
             p.get("verifies").and_then(Value::as_i64),
         )?;
+        if let Some(first) = p.get("chain_task").and_then(Value::as_str) {
+            db::set_chain_task(&self.db(), id, first)?;
+        }
         // Echo's fan-out is the human's Task; the daemon's verifier is Echo's; the rest, the Orchestrator's.
         let from = match p.get("origin").and_then(Value::as_str) {
             Some("human") => db::origin::HUMAN,
@@ -2941,7 +2948,10 @@ impl Hub {
                 None => format!("w{verifier}"),
             };
             match verdict {
-                Some(true) => self.deliver(writer_id, &format!("Verified by {who}: pass."), report),
+                Some(true) => {
+                    self.deliver(writer_id, &format!("Verified by {who}: pass."), report);
+                    self.hand_off(writer_id);
+                }
                 Some(false) if writer.retries < MAX_RETRIES => {
                     db::add_retry(&self.db(), writer_id)?;
                     let task = format!(
@@ -2976,6 +2986,95 @@ impl Hub {
         if let Err(error) = self.close_worker(verifier) {
             eprintln!("hubd: closing w{verifier}: {error:#}");
         }
+    }
+
+    /// A Worker started from a Member ended done: each Member its automatic Hand-offs lead to
+    /// starts with the chain's first Task and this Worker's Final Report (features/0093). One that
+    /// cannot start, over the Orchestrator's `maxWorkers` or for any other reason, is skipped and the
+    /// Orchestrator is told; nothing waits for a free place.
+    fn hand_off(self: &Arc<Self>, from: i64) {
+        let hub = Arc::clone(self);
+        std::thread::spawn(move || {
+            let result = (|| -> Result<()> {
+                let source = db::worker(&hub.db(), from)?;
+                let team = hub.worker_team(&hub.db(), source.agent_id)?;
+                let Some(member) = stored_member(team.as_ref(), &source) else {
+                    return Ok(());
+                };
+                let team = team.as_ref().expect("a stored Member has a Team");
+                for next in team.automatic_after(&member.id) {
+                    if let Err(error) = hub.start_hand_off(team, &source, &member.id, next) {
+                        let db = hub.db();
+                        let note = format!(
+                            "The automatic Hand-off from `{}` to `{}` did not start after w{from}: {error:#}. \
+                             Start `{}` yourself when it should run.",
+                            member.id, next.id, next.id
+                        );
+                        db::insert_message(&db, &source, kind::HANDOFF, &note)?;
+                        drop(db);
+                        hub.notify();
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                eprintln!("hubd: handing off from w{from}: {error:#}");
+            }
+        });
+    }
+
+    fn start_hand_off(
+        self: &Arc<Self>,
+        team: &team::Team,
+        source: &Worker,
+        member: &str,
+        next: &team::Member,
+    ) -> Result<()> {
+        let mut rules = settings::Rules::from(&settings::read(&paths::state_dir()).unwrap_or_default());
+        if let Some(setup) = &team.rules {
+            rules = rules.with_team(setup);
+        }
+        let running = db::workers(&self.db(), &source.repo)?
+            .into_iter()
+            .filter(|w| w.agent_id == source.agent_id && w.closed_at.is_none() && state::is_live(&w.state))
+            .count() as u64;
+        if running >= rules.max_workers {
+            bail!("the Orchestrator already has {running} Workers running, its most");
+        }
+        let first = match &source.chain_task {
+            Some(task) => task.clone(),
+            None => db::worker_spec(&self.db(), source.id)?,
+        };
+        let spec = format!(
+            "Take over from w{id} ({member}: {title}), which ended done; an automatic Hand-off of the Team \
+             starts you after it.\n\nThe Task it was given:\n\n{}\n\nIts Final Report:\n\n{}\n",
+            first.trim_end(),
+            source.final_report.as_deref().unwrap_or("").trim_end(),
+            id = source.id,
+            title = source.title,
+        );
+        let hint = next.worktree.clone().or_else(|| {
+            action::list(&self.hub_dir)
+                .into_iter()
+                .find(|action| action.id == next.action)
+                .map(|action| action.worktree)
+        });
+        let worktree = match hint.as_deref() {
+            Some("new") => format!("new:handoff/w{}-{}", source.id, next.id),
+            _ => format!("worker:w{}", source.id),
+        };
+        self.start_worker(&json!({
+            "repo": source.repo,
+            "spec": spec,
+            "worktree": worktree,
+            "agent": source.agent_id,
+            "profile": next.profile,
+            "member": next.id,
+            "title": format!("{} after w{}: {}", next.id, source.id, title_from_spec(&first)),
+            "origin": "echo",
+            "chain_task": first,
+        }))?;
+        Ok(())
     }
 
     /// The one message the Orchestrator gets for a verified writer: its Final Report and how the
@@ -4550,6 +4649,7 @@ mod tests {
             verify: false,
             verifies: None,
             retries: 0,
+            chain_task: None,
         };
         let task = spec_with_report("Fix these.\n", &source(Some("Verdict: fail\nP1 a.rs:1\n"))).unwrap();
         assert_eq!(

@@ -148,14 +148,15 @@ pub fn workers_section(team: &Team, actions: &[Action], facts: &dyn Fn(&Member) 
     let mut lines = vec![
         "# Your Workers".to_string(),
         String::new(),
-        "This Team names the Workers you start, in tree order; among siblings, prefer the earlier. \
-         The tree is a plan of hand-offs that you carry out: a Worker never starts another Worker, and every one still reports only to you."
+        "This Team names the Workers you start; among Workers that could take a Task, prefer the earlier. \
+         Its Hand-offs are a plan you carry out, except the automatic ones, which the daemon carries out: \
+         a Worker never starts another Worker, and every one still reports only to you."
             .to_string(),
         String::new(),
     ];
     for member in &team.members {
         let action = actions.iter().find(|action| action.id == member.action);
-        lines.push(member_line(team, member, action, &facts(member)));
+        lines.push(member_line(member, action, &facts(member)));
     }
     let handoffs: Vec<String> = team.members.iter().flat_map(|member| handoffs(team, member)).collect();
     if !handoffs.is_empty() {
@@ -178,15 +179,14 @@ pub fn workers_section(team: &Team, actions: &[Action], facts: &dyn Fn(&Member) 
     lines.join("\n")
 }
 
-fn member_line(team: &Team, member: &Member, action: Option<&Action>, facts: &MemberFacts) -> String {
-    let indent = "  ".repeat(depth(team, member) - 1);
+fn member_line(member: &Member, action: Option<&Action>, facts: &MemberFacts) -> String {
     let title = match action {
         Some(action) => action.title.as_str(),
         None if member.action == action::CUSTOM => "Custom",
         None => member.action.as_str(),
     };
     let mut parts = vec![format!(
-        "{indent}- `{}` ({title}, from Profile `{}`):",
+        "- `{}` ({title}, from Profile `{}`):",
         member.id, member.profile
     )];
     if let Some(action) = action {
@@ -210,8 +210,8 @@ fn member_line(team: &Team, member: &Member, action: Option<&Action>, facts: &Me
         .join(" ")
 }
 
-/// The sentences for what follows `member`: its first `verify` child is the daemon's verifier, and
-/// every other child is a hand-off of its report.
+/// The sentences for what follows `member`: its first `verify` Member is the daemon's verifier, an
+/// automatic Hand-off is the daemon's too (features/0093), and every other one is a hint.
 fn handoffs(team: &Team, member: &Member) -> Vec<String> {
     let verifier = team.verifier_of(&member.id).map(|verifier| verifier.id.as_str());
     let mut sentences = Vec::new();
@@ -221,31 +221,27 @@ fn handoffs(team: &Team, member: &Member) -> Vec<String> {
             id = member.id
         ));
     }
-    for child in team.children(&member.id) {
-        if child.action == "verify" {
+    for next in team.following(&member.id) {
+        if next.action == "verify" {
             continue;
         }
-        sentences.push(format!(
-            "When `{}` reports, give its report to `{}` with `--from-report`.",
-            member.id, child.id
-        ));
+        let automatic = next
+            .hand_offs()
+            .iter()
+            .any(|hand_off| hand_off.from == member.id && hand_off.auto);
+        sentences.push(if automatic {
+            format!(
+                "After `{}` ends done, the daemon starts `{}` itself with that Task and its Final Report: do not start it for that Task.",
+                member.id, next.id
+            )
+        } else {
+            format!(
+                "After `{}`, consider `{}`: when `{}` reports, give its report to `{}` with `--from-report`.",
+                member.id, next.id, member.id, next.id
+            )
+        });
     }
     sentences
-}
-
-/// A Member's level in the tree; 1 for a Member with no parent. A broken chain stops at the deepest allowed.
-fn depth(team: &Team, member: &Member) -> usize {
-    let mut level = 1;
-    let mut above = member.parent.as_deref();
-    while let Some(parent) = above.filter(|_| level < crate::team::MAX_DEPTH) {
-        level += 1;
-        above = team
-            .members
-            .iter()
-            .find(|candidate| candidate.id == parent)
-            .and_then(|candidate| candidate.parent.as_deref());
-    }
-    level
 }
 
 /// `text` trimmed, ended with a full stop; empty stays empty.
@@ -396,9 +392,10 @@ mod tests {
         "workers": {"profiles": {"hinata": {"model": "anthropic/claude-haiku-5-5"}}},
         "members": [
             {"id": "scan", "action": "scan", "profile": "hinata"},
-            {"id": "build", "action": "execute", "profile": "naruto", "parent": "scan",
+            {"id": "build", "action": "execute", "profile": "naruto", "after": [{"from": "scan"}],
              "model": "anthropic/claude-opus-5-5", "worktree": "new"},
-            {"id": "check", "action": "verify", "profile": "sasuke", "parent": "build"}
+            {"id": "check", "action": "verify", "profile": "sasuke", "parent": "build"},
+            {"id": "test", "action": "run", "profile": "lee", "after": [{"from": "build", "auto": true}, {"from": "scan"}]}
         ],
         "instructions": "Prefer small Tasks."
     }"#;
@@ -411,17 +408,26 @@ mod tests {
     }
 
     #[test]
-    fn the_workers_section_lists_members_in_tree_order_with_hand_offs() {
+    fn the_workers_section_lists_members_in_file_order_with_hand_offs() {
         let team = team_of(THREE);
         let text = workers_section(&team, &action::list(&paths::hub_dir()), &facts);
-        let scan = text.find("- `scan` (Scan code, from Profile `hinata`):").unwrap();
-        let build = text.find("  - `build` (Write code, from Profile `naruto`):").unwrap();
-        let check = text.find("    - `check` (Verify, from Profile `sasuke`):").unwrap();
+        let scan = text.find("\n- `scan` (Scan code, from Profile `hinata`):").unwrap();
+        let build = text.find("\n- `build` (Write code, from Profile `naruto`):").unwrap();
+        let check = text.find("\n- `check` (Verify, from Profile `sasuke`):").unwrap();
         assert!(text.starts_with("# Your Workers\n\n") && scan < build && build < check);
         assert!(text.contains("Send questions about how existing code works here. hinata does its part."));
         assert!(text.contains("Runs on anthropic/claude-opus-5-5. Worktree: new."));
         assert!(text.contains("Runs on the default model. Worktree: current."));
-        assert!(text.contains("When `scan` reports, give its report to `build` with `--from-report`."));
+        assert!(text.contains(
+            "After `scan`, consider `build`: when `scan` reports, give its report to `build` with `--from-report`."
+        ));
+        assert!(text.contains(
+            "After `build` ends done, the daemon starts `test` itself with that Task and its Final Report: do not start it for that Task."
+        ));
+        assert!(
+            text.contains("After `scan`, consider `test`"),
+            "a hint beside an automatic Hand-off"
+        );
         assert!(text.contains("`check` verifies `build` automatically; start `build` with `--verify`."));
         assert!(
             !text.contains("give its report to `check`"),
