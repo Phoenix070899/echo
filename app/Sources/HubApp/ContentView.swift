@@ -139,26 +139,27 @@ struct TitleBar: View {
             Spacer(minLength: 0)
             SearchField()
             Spacer(minLength: 0)
-            HStack(spacing: 22) {
+            Group {
                 if model.sessions.isEmpty && !model.daemonDown {
                     // Before the first session there is nothing to count: say the daemon is up.
                     HStack(spacing: 8) {
                         Rectangle().fill(Ledger.done).frame(width: 7, height: 7)
                         Text("Echo daemon running")
                     }
+                    .fixedSize()
                 } else {
-                    if model.runningCount > 0 {
-                        Text(workers(model.runningCount, "running")).foregroundStyle(Ledger.ink)
-                    }
-                    UsageInline(usage: model.usage)
-                    if let stats = model.workerStats, stats.withTranscript > 0 {
-                        StatsInline(stats: stats)
+                    // Grouped by provider; a narrower window drops the resets, then folds the
+                    // Workers group into its ••• button (ui-ux/0136).
+                    ViewThatFits(in: .horizontal) {
+                        BarReadouts(resets: true, workers: true)
+                        BarReadouts(resets: false, workers: true)
+                        BarReadouts(resets: false, workers: false)
                     }
                 }
             }
             .modifier(BarLabel())
-            // The search field gives up room first.
-            .fixedSize()
+            // The search field gives up room first, down to its 220 pt.
+            .layoutPriority(1)
         }
         // Past the traffic lights, which full screen hides.
         .padding(.leading, model.fullScreen ? 20 : 86)
@@ -195,7 +196,11 @@ struct SearchField: View {
         Button { model.quickOpenShown = true } label: {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").font(.system(size: 13, weight: .semibold))
-                Text("Search repos, agents, Workers and commands")
+                // A narrow field says less rather than cut a word.
+                ViewThatFits(in: .horizontal) {
+                    Text("Search repos, agents, Workers and commands")
+                    Text("Search")
+                }
                 Spacer(minLength: 8)
                 Text("⌘K")
                     .font(Ledger.monoFont(11, .bold))
@@ -1427,35 +1432,60 @@ struct Hint: View {
 
 // MARK: - Usage
 
-/// The top bar's Worker statistics: the context a Worker starts with, and a button that opens
-/// the week's report.
-struct StatsInline: View {
+/// The title bar's readouts at one width (ui-ux/0136): Claude's limits, Kiro's credits, and the
+/// Workers group, each a label and its figures; with `workers` off only the ••• button stays.
+struct BarReadouts: View {
+    @EnvironmentObject private var model: AppModel
+    let resets: Bool
+    let workers: Bool
+
+    var body: some View {
+        HStack(spacing: 22) {
+            UsageInline(usage: model.usage, resets: resets)
+            let stats = model.workerStats.flatMap { $0.withTranscript > 0 ? $0 : nil }
+            if workers || stats == nil {
+                if model.runningCount > 0 || stats != nil {
+                    HStack(spacing: 6) {
+                        Text("Workers")
+                        Text("\(model.runningCount)").monospacedDigit().foregroundStyle(Ledger.ink)
+                            .help(HubCore.workers(model.runningCount, "running"))
+                        if let stats {
+                            Text("·")
+                            Text(tokenCount(stats.startContext)).monospacedDigit().foregroundStyle(Ledger.ink)
+                                .help("Worker start: the median context a Worker starts with over the last 7 days; every turn re-reads it")
+                            StatsButton(stats: stats)
+                        }
+                    }
+                }
+            } else if let stats {
+                StatsButton(stats: stats)
+            }
+        }
+        .fixedSize()
+    }
+}
+
+/// The ••• button that opens the Workers' week report.
+struct StatsButton: View {
     let stats: WorkerStats
     @StateObject private var shown = Flag()
 
     var body: some View {
-        HStack(spacing: 6) {
-            HStack(spacing: 6) {
-                Text("Worker start")
-                Text(tokenCount(stats.startContext)).monospacedDigit().foregroundStyle(Ledger.ink)
+        Button { shown.on.toggle() } label: {
+            // Three squares, Foundry's "more" (ui-ux/0110).
+            HStack(spacing: 4.5) {
+                ForEach(0..<3, id: \.self) { _ in Rectangle().frame(width: 3, height: 3) }
             }
-            .help("The median context a Worker starts with over the last 7 days; every turn re-reads it")
-            Button { shown.on.toggle() } label: {
-                // Three squares, Foundry's "more" (ui-ux/0110).
-                HStack(spacing: 4.5) {
-                    ForEach(0..<3, id: \.self) { _ in Rectangle().frame(width: 3, height: 3) }
-                }
-                .foregroundStyle(shown.on ? Ledger.ink : Ledger.ink3)
-                .frame(width: 28, height: 28)
-                .background(shown.on ? Ledger.wash : Color.clear)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .hoverFill(active: !shown.on)
-            .help("Workers, last 7 days")
-            .accessibilityLabel("Workers, last 7 days")
-            .foundryPopover(isPresented: $shown.on, width: 520, trailing: true) { StatsReport(stats: stats) }
+            .foregroundStyle(shown.on ? Ledger.ink : Ledger.ink3)
+            .frame(width: 28, height: 28)
+            .background(shown.on ? Ledger.wash : Color.clear)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .hoverFill(active: !shown.on)
+        .help("Workers, last 7 days")
+        .accessibilityLabel("Workers, last 7 days")
+        .foundryPopover(isPresented: $shown.on, width: 520, trailing: true) { StatsReport(stats: stats) }
     }
 }
 
@@ -1550,18 +1580,32 @@ struct StatsReport: View {
 struct UsageInline: View {
     @EnvironmentObject private var model: AppModel
     let usage: Usage?
+    /// The time left before each reset, after its share; the tooltip has it either way.
+    var resets = true
 
     var body: some View {
         Button { model.refreshUsage() } label: {
             HStack(spacing: 22) {
                 if usage == nil || usage?.refreshing == true { Spinner(size: 10) }
                 if let usage {
+                    let claude = usage.shown.filter { !$0.isKiro }
                     // Claude's error stands in for its limits only; Kiro's entry shows beside it.
                     if !usage.hasClaudeLimits, usage.error != nil {
-                        Text(usage.shown.isEmpty ? "Usage unavailable" : "Claude usage unavailable")
+                        Text(usage.shown.isEmpty ? "Usage unavailable" : "Claude unavailable")
+                    } else if !claude.isEmpty {
+                        HStack(spacing: 6) {
+                            Text("Claude")
+                            ForEach(Array(claude.enumerated()), id: \.element.id) { index, limit in
+                                if index > 0 { Text("·") }
+                                UsageItem(limit: limit, resets: resets)
+                            }
+                        }
                     }
-                    ForEach(usage.shown) { limit in
-                        UsageItem(limit: limit)
+                    if let kiro = usage.shown.first(where: \.isKiro) {
+                        HStack(spacing: 6) {
+                            Text("Kiro")
+                            UsageItem(limit: kiro, resets: resets)
+                        }
                     }
                 }
             }
@@ -1581,20 +1625,23 @@ struct UsageInline: View {
     }
 }
 
-/// One limit: its name, the share used, and the time left before it resets.
+/// One limit under its provider's label: the share used and, while there is room, the time left
+/// before it resets; its name is in the tooltip.
 private struct UsageItem: View {
     let limit: Usage.Limit
+    let resets: Bool
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(limit.name)
             Text("\(limit.percent)%")
                 .monospacedDigit()
                 .foregroundStyle(limit.percent >= 90 ? Ledger.fail : Ledger.ink)
             // Counts down between snapshots, which repeat an unchanged `resets`.
-            TimelineView(.everyMinute) { context in
-                if let left = limit.resetsIn(now: context.date) {
-                    Text(left).monospacedDigit()
+            if resets {
+                TimelineView(.everyMinute) { context in
+                    if let left = limit.resetsIn(now: context.date) {
+                        Text(left).monospacedDigit()
+                    }
                 }
             }
         }
