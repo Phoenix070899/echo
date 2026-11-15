@@ -7,16 +7,11 @@ import SwiftUI
 final class AgentSettingsModel: ObservableObject {
     @Published var settings: AgentSettings?
     @Published var failure: String?
-    /// The default model as typed, saved on Return or when the field is left.
-    @Published var model = ""
     private let client = DaemonClient()
 
     func refresh() {
         let client = client
-        run({ try client.agentSettings() }) { settings in
-            self.settings = settings
-            self.model = settings.model ?? ""
-        }
+        run({ try client.agentSettings() }) { self.settings = $0 }
     }
 
     func set(_ key: String, _ value: Any) {
@@ -76,15 +71,14 @@ struct DefaultsSettings: View {
                              options: agentCLIs.map { ($0, $0) }, label: "CLI")
             }
             SettingsRow("Model") {
-                TextField("Model", text: $agents.model, prompt: Text("the CLI's own default"))
-                    .labelsHidden()
-                    .squareField()
-                    .onSubmit { agents.set("model", agents.model.trimmingCharacters(in: .whitespaces)) }
+                ModelPicker(title: "Model", cli: agents.settings?.cli ?? "claude",
+                            selection: Binding(get: { agents.settings?.model ?? "" }, set: { agents.set("model", $0) }),
+                            unset: "The CLI's own default", weight: .page)
             }
             SettingsRow("Every agent") {
                 Checkbox("Use for every agent", isOn: Binding(
                     get: { agents.settings?.forceCli ?? false }, set: { agents.set("forceCli", $0) }))
-                SettingsNote("Every agent's default. A repo's .echo/settings.json comes first. When off, a Profile's own CLI and model come first; when on, every agent runs this CLI and model. Name models as provider/model, like openai/gpt-5.6-terra; Kiro takes its own ids, like claude-sonnet-5.5.")
+                SettingsNote("Every agent's default. A repo's .echo/settings.json comes first. When off, a Profile's own CLI and model come first; when on, every agent runs this CLI and model.")
             }
         }
     }

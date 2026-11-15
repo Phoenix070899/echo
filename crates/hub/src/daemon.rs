@@ -25,6 +25,7 @@ use crate::kiro_chat;
 use crate::kiro_usage;
 use crate::launch;
 use crate::lessons;
+use crate::models;
 use crate::paths;
 use crate::profile::{self, Launch};
 use crate::proto;
@@ -46,6 +47,10 @@ const IDLE_BLOCKER: Duration = Duration::from_secs(60);
 const KEEP_SETTLED_SECONDS: i64 = 10 * 60;
 /// Echo's Done list keeps a done, ended, or failed Worker this long, read or not (features/0030).
 const KEEP_REPORTS_SECONDS: i64 = 5 * 60;
+/// Each CLI's model list is listed again after this (features/0091).
+const MODELS_FOR: Duration = Duration::from_secs(10 * 60);
+/// A done Worker still in its turn after this is closed anyway (features/0090).
+const CLOSE_DONE_WITHIN: Duration = Duration::from_secs(30);
 /// A blocked or lost Worker still needs the human, so Echo keeps it this long unless dismissed.
 const KEEP_NEEDS_SECONDS: i64 = 7 * 24 * 60 * 60;
 const SCREEN_LINES: usize = 25;
@@ -73,6 +78,8 @@ pub struct Hub {
     side_shells: Mutex<HashMap<String, Arc<Live>>>,
     /// The terminal signing Echo's own login in, by CLI name (features/0089).
     logins: Mutex<HashMap<String, Arc<Live>>>,
+    /// Each CLI's models, as last listed, and when (features/0091).
+    models: Mutex<Option<(Instant, Value)>>,
     /// When each Normal session's waiting permission prompt was first seen, by agent id.
     agent_prompts: Mutex<HashMap<i64, i64>>,
     tick: Mutex<u64>,
@@ -229,6 +236,7 @@ pub fn run() -> Result<()> {
         shells: Mutex::new(HashMap::new()),
         side_shells: Mutex::new(HashMap::new()),
         logins: Mutex::new(HashMap::new()),
+        models: Mutex::new(None),
         agent_prompts: Mutex::new(HashMap::new()),
         tick: Mutex::new(0),
         changed: Condvar::new(),
@@ -1418,6 +1426,7 @@ impl Hub {
             }
             "side.status" => self.side_status(p),
             "providers" => Ok(self.providers()),
+            "models" => Ok(self.models()),
             "providers.signout" => self.sign_out(p),
             // Whether the sign-in terminal still runs.
             "providers.login.live" => {
@@ -1935,6 +1944,10 @@ impl Hub {
                 } else if verifying {
                     std::thread::spawn(move || hub.verify(id));
                 }
+                // A writer under verification closes once its verdict is delivered.
+                if final_state == state::DONE && !verifying {
+                    self.close_when_done(id);
+                }
                 Ok(json!({}))
             }
             "session" => {
@@ -2172,6 +2185,40 @@ impl Hub {
             .collect();
         let providers: Vec<Value> = reads.into_iter().filter_map(|read| read.join().ok()).collect();
         json!({ "providers": providers })
+    }
+
+    /// Each CLI's models for Settings' pickers, listed again once `MODELS_FOR` has passed. A CLI
+    /// that fails to list them has none until the next call, and its error is logged.
+    fn models(&self) -> Value {
+        if let Some((at, models)) = self.models.lock().unwrap().as_ref() {
+            if at.elapsed() < MODELS_FOR {
+                return models.clone();
+            }
+        }
+        let state = paths::state_dir();
+        let reads: Vec<_> = accounts::ALL
+            .into_iter()
+            .map(|cli| {
+                let (state, program) = (state.clone(), self.account_program(cli));
+                std::thread::spawn(move || (cli, models::list(&state, cli, &program)))
+            })
+            .collect();
+        let mut out = serde_json::Map::new();
+        let mut failed = false;
+        for (cli, listed) in reads.into_iter().filter_map(|read| read.join().ok()) {
+            let listed = listed.unwrap_or_else(|error| {
+                eprintln!("hubd: listing {}'s models: {error:#}", cli.name());
+                failed = true;
+                Vec::new()
+            });
+            out.insert(cli.name().to_string(), Value::Array(listed));
+        }
+        let models = json!({ "models": out });
+        // A list that failed is asked for again next time.
+        if !failed {
+            *self.models.lock().unwrap() = Some((Instant::now(), models.clone()));
+        }
+        models
     }
 
     /// The terminal signing Echo's own login for `cli` in: the CLI's own sign-in, on Echo's config
@@ -2820,7 +2867,7 @@ impl Hub {
                 "state": worker.state,
                 "branch": worker.branch,
                 "body": message.body,
-                "closed": to_close.contains(&worker.id),
+                "closed": worker.closed_at.is_some() || to_close.contains(&worker.id),
             }));
         }
         drop(db);
@@ -2933,7 +2980,7 @@ impl Hub {
 
     /// The one message the Orchestrator gets for a verified writer: its Final Report and how the
     /// verification ended.
-    fn deliver(&self, writer_id: i64, outcome: &str, verifier_report: &str) {
+    fn deliver(self: &Arc<Self>, writer_id: i64, outcome: &str, verifier_report: &str) {
         let result = (|| -> Result<()> {
             let db = self.db();
             let writer = db::worker(&db, writer_id)?;
@@ -2951,6 +2998,34 @@ impl Hub {
             eprintln!("hubd: delivering w{writer_id}: {error:#}");
         }
         self.notify();
+        self.close_when_done(writer_id);
+    }
+
+    /// A Worker that reported done closes as soon as its turn ends at the input box, or after
+    /// `CLOSE_DONE_WITHIN` at the latest (features/0090), unless started with `--keep`; a next
+    /// Task resumes its session. One given a next Task meanwhile is running again and stays open.
+    fn close_when_done(self: &Arc<Self>, id: i64) {
+        let hub = Arc::clone(self);
+        std::thread::spawn(move || {
+            let began = Instant::now();
+            let result = (|| -> Result<()> {
+                loop {
+                    let worker = db::worker(&hub.db(), id)?;
+                    if worker.state != state::DONE || worker.keep || worker.closed_at.is_some() {
+                        return Ok(());
+                    }
+                    let ended = hub.live(id).map_or(true, |live| live.cli.turn_ended(&live.screen()));
+                    if ended || began.elapsed() >= CLOSE_DONE_WITHIN {
+                        hub.close_worker(id)?;
+                        return Ok(());
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            })();
+            if let Err(error) = result {
+                eprintln!("hubd: closing done w{id}: {error:#}");
+            }
+        });
     }
 
     fn view(&self, db: &Connection, worker: &Worker) -> Result<Value> {

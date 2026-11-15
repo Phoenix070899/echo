@@ -158,12 +158,6 @@ private func json(_ value: Any) throws -> String {
     #expect(form.blocker == "lee is set twice. Keep one row for each Profile.")
 }
 
-@Test func theModelHintMatchesTheCli() {
-    #expect(TeamForm.modelHint(cli: "kiro").contains("claude-sonnet-5.5"))
-    #expect(TeamForm.modelHint(cli: "codex").contains("openai/"))
-    #expect(TeamForm.modelHint(cli: "claude").contains("anthropic/"))
-}
-
 private let everyField = Team.Member(
     id: "build", action: "execute", profile: "naruto", instructions: "Small commits.", replaceRole: true,
     cli: "kiro", model: "claude-sonnet-5.5", effort: "high", tools: ["read", "write"], skills: ["tdd"],

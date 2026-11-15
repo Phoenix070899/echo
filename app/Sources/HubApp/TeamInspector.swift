@@ -114,10 +114,7 @@ private struct MemberRuns: View {
             SourceLine(text: describe(cli, empty: "your default"), reset: reset(.cli))
         }
         InspectorField("Model") {
-            TextField("Model", text: text(\.model),
-                      prompt: Text(model.value.isEmpty ? TeamForm.modelHint(cli: cli.value) : model.value))
-                .labelsHidden()
-                .squareField(.inspector)
+            ModelPicker(title: "Model", cli: cli.value, selection: text(\.model), unset: "Not set")
             SourceLine(text: describe(model, empty: "the CLI's own default"), reset: reset(.model))
         }
         InspectorField("Effort") {

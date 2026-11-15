@@ -22,6 +22,12 @@ case "$1 $2" in
     esac ;;
   "login "|"logout ") [ "$1" = login ] && touch "$CODEX_HOME/fake-login" || rm -f "$CODEX_HOME/fake-login"; exit 0 ;;
   "whoami ") printf 'Logged in with Builder ID\nEmail: human@example.com\n'; exit 0 ;;
+  # Model lists (models.rs): Codex's catalog and Kiro's.
+  "debug models")
+    # As large as the real catalog, more than a pipe holds.
+    printf '{"about": "%s", "models": [{"slug": "gpt-test", "display_name": "GPT-Test", "visibility": "list", "priority": 1}]}\n' "$(head -c 300000 /dev/zero | tr '\0' x)"
+    exit 0 ;;
+  "chat --list-models") printf '{"models": [{"model_name": "claude-haiku-5.5", "model_id": "claude-haiku-5.5"}]}\n'; exit 0 ;;
 esac
 if [ "$1" = "-p" ] && [ "$2" = "/usage" ] && [ -n "$HUB_FAKE_USAGE_FLAKY" ] && [ ! -e "$HUB_FAKE_USAGE_FLAKY" ]; then
   # The first call fails the way the real one sometimes does: a cost summary, no limits.
@@ -53,7 +59,10 @@ P1 foo.rs:1 broken" ;;
       *) echoctl done --state done "Verdict: pass" ;;
     esac ;;
   ask*) answer=$(echoctl ask "Which color?") && echoctl done --state done "answer was $answer" ;;
-  done*) echoctl done --state done "finished" ;;
+  done*)
+    echoctl done --state done "finished"
+    # The turn then ends at the input box, as Claude Code's does.
+    printf '\033[2J\033[H⏺ Reported.\n✻ Brewed for 3s · done 4:38 PM\n────\n❯ \n────\n  ⏵⏵ auto mode on\n' ;;
   account*) echoctl done --state done "config: ${CLAUDE_CONFIG_DIR:-none} codex: ${CODEX_HOME:-none}" ;;
   next*)
     # Reports, then takes each line typed at its input box as its next Task.

@@ -13,6 +13,7 @@ mod kiro_chat;
 mod kiro_usage;
 mod launch;
 mod lessons;
+mod models;
 mod paths;
 mod profile;
 mod proto;
@@ -283,7 +284,7 @@ enum WorkerCommand {
         /// The model, as provider/model (anthropic/claude-opus-5-5; kiro takes its own ids, claude-sonnet-5.5), over the Profile's and the settings'.
         #[arg(long)]
         model: Option<String>,
-        /// Leave it open after its Final Report, though it has no branch of its own (else it closes).
+        /// Leave it open after its Final Report (else it closes once its turn ends; a next Task resumes it).
         #[arg(long)]
         keep: bool,
         /// Have the daemon verify its Final Report with its verifier (its Team's `verify` Member, else a

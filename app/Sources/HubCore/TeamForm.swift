@@ -260,15 +260,6 @@ public struct TeamForm: Equatable, Sendable {
         return params
     }
 
-    /// What a model field expects for `cli`, as a hint in the empty field.
-    public static func modelHint(cli: String) -> String {
-        switch cli {
-        case "kiro": "a Kiro id, like claude-sonnet-5.5"
-        case "codex": "an OpenAI model, like openai/gpt-5.6-terra"
-        default: "an Anthropic model, like anthropic/claude-sonnet-5-5"
-        }
-    }
-
     private func setup(_ cli: String, _ model: String, _ effort: String, rotateAt: Int? = nil) -> [String: Any] {
         var out: [String: Any] = [:]
         if let text = present(cli) { out["cli"] = text }
