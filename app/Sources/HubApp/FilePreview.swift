@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import Highlightr
 import HubCore
 import PDFKit
@@ -155,11 +156,13 @@ struct FilePreviewPanel: View {
     /// Unsaved edits are saved or let go first; the file is then read again, coloured as saved.
     private func stopEditing() {
         let had = unsaved
-        guard model.settleDraft(file) else { return }
-        content.editing = false
-        content.saveError = nil
-        if had || content.changedOnDisk { content.reread(quiet: true) }
-        focused = true
+        model.settleDraft(file) { settled in
+            guard settled else { return }
+            content.editing = false
+            content.saveError = nil
+            if had || content.changedOnDisk { content.reread(quiet: true) }
+            focused = true
+        }
     }
 
     private func save() {

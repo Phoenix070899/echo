@@ -13,11 +13,14 @@ let package = Package(
     ],
     targets: [
         .target(name: "HubCore", path: "Sources/HubCore"),
+        // Foundry, the human's design system: its tokens and every control Echo draws (ui-ux/0138).
+        .target(name: "Foundry", dependencies: ["HubCore"], path: "Sources/Foundry"),
         .systemLibrary(name: "GhosttyKit", path: "Vendor/GhosttyKit/include"),
         .executableTarget(
             name: "HubApp",
             dependencies: [
                 "HubCore",
+                "Foundry",
                 "GhosttyKit",
                 .product(name: "Highlightr", package: "Highlightr"),
             ],
@@ -33,6 +36,7 @@ let package = Package(
             ]
         ),
         .testTarget(name: "HubCoreTests", dependencies: ["HubCore"], path: "Tests/HubCoreTests"),
+        .testTarget(name: "FoundryTests", dependencies: ["Foundry"], path: "Tests/FoundryTests"),
     ],
     swiftLanguageModes: [.v5]
 )

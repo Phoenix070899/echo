@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -112,6 +113,10 @@ struct MuxShell: Equatable {
 final class AppModel: ObservableObject {
     static let shared = AppModel()
 
+    init() {
+        FoundryAsk.shared.$question.map { $0 != nil }.removeDuplicates().assign(to: &$asking)
+    }
+
     /// Models offered when starting an agent; "" keeps the saved one, or `claude`'s default.
     static let models = ["", "claude-opus-5-5", "claude-sonnet-5-5"]
 
@@ -121,8 +126,8 @@ final class AppModel: ObservableObject {
     @Published var newSession: NewSessionRequest?
     /// The agent being renamed, if any.
     @Published var renaming: Agent?
-    /// The agent waiting on "Close?" to be confirmed, if any.
-    @Published var closing: Agent?
+    /// A Foundry question is up (ui-ux/0140), so the terminal lets go of the keyboard.
+    @Published private(set) var asking = false
     /// A question whose reply field should take the keyboard once the ledger shows it.
     @Published var replyFocus: String?
     /// The window is in full screen, where the traffic lights are hidden.
@@ -143,7 +148,7 @@ final class AppModel: ObservableObject {
     /// The New Team sheet is up, over the Teams section.
     @Published var newTeamShown = false
     /// While a modal is up, terminals hand it the keyboard.
-    var modalShown: Bool { teamSettings.asking || newTeamShown || newSession != nil || renaming != nil || closing != nil || quickOpenShown || fanOutShown || newSessionMenuShown || popoverShown }
+    var modalShown: Bool { teamSettings.asking || newTeamShown || newSession != nil || renaming != nil || asking || quickOpenShown || fanOutShown || newSessionMenuShown || popoverShown }
     /// Shrinks the ledger to a strip of status marks so the terminal takes almost the whole window.
     @Published var ledgerCollapsed = false
 
@@ -351,7 +356,12 @@ final class AppModel: ObservableObject {
     /// Closes a file's tab; if it was the one shown, the next tab in that checkout (else the
     /// one before, else the terminal) takes over.
     func closePreview(_ file: FileRef) {
-        guard settleDraft(file) else { return }
+        settleDraft(file) { [self] settled in
+            if settled { close(file) }
+        }
+    }
+
+    private func close(_ file: FileRef) {
         let tabs = openPreviews.filter { $0.root == file.root }
         let next = tabs.firstIndex(of: file).flatMap { index in
             index + 1 < tabs.count ? tabs[index + 1] : index > 0 ? tabs[index - 1] : nil
@@ -383,42 +393,41 @@ final class AppModel: ObservableObject {
         setDraft(nil, for: file)
     }
 
-    /// Asks what to do with a file's unsaved edits before they go; false when the human cancels.
-    func settleDraft(_ file: FileRef) -> Bool {
-        guard unsaved.contains(file) else { return true }
-        let alert = NSAlert()
-        alert.messageText = "Save your changes to \(file.name)?"
-        alert.informativeText = "Your changes are lost if you don't save them."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Don't Save")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            do {
-                try saveDraft(file)
-                return true
-            } catch {
-                let failed = NSAlert()
-                failed.messageText = "\(file.name) was not saved"
-                failed.informativeText = error.localizedDescription
-                failed.runModal()
-                return false
+    /// Asks what to do with a file's unsaved edits before they go (ui-ux/0140); `settled` gets
+    /// false when the human cancels or the save fails, and the edits stay.
+    func settleDraft(_ file: FileRef, settled: @escaping (Bool) -> Void) {
+        guard unsaved.contains(file) else { return settled(true) }
+        let question = FoundryQuestion("Save your changes to \(file.name)?",
+                                       message: "Your changes are lost if you don't save them.",
+                                       answers: [FoundryAnswer("Don't Save", role: .destructive), FoundryAnswer("Save", role: .primary)])
+        FoundryAsk.shared.ask(question) { [self] answer, _ in
+            switch answer {
+            case "Save":
+                do {
+                    try saveDraft(file)
+                    settled(true)
+                } catch {
+                    settled(false)
+                    FoundryAsk.shared.tell("\(file.name) was not saved", message: error.localizedDescription)
+                }
+            case "Don't Save":
+                setDraft(nil, for: file)
+                settled(true)
+            default:
+                settled(false)
             }
-        case .alertThirdButtonReturn:
-            setDraft(nil, for: file)
-            return true
-        default:
-            return false
         }
     }
 
-    /// Before quitting: every file with unsaved edits is saved or let go; false when one is kept.
-    func settleDrafts() -> Bool {
-        for file in openPreviews where unsaved.contains(file) {
-            preview = file
-            guard settleDraft(file) else { return false }
+    /// Before quitting: every file with unsaved edits is saved or let go, one question at a time;
+    /// `done` gets false when one is kept.
+    func settleDrafts(done: @escaping (Bool) -> Void) {
+        guard let file = openPreviews.first(where: { unsaved.contains($0) }) else { return done(true) }
+        openMainWindow?()
+        preview = file
+        settleDraft(file) { [self] settled in
+            if settled { settleDrafts(done: done) } else { done(false) }
         }
-        return true
     }
 
     func showPreview(_ file: FileRef, line: Int) {
@@ -1227,7 +1236,18 @@ final class AppModel: ObservableObject {
         background { client in try client.stopAgent(id) } then: { _ in }
     }
 
-    /// Takes an agent out of the ledger; its terminal stops. Callers confirm through `closing` first.
+    /// Asks before an agent leaves the ledger, then takes it out.
+    func askToClose(_ agent: Agent) {
+        FoundryAsk.shared.confirm("Close \(agent.displayName)?",
+                                  message: agent.live
+                                      ? "It stops now and leaves the ledger. Echo cannot start it again."
+                                      : "It leaves the ledger. Echo cannot start it again.",
+                                  answer: FoundryAnswer("Close \(agent.kindName)", role: .destructive)) {
+            self.forgetAgent(agent.id)
+        }
+    }
+
+    /// Takes an agent out of the ledger; its terminal stops. Callers confirm with `askToClose` first.
     func forgetAgent(_ id: Int) {
         background { client in try client.forgetAgent(id) } then: { _ in self.refreshSessions() }
     }

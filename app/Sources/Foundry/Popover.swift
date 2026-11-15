@@ -11,12 +11,17 @@ import SwiftUI
 // MARK: - The panel and its parts
 
 /// The panel: its parts stacked in the sheet, framed, casting the hard ink block.
-struct FoundryPopover<Content: View>: View {
+public struct FoundryPopover<Content: View>: View {
     /// What the panel is, for VoiceOver.
-    let label: String
-    @ViewBuilder var content: () -> Content
+    public let label: String
+    @ViewBuilder public var content: () -> Content
 
-    var body: some View {
+    public init(label: String, @ViewBuilder content: @escaping () -> Content) {
+        self.label = label
+        self.content = content
+    }
+
+    public var body: some View {
         VStack(alignment: .leading, spacing: 0) { content() }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Ledger.paper)
@@ -30,11 +35,16 @@ struct FoundryPopover<Content: View>: View {
 
 /// The head: a mono capital label for what the panel is about, a quiet detail at the right, over a
 /// 1 pt rule.
-struct FoundryPopoverHead: View {
-    let title: String
-    var detail: String?
+public struct FoundryPopoverHead: View {
+    public let title: String
+    public var detail: String?
 
-    var body: some View {
+    public init(title: String, detail: String? = nil) {
+        self.title = title
+        self.detail = detail
+    }
+
+    public var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             MonoLabel(title).lineLimit(1).accessibilityAddTraits(.isHeader)
             Spacer(minLength: 0)
@@ -53,16 +63,30 @@ struct FoundryPopoverHead: View {
 /// A menu row. With an icon it is Foundry's row: the 36 pt framed icon, the bold title over a
 /// one-line note, the key box. Without one it is the compact row of a long menu: the title, the note
 /// beside it, the key box. The picked row is the sunk grey; menu rows have no square (ui-ux/0127).
-struct FoundryPopoverItem: View {
-    let title: String
-    var note: String?
-    var key: String?
-    var icon: AnyView?
-    var picked = false
-    var enabled = true
-    let action: () -> Void
+public struct FoundryPopoverItem: View {
+    public let title: String
+    public var note: String?
+    public var key: String?
+    public var icon: AnyView?
+    public var picked = false
+    /// The current choice of a picker's menu: ticked at the row's end.
+    public var checked = false
+    public var enabled = true
+    public let action: () -> Void
 
-    var body: some View {
+    public init(title: String, note: String? = nil, key: String? = nil, icon: AnyView? = nil, picked: Bool = false,
+                checked: Bool = false, enabled: Bool = true, action: @escaping () -> Void) {
+        self.title = title
+        self.note = note
+        self.key = key
+        self.icon = icon
+        self.picked = picked
+        self.checked = checked
+        self.enabled = enabled
+        self.action = action
+    }
+
+    public var body: some View {
         Button(action: action) {
             HStack(spacing: 14) {
                 if let icon {
@@ -82,6 +106,12 @@ struct FoundryPopoverItem: View {
                     }
                 }
                 Spacer(minLength: 8)
+                if checked {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Ledger.ink)
+                        .accessibilityHidden(true)
+                }
                 if let key, !key.isEmpty {
                     Text(key)
                         .font(Ledger.monoFont(10, .bold))
@@ -103,7 +133,7 @@ struct FoundryPopoverItem: View {
         .opacity(enabled ? 1 : 0.45)
         .accessibilityLabel(title)
         .accessibilityHint(note ?? "")
-        .accessibilityAddTraits(picked ? .isSelected : [])
+        .accessibilityAddTraits(picked || checked ? .isSelected : [])
     }
 
     private var titleText: some View {
@@ -116,19 +146,22 @@ struct FoundryPopoverItem: View {
 }
 
 /// The rule between two groups of rows.
-struct FoundryPopoverRule: View {
-    var body: some View {
+public struct FoundryPopoverRule: View {
+    public init() {}
+
+
+    public var body: some View {
         Rule().padding(.horizontal, 14).padding(.vertical, 4).accessibilityHidden(true)
     }
 }
 
 /// A group's quiet mono label inside a menu, such as "Profiles".
-struct FoundryPopoverLabel: View {
-    let title: String
+public struct FoundryPopoverLabel: View {
+    public let title: String
 
-    init(_ title: String) { self.title = title }
+    public init(_ title: String) { self.title = title }
 
-    var body: some View {
+    public var body: some View {
         MonoLabel(title)
             .padding(.horizontal, 18)
             .padding(.top, 6)
@@ -139,19 +172,27 @@ struct FoundryPopoverLabel: View {
 }
 
 /// The body of a report: a ruled table or rows, 14 pt in.
-struct FoundryPopoverBody<Content: View>: View {
-    @ViewBuilder var content: () -> Content
+public struct FoundryPopoverBody<Content: View>: View {
+    @ViewBuilder public var content: () -> Content
 
-    var body: some View {
+    public init(@ViewBuilder content: @escaping () -> Content) {
+        self.content = content
+    }
+
+    public var body: some View {
         content().padding(14).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 /// One quiet line or link under a 1 pt rule.
-struct FoundryPopoverFoot<Content: View>: View {
-    @ViewBuilder var content: () -> Content
+public struct FoundryPopoverFoot<Content: View>: View {
+    @ViewBuilder public var content: () -> Content
 
-    var body: some View {
+    public init(@ViewBuilder content: @escaping () -> Content) {
+        self.content = content
+    }
+
+    public var body: some View {
         content()
             .font(Ledger.font(12))
             .foregroundStyle(Ledger.ink3)
@@ -166,41 +207,62 @@ struct FoundryPopoverFoot<Content: View>: View {
 // MARK: - A menu
 
 /// One entry of a Foundry menu.
-struct FoundryMenuEntry {
-    enum Kind { case item, rule, label }
+public struct FoundryMenuEntry {
+    public enum Kind { case item, rule, label }
 
-    var kind = Kind.item
-    var title = ""
-    var note: String?
-    var key: String?
-    var icon: AnyView?
-    var enabled = true
-    var action: () -> Void = {}
+    public var kind = Kind.item
+    public var title = ""
+    public var note: String?
+    public var key: String?
+    public var icon: AnyView?
+    public var checked = false
+    public var enabled = true
+    public var action: () -> Void = {}
 
-    static let rule = FoundryMenuEntry(kind: .rule)
+    public static let rule = FoundryMenuEntry(kind: .rule)
 
-    static func label(_ title: String) -> FoundryMenuEntry { FoundryMenuEntry(kind: .label, title: title) }
+    public init(kind: Kind = .item, title: String = "", note: String? = nil, key: String? = nil, icon: AnyView? = nil,
+                checked: Bool = false, enabled: Bool = true, action: @escaping () -> Void = {}) {
+        self.kind = kind
+        self.title = title
+        self.note = note
+        self.key = key
+        self.icon = icon
+        self.checked = checked
+        self.enabled = enabled
+        self.action = action
+    }
 
-    static func item(_ title: String, note: String? = nil, key: String? = nil, icon: AnyView? = nil,
-                     enabled: Bool = true, action: @escaping () -> Void) -> FoundryMenuEntry {
-        FoundryMenuEntry(title: title, note: note, key: key, icon: icon, enabled: enabled, action: action)
+    public static func label(_ title: String) -> FoundryMenuEntry { FoundryMenuEntry(kind: .label, title: title) }
+
+    public static func item(_ title: String, note: String? = nil, key: String? = nil, icon: AnyView? = nil,
+                            checked: Bool = false, enabled: Bool = true, action: @escaping () -> Void) -> FoundryMenuEntry {
+        FoundryMenuEntry(title: title, note: note, key: key, icon: icon, checked: checked, enabled: enabled, action: action)
     }
 }
 
 /// A menu in Foundry's popover: a head, its entries and a foot. The pointer or ↑ ↓ pick a row,
 /// Return runs it, Esc or a click outside closes; a row run closes the menu first. A menu taller
 /// than the window scrolls.
-struct FoundryMenu: View {
-    let label: String
-    var head: String?
-    var detail: String?
-    let entries: [FoundryMenuEntry]
-    var foot: AnyView?
+public struct FoundryMenu: View {
+    public let label: String
+    public var head: String?
+    public var detail: String?
+    public let entries: [FoundryMenuEntry]
+    public var foot: AnyView?
     @Environment(\.foundryPopoverClose) private var close
     @StateObject private var pick = MenuPick()
     @FocusState private var focused: Bool
 
-    var body: some View {
+    public init(label: String, head: String? = nil, detail: String? = nil, entries: [FoundryMenuEntry], foot: AnyView? = nil) {
+        self.label = label
+        self.head = head
+        self.detail = detail
+        self.entries = entries
+        self.foot = foot
+    }
+
+    public var body: some View {
         FoundryPopover(label: label) {
             if let head { FoundryPopoverHead(title: head, detail: detail) }
             ViewThatFits(in: .vertical) {
@@ -219,7 +281,7 @@ struct FoundryMenu: View {
         .onKeyPress(.upArrow) { move(-1); return .handled }
         .onKeyPress(.return) { run(pick.index); return .handled }
         .onAppear {
-            pick.index = enabledItems.first ?? -1
+            pick.index = enabledItems.first { entries[$0].checked } ?? enabledItems.first ?? -1
             DispatchQueue.main.async { focused = true }
         }
     }
@@ -234,7 +296,7 @@ struct FoundryMenu: View {
                     FoundryPopoverLabel(entry.title)
                 case .item:
                     FoundryPopoverItem(title: entry.title, note: entry.note, key: entry.key, icon: entry.icon,
-                                       picked: index == pick.index, enabled: entry.enabled) { run(index) }
+                                       picked: index == pick.index, checked: entry.checked, enabled: entry.enabled) { run(index) }
                         .onHover { if $0 && entry.enabled { pick.index = index } }
                         .id(index)
                 }
@@ -264,13 +326,16 @@ struct FoundryMenu: View {
     }
 }
 
-final class MenuPick: ObservableObject {
-    @Published var index = 0
+public final class MenuPick: ObservableObject {
+    @Published public var index = 0
 }
 
 /// A 1 pt rule across its container.
-struct Rule: View {
-    var body: some View {
+public struct Rule: View {
+    public init() {}
+
+
+    public var body: some View {
         Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline)
     }
 }
@@ -279,30 +344,39 @@ struct Rule: View {
 
 /// Closes the popover the view is in.
 private struct FoundryPopoverCloseKey: EnvironmentKey {
-    static var defaultValue: () -> Void { {} }
+    public static var defaultValue: () -> Void { {} }
 }
 
 extension EnvironmentValues {
-    var foundryPopoverClose: () -> Void {
+    public var foundryPopoverClose: () -> Void {
         get { self[FoundryPopoverCloseKey.self] }
         set { self[FoundryPopoverCloseKey.self] = newValue }
     }
 }
 
 /// A popover asked for by a control, carried up to the window's host.
-struct FoundryPopoverEntry {
-    let anchor: Anchor<CGRect>
-    let width: CGFloat
-    let trailing: Bool
-    let gap: CGFloat
-    let content: AnyView
-    let close: () -> Void
+public struct FoundryPopoverEntry {
+    public let anchor: Anchor<CGRect>
+    public let width: CGFloat
+    public let trailing: Bool
+    public let gap: CGFloat
+    public let content: AnyView
+    public let close: () -> Void
+
+    public init(anchor: Anchor<CGRect>, width: CGFloat, trailing: Bool, gap: CGFloat, content: AnyView, close: @escaping () -> Void) {
+        self.anchor = anchor
+        self.width = width
+        self.trailing = trailing
+        self.gap = gap
+        self.content = content
+        self.close = close
+    }
 }
 
-struct FoundryPopoverKey: PreferenceKey {
-    static var defaultValue: [FoundryPopoverEntry] { [] }
+public struct FoundryPopoverKey: PreferenceKey {
+    public static var defaultValue: [FoundryPopoverEntry] { [] }
 
-    static func reduce(value: inout [FoundryPopoverEntry], nextValue: () -> [FoundryPopoverEntry]) {
+    public static func reduce(value: inout [FoundryPopoverEntry], nextValue: () -> [FoundryPopoverEntry]) {
         value += nextValue()
     }
 }
@@ -311,7 +385,7 @@ extension View {
     /// Opens `content`, a `FoundryPopover` or `FoundryMenu`, `width` wide under this control while
     /// `isPresented` holds, its leading edge on the control's (or its trailing edge, for a control
     /// at the right of the window). The window's `foundryPopoverHost` draws it.
-    func foundryPopover<Content: View>(isPresented: Binding<Bool>, width: CGFloat, trailing: Bool = false,
+    public func foundryPopover<Content: View>(isPresented: Binding<Bool>, width: CGFloat, trailing: Bool = false,
                                        gap: CGFloat = 8, @ViewBuilder content: @escaping () -> Content) -> some View {
         anchorPreference(key: FoundryPopoverKey.self, value: .bounds) { anchor in
             guard isPresented.wrappedValue else { return [] }
@@ -323,7 +397,7 @@ extension View {
     /// Draws the popovers asked for inside this view over it, the last one asked for on top of a
     /// clear layer that closes it on a click; `shown` holds while one is open, so the terminal lets
     /// go of the keyboard.
-    func foundryPopoverHost(shown: Binding<Bool>) -> some View {
+    public func foundryPopoverHost(shown: Binding<Bool>) -> some View {
         overlayPreferenceValue(FoundryPopoverKey.self) { entries in
             GeometryReader { proxy in
                 if let entry = entries.last {
@@ -336,12 +410,12 @@ extension View {
 
 /// The open popover over the window, placed by `PopoverPlacement`.
 private struct FoundryPopoverLayer: View {
-    let entry: FoundryPopoverEntry
-    let anchor: CGRect
-    let size: CGSize
-    let shown: Binding<Bool>
+    public let entry: FoundryPopoverEntry
+    public let anchor: CGRect
+    public let size: CGSize
+    public let shown: Binding<Bool>
 
-    var body: some View {
+    public var body: some View {
         let place = PopoverPlacement.place(anchor: anchor, width: entry.width, in: size, trailing: entry.trailing, gap: entry.gap)
         ZStack(alignment: .topLeading) {
             Color.clear

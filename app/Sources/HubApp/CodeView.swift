@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -110,9 +111,7 @@ final class CodeCoordinator {
         text.isContinuousSpellCheckingEnabled = false
         text.isGrammarCheckingEnabled = false
         text.smartInsertDeleteEnabled = false
-        // ⌘F: the system find bar over the code, with every match marked (ui-ux/0038).
-        text.usesFindBar = true
-        text.isIncrementalSearchingEnabled = true
+        // ⌘F: Foundry's find bar over the code, with every match marked (ui-ux/0142).
         text.drawsBackground = true
         text.backgroundColor = NSColor(Ledger.paper)
         text.isHorizontallyResizable = true
@@ -138,6 +137,9 @@ final class CodeCoordinator {
 
     func update(_ new: CodeView) {
         view = new
+        // A hidden view must not hold the keyboard in the find bar's field: AppKit then looks for
+        // the next key view through SwiftUI without end.
+        if !new.active { text.findBar.close() }
         scroll.isHidden = !new.active
         // A request made just now, as when ⌘F on rendered Markdown switched to the source; an old
         // one is not replayed when the source shows again later.
@@ -157,6 +159,7 @@ final class CodeCoordinator {
             // A new read while editing (after a save) keeps the caret where it was.
             let selection = text.selectedRange()
             text.textStorage?.setAttributedString(new.code.text)
+            text.findAgain()
             text.undo.removeAllActions()
             if new.editing {
                 let length = text.textStorage?.length ?? 0
@@ -476,6 +479,7 @@ final class CodeTextView: NSTextView {
 
     override func didChangeText() {
         super.didChangeText()
+        findAgain()
         MainActor.assumeIsolated { coordinator?.textChanged() }
     }
 
@@ -524,8 +528,8 @@ final class CodeTextView: NSTextView {
 
     override func keyDown(with event: NSEvent) {
         // Esc closes the find bar first, then the preview.
-        if event.keyCode == 53, enclosingScrollView?.isFindBarVisible == true {
-            finder(.hideFindInterface)
+        if event.keyCode == 53, findBar.isOpen {
+            findBar.close()
             return
         }
         // While editing only Esc is the preview's; the other keys type.
@@ -544,8 +548,8 @@ final class CodeTextView: NSTextView {
         }
         switch (event.charactersIgnoringModifiers?.lowercased(), flags) {
         case ("f", [.command]): showFindBar()
-        case ("g", [.command]): finder(.nextMatch)
-        case ("g", [.command, .shift]): finder(.previousMatch)
+        case ("g", [.command]): step(back: false)
+        case ("g", [.command, .shift]): step(back: true)
         case ("e", [.command]): return MainActor.assumeIsolated { coordinator?.key(.edit) ?? false }
         case ("s", [.command]) where isEditable: return MainActor.assumeIsolated { coordinator?.key(.save) ?? false }
         // Ahead of the Edit menu, so ⌘Z undoes in this file's history.
@@ -556,15 +560,74 @@ final class CodeTextView: NSTextView {
         return true
     }
 
+    // MARK: Find (ui-ux/0142)
+
+    let findBar = FoundryFindBar()
+    /// Every match of the bar's text, and the one picked.
+    private var matches: [NSRange] = []
+    private var current = -1
+
+    /// Opens the find bar over the code with the picked text, when it is one line.
     func showFindBar() {
-        window?.makeFirstResponder(self)
-        finder(.showFindInterface)
+        guard let scroll = enclosingScrollView else { return }
+        if findBar.superview !== scroll {
+            scroll.addSubview(findBar)
+            findBar.changed = { [weak self] needle in self?.find(needle) }
+            findBar.step = { [weak self] back in self?.step(back: back) }
+            findBar.closed = { [weak self] in
+                guard let self else { return }
+                mark([], current: -1)
+                window?.makeFirstResponder(self)
+            }
+        }
+        findBar.place(in: scroll.bounds, flipped: scroll.isFlipped)
+        let picked = (string as NSString).substring(with: selectedRange())
+        findBar.open(picked.contains("\n") ? "" : picked)
     }
 
-    private func finder(_ action: NSTextFinder.Action) {
-        let item = NSMenuItem()
-        item.tag = action.rawValue
-        performTextFinderAction(item)
+    /// Finds the bar's text again after the code changed under it.
+    func findAgain() {
+        if findBar.isOpen { find(findBar.field.stringValue) }
+    }
+
+    private func find(_ needle: String) {
+        var found: [NSRange] = []
+        let text = string as NSString
+        if !needle.isEmpty {
+            var from = 0
+            while from < text.length {
+                let range = text.range(of: needle, options: .caseInsensitive, range: NSRange(location: from, length: text.length - from))
+                guard range.location != NSNotFound else { break }
+                found.append(range)
+                from = range.location + max(range.length, 1)
+            }
+        }
+        // The first match at or after the caret.
+        let caret = selectedRange().location
+        mark(found, current: found.isEmpty ? -1 : found.firstIndex { $0.location >= caret } ?? 0)
+        findBar.show(selected: current, of: needle.isEmpty ? -1 : found.count)
+    }
+
+    private func step(back: Bool) {
+        guard !matches.isEmpty else { return }
+        mark(matches, current: (current + (back ? -1 : 1) + matches.count) % matches.count)
+        findBar.show(selected: current, of: matches.count)
+    }
+
+    /// Every match under the highlighter's wash, the picked one under the highlighter itself and
+    /// scrolled to.
+    private func mark(_ found: [NSRange], current: Int) {
+        guard let layout = layoutManager else { return }
+        for range in matches where NSMaxRange(range) <= (string as NSString).length {
+            layout.removeTemporaryAttribute(.backgroundColor, forCharacterRange: range)
+        }
+        matches = found
+        self.current = current
+        for (index, range) in found.enumerated() {
+            layout.addTemporaryAttribute(.backgroundColor, value: NSColor(index == current ? Ledger.marker : Ledger.markerWash),
+                                         forCharacterRange: range)
+        }
+        if found.indices.contains(current) { scrollRangeToVisible(found[current]) }
     }
 }
 

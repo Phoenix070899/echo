@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import GhosttyKit
 import HubCore
 import SwiftUI
@@ -1009,64 +1010,37 @@ final class GhosttyView: NSView, NSTextInputClient {
     }
 }
 
-/// ⌘F's find field over the terminal's top right; the surface finds and highlights the matches.
-final class FindBar: NSView, NSTextFieldDelegate {
+/// ⌘F's find field over the terminal's top right, Foundry's find bar in the theme's colours; the
+/// surface finds and highlights the matches.
+final class FindBar: FoundryFindBar {
     weak var view: GhosttyView?
-    private let field = NSTextField()
-    private let count = NSTextField(labelWithString: "")
-    var total: Int = -1 { didSet { updateCount() } }
-    var selected: Int = -1 { didSet { updateCount() } }
+    var total: Int = -1 { didSet { show(selected: selected, of: total) } }
+    var selected: Int = -1 { didSet { show(selected: selected, of: total) } }
 
-    init() {
-        super.init(frame: NSRect(x: 0, y: 0, width: 260, height: 30))
-        isHidden = true
-        wantsLayer = true
-        layer?.cornerRadius = 0
-        layer?.borderWidth = 1
-        field.placeholderString = "Find"
-        field.font = .systemFont(ofSize: 12)
-        field.isBordered = false
-        field.drawsBackground = false
-        field.focusRingType = .none
-        field.delegate = self
-        count.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        count.alignment = .right
-        field.frame = NSRect(x: 8, y: 7, width: 180, height: 16)
-        count.frame = NSRect(x: 190, y: 7, width: 62, height: 16)
-        addSubview(field)
-        addSubview(count)
+    override init() {
+        super.init()
+        changed = { [weak self] text in self?.binding("search:\(text)") }
+        step = { [weak self] back in self?.binding(back ? "navigate_search:previous" : "navigate_search:next") }
+        closed = { [weak self] in
+            guard let self else { return }
+            binding("end_search")
+            total = -1
+            selected = -1
+            if let view, window?.firstResponder === field.currentEditor() { window?.makeFirstResponder(view) }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("FindBar is built in code") }
 
     func place(in bounds: NSRect) {
-        setFrameOrigin(NSPoint(x: bounds.maxX - frame.width - 14, y: bounds.maxY - frame.height - 8))
+        place(in: bounds, flipped: false)
     }
 
-    func open(_ needle: String) {
+    override func open(_ needle: String = "") {
         // The theme's own colours, as the terminal around it.
         let theme = GhosttyRuntime.shared.applied?.theme ?? TerminalTheme.ayuDark
-        layer?.backgroundColor = Self.color(theme.background).cgColor
-        layer?.borderColor = Self.color(theme.selection).cgColor
-        field.textColor = Self.color(theme.foreground)
-        count.textColor = Self.color(theme.foreground).withAlphaComponent(0.6)
-        if !needle.isEmpty { field.stringValue = needle }
-        isHidden = false
-        window?.makeFirstResponder(field)
-        field.selectText(nil)
-        search(field.stringValue)
-    }
-
-    func close() {
-        guard !isHidden else { return }
-        isHidden = true
-        total = -1
-        selected = -1
-        if let view, window?.firstResponder === field.currentEditor() { window?.makeFirstResponder(view) }
-    }
-
-    private func updateCount() {
-        count.stringValue = total < 0 ? "" : total == 0 ? "No matches" : "\(max(selected, 0) + 1) of \(total)"
+        colour(background: Self.color(theme.background), frame: Self.color(theme.selection), text: Self.color(theme.foreground))
+        super.open(needle)
     }
 
     private static func color(_ hex: String) -> NSColor {
@@ -1074,31 +1048,8 @@ final class FindBar: NSView, NSTextFieldDelegate {
         return NSColor(srgbRed: c.red, green: c.green, blue: c.blue, alpha: 1)
     }
 
-    private func search(_ text: String) {
-        binding("search:\(text)")
-    }
-
     private func binding(_ action: String) {
         guard let surface = view?.surface else { return }
         _ = action.withCString { ghostty_surface_binding_action(surface, $0, UInt(action.utf8.count)) }
-    }
-
-    func controlTextDidChange(_ note: Notification) {
-        search(field.stringValue)
-    }
-
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        switch selector {
-        case #selector(NSResponder.insertNewline(_:)):
-            let back = NSApp.currentEvent?.modifierFlags.contains(.shift) == true
-            binding(back ? "navigate_search:previous" : "navigate_search:next")
-            return true
-        case #selector(NSResponder.cancelOperation(_:)):
-            binding("end_search")
-            close()
-            return true
-        default:
-            return false
-        }
     }
 }

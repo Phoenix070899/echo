@@ -1,4 +1,5 @@
 import AppKit
+import Foundry
 import HubCore
 import SwiftUI
 
@@ -226,18 +227,15 @@ final class TeamSettingsModel: ObservableObject {
 
     func delete() {
         guard let team, canDelete else { return }
-        let alert = NSAlert()
-        alert.messageText = "Delete \(team.name)?"
-        alert.informativeText = team.replaces.isEmpty
+        let message = team.replaces.isEmpty
             ? "Its file is deleted. Orchestrators already running with it keep running, and a resume finds no \(team.name)."
             : "Its file is deleted, and the \(team.replaces.last ?? "") one is used again."
-        alert.addButton(withTitle: "Delete")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let (client, repo) = (client, repo)
-        run({ try client.deleteTeam(name: team.name, level: team.origin, repo: repo) }) { _ in
-            self.pick(nil)
-            self.refresh()
+        FoundryAsk.shared.confirm("Delete \(team.name)?", message: message, answer: FoundryAnswer("Delete", role: .destructive)) {
+            let (client, repo) = (self.client, self.repo)
+            self.run({ try client.deleteTeam(name: team.name, level: team.origin, repo: repo) }) { _ in
+                self.pick(nil)
+                self.refresh()
+            }
         }
     }
 
@@ -284,18 +282,18 @@ final class TeamSettingsModel: ObservableObject {
     /// file is written at once; the Member is held in the draft until Save. A drop between rows
     /// passes `placed`, so the Member goes there among its siblings and not last.
     func newCustomWorker(under parent: String? = nil, placed: DropPlacement? = nil) {
-        let alert = NSAlert()
-        alert.messageText = "New custom Worker"
-        alert.informativeText = "Name its Profile with lowercase letters, digits, and -, like code-reviewer. "
-            + "The file opens in your editor to fill in, and the Worker is added to this Team."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
-        field.placeholderString = "code-reviewer"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        alert.addButton(withTitle: "Create")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        let question = FoundryQuestion(
+            "New custom Worker",
+            message: "Name its Profile with lowercase letters, digits, and -, like code-reviewer. "
+                + "The file opens in your editor to fill in, and the Worker is added to this Team.",
+            answers: [FoundryAnswer("Create", role: .primary)], field: "code-reviewer")
+        FoundryAsk.shared.ask(question) { answer, text in
+            guard answer != nil else { return }
+            self.createCustomWorker(text.trimmingCharacters(in: .whitespaces), under: parent, placed: placed)
+        }
+    }
+
+    private func createCustomWorker(_ name: String, under parent: String?, placed: DropPlacement?) {
         let (client, repo) = (client, repo)
         run({ try client.profile("new", name: name, repo: repo) }) { path in
             if !path.isEmpty { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
@@ -544,11 +542,10 @@ private struct TeamRules: View {
                           plus: maxWorkers < 16 ? { teams.form.maxWorkers = maxWorkers + 1 } : nil,
                           label: "Workers at once")
             Group {
-                Toggle("Wait for my go before Tasks that write code", isOn: rule(\.planApproval, \.planApproval))
-                Toggle("Have sasuke review each writing Worker", isOn: rule(\.review, \.review))
-                Toggle("Merge verified branches without asking", isOn: rule(\.mergeWithoutAsking, \.mergeWithoutAsking))
+                Checkbox("Wait for my go before Tasks that write code", isOn: rule(\.planApproval, \.planApproval), size: 14)
+                Checkbox("Have sasuke review each writing Worker", isOn: rule(\.review, \.review), size: 14)
+                Checkbox("Merge verified branches without asking", isOn: rule(\.mergeWithoutAsking, \.mergeWithoutAsking), size: 14)
             }
-            .toggleStyle(SquareToggleStyle(size: 14))
             HStack(alignment: .firstTextBaseline) {
                 InspectorNote(isSet ? "These rules are the Team's own." : "Not set here: your Orchestrator settings apply.")
                 if isSet {
