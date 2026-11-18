@@ -5,11 +5,8 @@ import Testing
 private let kiroLean = Team(
     name: "kiro-lean", origin: "shipped", description: "Everything on Kiro.",
     orchestrator: .init(cli: "kiro", model: "claude-sonnet-5.5", effort: "medium", rotateAt: 150000),
-    workers: .init(cli: "kiro", model: "claude-haiku-5.5", effort: "low", profiles: [
-        "sasuke": .init(model: "claude-sonnet-5.5", effort: "medium"),
-        "naruto": .init(model: "claude-sonnet-5.5", effort: "high"),
-    ]),
-    rules: .init(maxWorkers: 3, planApproval: true, review: false, mergeWithoutAsking: false),
+    workers: .init(cli: "kiro", model: "claude-haiku-5.5", effort: "low"),
+    rules: .init(maxWorkers: 3, planApproval: true, review: false, mergeWithoutAsking: false, verifyRetries: 3),
     instructions: "Keep reports short.")
 
 /// The payload as the JSON the daemon receives.
@@ -48,9 +45,6 @@ private func json(_ value: Any) throws -> String {
     #expect(form.orchestratorCli == "kiro")
     #expect(form.rotateAt == "150000")
     #expect(form.workersModel == "claude-haiku-5.5")
-    #expect(form.overrides.map(\.profile) == ["naruto", "sasuke"])
-    #expect(form.overrides[0].effort == "high")
-    #expect(form.overrides[0].cli == "")
     #expect(form.maxWorkers == 3)
     #expect(form.planApproval == true)
     #expect(form.review == false)
@@ -63,16 +57,14 @@ private func json(_ value: Any) throws -> String {
     #expect(try json(sent) == """
     {"description":"Everything on Kiro.","instructions":"Keep reports short.",\
     "orchestrator":{"cli":"kiro","effort":"medium","model":"claude-sonnet-5.5","rotateAt":150000},\
-    "rules":{"maxWorkers":3,"mergeWithoutAsking":false,"planApproval":true,"review":false},\
-    "workers":{"cli":"kiro","effort":"low","model":"claude-haiku-5.5","profiles":\
-    {"naruto":{"effort":"high","model":"claude-sonnet-5.5"},"sasuke":{"effort":"medium","model":"claude-sonnet-5.5"}}}}
+    "rules":{"maxWorkers":3,"mergeWithoutAsking":false,"planApproval":true,"review":false,"verifyRetries":3},\
+    "workers":{"cli":"kiro","effort":"low","model":"claude-haiku-5.5"}}
     """)
 }
 
 @Test func aBareTeamLoadsEmpty() {
     let form = TeamForm(team: Team(name: "bare", origin: "repo"))
     #expect(form.level == "repo")
-    #expect(form.overrides.isEmpty)
     #expect(form.maxWorkers == nil)
     #expect(form.review == nil)
     #expect(form.fields.isEmpty)
@@ -85,39 +77,11 @@ private func json(_ value: Any) throws -> String {
     #expect(form.saveParams(repo: "/r")["repo"] == nil)
 }
 
-@Test func addingAnOverrideTakesTheFirstProfileNotYetSet() {
-    var form = TeamForm()
-    let profiles = ["lee", "naruto", "sasuke"]
-    form.addOverride(from: profiles)
-    form.addOverride(from: profiles)
-    #expect(form.overrides.map(\.profile) == ["lee", "naruto"])
-    form.overrides[1].model = "claude-sonnet-5.5"
-    #expect(form.fields["workers"] != nil)
-    form.addOverride(from: profiles)
-    form.addOverride(from: profiles)
-    #expect(form.overrides.count == 3, "No row is added once every Profile has one")
-}
-
-@Test func removingAnOverrideKeepsTheOthers() throws {
-    var form = TeamForm()
-    form.addOverride(from: ["lee", "naruto"])
-    form.addOverride(from: ["lee", "naruto"])
-    form.removeOverride(form.overrides[0].id)
-    #expect(form.overrides.map(\.profile) == ["naruto"])
-    form.addOverride(from: ["lee", "naruto"])
-    #expect(form.overrides.map(\.profile) == ["naruto", "lee"])
-    #expect(Set(form.overrides.map(\.id)).count == 2, "A new row never reuses a removed row's id")
-    form.removeOverride(form.overrides[0].id)
-    form.removeOverride(form.overrides[0].id)
-    #expect(form.overrides.isEmpty)
-    #expect(form.fields["workers"] == nil, "A Team with no override and no Worker setting has no workers group")
-}
-
-@Test func anOverrideWithNothingSetIsStillSent() throws {
-    var form = TeamForm()
-    form.addOverride(from: ["lee"])
-    let workers = try #require(form.fields["workers"] as? [String: Any])
-    #expect(try json(workers) == #"{"profiles":{"lee":{}}}"#)
+@Test func aTeamFromBeforeHasNoWorkersProfilesToSend() throws {
+    let text = #"{"name":"old","origin":"user","workers":{"cli":"kiro","profiles":{"lee":{"model":"claude-haiku-5.5"}}}}"#
+    let team = try JSONDecoder().decode(Team.self, from: Data(text.utf8))
+    let workers = try #require(TeamForm(team: team).fields["workers"] as? [String: Any])
+    #expect(try json(workers) == #"{"cli":"kiro"}"#, "workers.profiles moved onto Members (features/0094)")
 }
 
 @Test func aCopyIsNamedAfterItsOriginalAndIsNew() {
@@ -125,7 +89,7 @@ private func json(_ value: Any) throws -> String {
     #expect(copy.name == "kiro-lean-copy")
     #expect(copy.isNew)
     #expect(copy.orchestratorModel == "claude-sonnet-5.5")
-    #expect(copy.overrides.count == 2)
+    #expect(copy.workersEffort == "low")
 }
 
 @Test func copyNamesCountUpFromTwo() {
@@ -153,15 +117,11 @@ private func json(_ value: Any) throws -> String {
     form.rotateAt = "lots"
     #expect(form.blocker == "Renew at is a number of tokens, like 150000.")
     form.rotateAt = ""
-    form.addOverride(from: ["lee"])
-    form.overrides.append(TeamForm.Override(id: 99, profile: "lee"))
-    #expect(form.blocker == "lee is set twice. Keep one row for each Profile.")
+    #expect(form.blocker == nil)
 }
 
 private let everyField = Team.Member(
-    id: "build", action: "execute", profile: "naruto", instructions: "Small commits.", replaceRole: true,
-    cli: "kiro", model: "claude-sonnet-5.5", effort: "high", tools: ["read", "write"], skills: ["tdd"],
-    context: ["CONTEXT.md"], lessons: false, writes: true, worktree: "new")
+    id: "build", action: "execute", profile: "naruto", cli: "kiro", model: "claude-sonnet-5.5", effort: "high")
 
 private func crew(_ members: [Team.Member]) -> TeamForm {
     var form = TeamForm()
@@ -187,9 +147,7 @@ private func member(_ id: String, _ action: String = "execute", handOffs: [Team.
     let sent = try #require(params["team"] as? [String: Any])
     let members = try #require(sent["members"] as? [[String: Any]])
     #expect(try json(members[0]) == """
-    {"action":"execute","cli":"kiro","context":["CONTEXT.md"],"effort":"high","id":"build",\
-    "instructions":"Small commits.","lessons":false,"model":"claude-sonnet-5.5","profile":"naruto",\
-    "replaceRole":true,"skills":["tdd"],"tools":["read","write"],"worktree":"new","writes":true}
+    {"action":"execute","cli":"kiro","effort":"high","id":"build","model":"claude-sonnet-5.5","profile":"naruto"}
     """)
     #expect(try json(members[1]) == #"{"action":"verify","after":[{"from":"build"}],"id":"check","profile":"sasuke"}"#)
     #expect(try json(members[2])
@@ -207,7 +165,6 @@ private func member(_ id: String, _ action: String = "execute", handOffs: [Team.
 
 @Test func aMemberLeavesOutWhatIsUnset() throws {
     var blank = member("a")
-    blank.instructions = "  \n"
     blank.model = ""
     blank.cli = " "
     let sent = try #require(crew([blank]).fields["members"] as? [[String: Any]])
@@ -219,10 +176,6 @@ private func member(_ id: String, _ action: String = "execute", handOffs: [Team.
     let saved = TeamForm(team: team)
     var form = TeamForm(team: team)
     #expect(form == saved)
-    form.addOverride(from: ["lee"])
-    #expect(form != saved)
-    form.removeOverride(form.overrides[0].id)
-    #expect(form == saved, "A row added and removed again leaves no change, whatever the counter says")
     form.members[0].model = "other"
     #expect(form != saved)
 }

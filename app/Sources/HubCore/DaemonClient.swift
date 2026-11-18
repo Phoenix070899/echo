@@ -267,14 +267,17 @@ public struct DaemonClient: Sendable {
         return try JSONDecoder().decode([WorkerProfile].self, from: data)
     }
 
-    /// Copies, creates, resets, or sets fields of a Profile at `level` ("yours" or "repo"); returns
-    /// the file it now lives in.
+    /// Copies, creates (blank, or from the Profile `from`), renames (to `to`), resets, deletes, or sets fields of a
+    /// Profile at `level` ("yours" or "repo"); returns the file it now lives in. `fields` are
+    /// `ProfileForm.fields`, the role among them; the daemon's refusal comes back as the error.
     @discardableResult
     public func profile(_ action: String, name: String, level: String = "yours", repo: String? = nil,
-                        fields: [String: String]? = nil) throws -> String {
+                        fields: [String: Any]? = nil, from: String? = nil, to: String? = nil) throws -> String {
         var params: [String: Any] = ["name": name, "level": level]
         if let repo { params["repo"] = repo }
         if let fields { params["fields"] = fields }
+        if let from { params["from"] = from }
+        if let to { params["to"] = to }
         let result = try call("profile.\(action)", params) as? [String: Any]
         return result?["path"] as? String ?? ""
     }
@@ -352,6 +355,30 @@ public struct DaemonClient: Sendable {
         let result = try call("models") as? [String: Any]
         let data = try JSONSerialization.data(withJSONObject: result?["models"] ?? [:])
         return try JSONDecoder().decode([String: [ModelOption]].self, from: data)
+    }
+
+    /// Each CLI's skills, with the repo's own among them, by CLI name (features/0099).
+    public func skills(repo: String?) throws -> [String: [SkillOption]] {
+        let result = try call("skills.list", repo.map { ["repo": $0] } ?? [:]) as? [String: Any]
+        let data = try JSONSerialization.data(withJSONObject: result?["skills"] ?? [:])
+        return try JSONDecoder().decode([String: [SkillOption]].self, from: data)
+    }
+
+    /// A Profile's fields drafted by `cli` on `model` from `request` (features/0101). `form` is
+    /// `ProfileForm.draftForm`; `profileCli` is the CLI whose skills it picks from. Blocks until the
+    /// agent answers, the daemon gives up, or `cancelDraft(id)` stops it.
+    public func draftProfile(id: String, cli: String, model: String, request: String, form: [String: Any],
+                             profileCli: String, tools: [String], repo: String?) throws -> ProfileDraft {
+        var params: [String: Any] = ["id": id, "cli": cli, "model": model, "request": request, "form": form,
+                                     "profileCli": profileCli, "tools": tools]
+        if let repo { params["repo"] = repo }
+        let result = try call("profile.draft", params)
+        return try JSONDecoder().decode(ProfileDraft.self, from: JSONSerialization.data(withJSONObject: result))
+    }
+
+    /// Stops the draft `id`; its call then fails as cancelled.
+    public func cancelDraft(id: String) throws {
+        try call("profile.draft.cancel", ["id": id])
     }
 
     /// Signs Echo's own login to `cli` out; its agents go back to the human's.

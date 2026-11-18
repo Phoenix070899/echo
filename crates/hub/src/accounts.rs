@@ -270,10 +270,20 @@ fn codex_email(folder: &Path) -> Option<String> {
 /// Runs `program args` with `home` set, if given; None when the program is not there. Gives the
 /// exit status and what it printed.
 pub(crate) fn run(program: &str, args: &[&str], home: Option<(&str, &Path)>) -> Result<Option<(bool, String)>> {
+    run_in(&std::env::temp_dir(), program, args, home)
+}
+
+/// `run` in the folder `dir`, for a CLI whose answer depends on where it runs.
+pub(crate) fn run_in(
+    dir: &Path,
+    program: &str,
+    args: &[&str],
+    home: Option<(&str, &Path)>,
+) -> Result<Option<(bool, String)>> {
     let mut command = Command::new(program);
     command
         .args(args)
-        .current_dir(std::env::temp_dir())
+        .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());

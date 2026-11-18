@@ -71,8 +71,8 @@ impl Choice {
     }
 }
 
-/// One Worker slot of a Team (features/0084): an Action, the Profile it starts from, and the
-/// changes this Team makes to that Profile. A field left out means the level below.
+/// One Worker slot of a Team (features/0084, 0094): an Action, the Profile it starts from, its place
+/// in the flow, and the CLI, model and effort it runs on. A field left out means the level below.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Member {
@@ -92,34 +92,29 @@ pub struct Member {
     pub x: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub y: Option<i64>,
-    /// Added after the Profile's role, or in its place when `replace_role`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub instructions: Option<String>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub replace_role: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cli: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
-    /// Replaces the Profile's tools when it is not empty.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// The fields a Member held before they moved into its Profile (features/0095): read only so
+    /// `migrate` can move them, and never written.
+    #[serde(skip_serializing)]
+    pub instructions: Option<String>,
+    #[serde(skip_serializing)]
+    pub replace_role: bool,
+    #[serde(skip_serializing)]
     pub tools: Vec<String>,
-    /// Replaces the Profile's skills when it is not empty.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing)]
     pub skills: Vec<String>,
-    /// Replaces the Profile's context when it is not empty.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing)]
     pub context: Vec<String>,
-    /// `false` leaves the Lessons out of this Worker's prompt; left out, they are in.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing)]
     pub lessons: Option<bool>,
-    /// For the reader and the Orchestrator's prompt only.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing)]
     pub writes: Option<bool>,
-    /// `current` or `new`: a hint printed to the Orchestrator.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing)]
     pub worktree: Option<String>,
 }
 
@@ -177,16 +172,12 @@ impl Team {
         self.following(id).into_iter().find(|member| member.action == "verify")
     }
 
-    /// What the Team names for a Worker of `profile`: first for all its Workers, then for that
-    /// Profile alone, which is the higher of the two (features/0081).
-    pub fn worker_levels(&self, profile: &str) -> (Choice, Choice) {
-        let Some(workers) = &self.workers else {
-            return Default::default();
-        };
-        (
-            workers.all.clone(),
-            workers.profiles.get(profile).cloned().unwrap_or_default(),
-        )
+    /// What the Team names for every Worker whose Member does not name its own (features/0094).
+    pub fn workers_choice(&self) -> Choice {
+        self.workers
+            .as_ref()
+            .map(|workers| workers.all.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -208,8 +199,9 @@ pub struct WorkersSetup {
     /// For every Worker the Team does not name.
     #[serde(flatten)]
     pub all: Choice,
-    /// A Profile's name to what its Workers run with.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    /// A Profile's name to what its Workers ran with, from before features/0094: read only so
+    /// `migrate` can move each entry onto that Profile's Members, and never written.
+    #[serde(skip_serializing)]
     pub profiles: BTreeMap<String, Choice>,
 }
 
@@ -224,6 +216,10 @@ pub struct RulesSetup {
     pub review: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merge_without_asking: Option<bool>,
+    /// How many times a writer whose verification fails is sent back with the findings before it
+    /// needs the human (features/0104); 1 when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify_retries: Option<u64>,
 }
 
 /// Where a Team comes from; a later level wins.
@@ -323,6 +319,16 @@ pub fn list(hub: &Path, state: &Path, repo: Option<&Path>) -> Vec<Entry> {
             }
         }
     }
+    for (name, origin, path) in &found {
+        match migrate(hub, state, repo, *origin, name, path) {
+            Ok(moved) => {
+                for line in moved {
+                    eprintln!("echo: team {name} ({}): {line}", origin.label());
+                }
+            }
+            Err(e) => eprintln!("echo: team {name} ({}): nothing moved yet: {e}", origin.label()),
+        }
+    }
     let mut names: Vec<String> = found.iter().map(|(name, _, _)| name.clone()).collect();
     names.sort();
     names.dedup();
@@ -377,6 +383,11 @@ pub fn save(dir: &Path, team: &Team, fallback: Cli) -> Result<PathBuf> {
         bail!("a Team name is 1 to 40 lowercase letters, digits, and -, like claude-lean");
     }
     validate(team, fallback)?;
+    write(dir, team)
+}
+
+/// Writes `team` as `<name>.json` in `dir`, whole and atomically, unchecked.
+fn write(dir: &Path, team: &Team) -> Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let to = dir.join(format!("{}.json", team.name));
     let part = dir.join(format!(".{}.json.{}.part", team.name, std::process::id()));
@@ -388,6 +399,197 @@ pub fn save(dir: &Path, team: &Team, fallback: Cli) -> Result<PathBuf> {
             anyhow!("writing {}: {e}", to.display())
         })?;
     Ok(to)
+}
+
+/// The Member keys that moved into Profiles (features/0094, 0095).
+const MOVED: [&str; 8] = [
+    "instructions",
+    "replaceRole",
+    "tools",
+    "skills",
+    "context",
+    "lessons",
+    "writes",
+    "worktree",
+];
+
+/// Moves what a user or repo Team's file still holds in the old places, once (features/0095). A
+/// `workers.profiles.<P>` entry fills each field that a Member of Profile P leaves out; a Member that
+/// sets any of `MOVED` starts from a new Profile `<team>-<member>` at the Team's level, its Profile
+/// with those fields laid over it as features/0084 laid them. The Team file is then written without
+/// them. Echo's own Teams are never written. Returns what moved, one line each; nothing when the
+/// file holds nothing to move. A Member whose Profile does not load stops the whole move, so it is
+/// tried again at the next listing and nothing is half moved.
+pub fn migrate(
+    hub: &Path,
+    state: &Path,
+    repo: Option<&Path>,
+    origin: Origin,
+    name: &str,
+    path: &Path,
+) -> Result<Vec<String>> {
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    if origin == Origin::Shipped || !valid_name(name) {
+        return Ok(Vec::new());
+    }
+    let _held = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(Vec::new());
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Ok(Vec::new());
+    };
+    let old_member_keys = value["members"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_object)
+        .any(|member| MOVED.iter().any(|key| member.contains_key(*key)));
+    if !old_member_keys && value["workers"].get("profiles").is_none() {
+        return Ok(Vec::new());
+    }
+    let Ok(mut team) = from_value(value) else {
+        return Ok(Vec::new());
+    };
+    team.name = name.to_string();
+    let mut moved = Vec::new();
+
+    let entries = team
+        .workers
+        .as_mut()
+        .map(|workers| std::mem::take(&mut workers.profiles))
+        .unwrap_or_default();
+    for (profile, choice) in entries {
+        let mut onto = Vec::new();
+        for member in team.members.iter_mut().filter(|member| member.profile == profile) {
+            for (own, entry) in [
+                (&mut member.cli, &choice.cli),
+                (&mut member.model, &choice.model),
+                (&mut member.effort, &choice.effort),
+            ] {
+                if own.is_none() {
+                    own.clone_from(entry);
+                }
+            }
+            onto.push(member.id.clone());
+        }
+        moved.push(match onto.is_empty() {
+            true => format!("workers.profiles.{profile} dropped: no Member starts from {profile}"),
+            false => format!("workers.profiles.{profile} moved onto {}", onto.join(", ")),
+        });
+    }
+
+    let level = match origin {
+        Origin::Repo => profile::Level::Repo,
+        _ => profile::Level::Yours,
+    };
+    let dir = profile::level_dir(state, repo, level)?;
+    let mut taken: Vec<String> = profile::entries(hub, state, repo)
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    let mut writes = Vec::new();
+    for member in &mut team.members {
+        let fields = moved_fields(member);
+        if !fields.is_empty() {
+            // A user Team is used in every repo, so its Member's Profile is the one outside any repo,
+            // unless only this repo has it.
+            let base = match origin {
+                Origin::User => profile::load(hub, state, None, &member.profile)
+                    .or_else(|_| profile::load(hub, state, repo, &member.profile)),
+                _ => profile::load(hub, state, repo, &member.profile),
+            }
+            .map_err(|e| anyhow!("members.{}: {e}", member.id))?;
+            let new = unique_profile_name(&format!("{name}-{}", member.id), &taken);
+            if !profile::valid_name(&new) {
+                bail!("members.{}: {new:?} is not a Profile name", member.id);
+            }
+            let mut laid = base.with_member(member);
+            laid.name = new.clone();
+            taken.push(new.clone());
+            moved.push(format!(
+                "members.{}'s {} moved into Profile {new}, from {}",
+                member.id,
+                fields.join(", "),
+                member.profile
+            ));
+            writes.push((dir.join(format!("{new}.md")), laid.file_text()));
+            member.profile = new;
+        }
+        member.instructions = None;
+        member.replace_role = false;
+        member.tools.clear();
+        member.skills.clear();
+        member.context.clear();
+        member.lessons = None;
+        member.writes = None;
+        member.worktree = None;
+    }
+    if !writes.is_empty() {
+        std::fs::create_dir_all(&dir)?;
+    }
+    for (to, text) in writes {
+        std::fs::write(&to, text).map_err(|e| anyhow!("writing {}: {e}", to.display()))?;
+    }
+    let dir = path.parent().unwrap_or(Path::new("."));
+    write(dir, &team)?;
+    moved.push(format!("{} written without the moved fields", path.display()));
+    Ok(moved)
+}
+
+/// The moved fields a Member sets in a way that changes its Worker, by their file names.
+fn moved_fields(member: &Member) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if member
+        .instructions
+        .as_deref()
+        .is_some_and(|text| !text.trim().is_empty())
+    {
+        fields.push(if member.replace_role {
+            "instructions (replace role)"
+        } else {
+            "instructions"
+        });
+    }
+    for (key, list) in [
+        ("tools", &member.tools),
+        ("skills", &member.skills),
+        ("context", &member.context),
+    ] {
+        if !list.is_empty() {
+            fields.push(key);
+        }
+    }
+    for (key, set) in [("lessons", member.lessons), ("writes", member.writes)] {
+        if set.is_some() {
+            fields.push(key);
+        }
+    }
+    if member
+        .worktree
+        .as_deref()
+        .is_some_and(|worktree| profile::WORKTREES.contains(&worktree))
+    {
+        fields.push("worktree");
+    }
+    fields
+}
+
+/// `wanted` as a Profile name: at most 32 characters, then `-2`, `-3` and on until no name in
+/// `taken` has it.
+fn unique_profile_name(wanted: &str, taken: &[String]) -> String {
+    let fit = |suffix: &str| {
+        let room = 32 - suffix.len();
+        let base: String = wanted.chars().take(room).collect();
+        format!("{}{suffix}", base.trim_end_matches('-'))
+    };
+    let mut name = fit("");
+    let mut n = 2;
+    while taken.contains(&name) {
+        name = fit(&format!("-{n}"));
+        n += 1;
+    }
+    name
 }
 
 /// Deletes the Team's file at `origin`, so the one below it is in force again; Echo's own are
@@ -423,13 +625,7 @@ pub fn summary(team: &Team) -> String {
     let workers = team
         .workers
         .as_ref()
-        .map(|w| {
-            let own = part(&w.all.cli, &w.all.model, &w.all.effort);
-            match w.profiles.len() {
-                0 => own,
-                n => format!("{own}, {n} by Profile"),
-            }
-        })
+        .map(|w| part(&w.all.cli, &w.all.model, &w.all.effort))
         .unwrap_or_else(|| "by their Profiles".into());
     let members = match team.members.len() {
         0 => String::new(),
@@ -450,19 +646,13 @@ pub fn details(team: &Team) -> String {
     }
     if let Some(w) = &team.workers {
         pick_lines(&mut lines, "workers", &w.all.cli, &w.all.model, &w.all.effort);
-        for (profile, c) in &w.profiles {
-            pick_lines(
-                &mut lines,
-                &format!("workers.profiles.{profile}"),
-                &c.cli,
-                &c.model,
-                &c.effort,
-            );
-        }
     }
     if let Some(r) = &team.rules {
         if let Some(max) = r.max_workers {
             lines.push(format!("rules.maxWorkers: {max}"));
+        }
+        if let Some(retries) = r.verify_retries {
+            lines.push(format!("rules.verifyRetries: {retries}"));
         }
         for (key, value) in [
             ("planApproval", r.plan_approval),
@@ -542,7 +732,7 @@ fn member_lines(team: &Team) -> Vec<String> {
 }
 
 /// `build  execute  naruto  claude-sonnet-5-5  high`: the id, Action and Profile, then the CLI, model
-/// and effort it sets, then each other field it overrides by name.
+/// and effort it sets.
 fn member_line(member: &Member) -> String {
     let mut words = vec![member.id.clone(), member.action.clone(), member.profile.clone()];
     words.extend(
@@ -551,33 +741,6 @@ fn member_line(member: &Member) -> String {
             .flatten()
             .cloned(),
     );
-    if member.instructions.is_some() {
-        words.push(
-            if member.replace_role {
-                "instructions (replace role)"
-            } else {
-                "instructions"
-            }
-            .into(),
-        );
-    }
-    for (key, list) in [
-        ("tools", &member.tools),
-        ("skills", &member.skills),
-        ("context", &member.context),
-    ] {
-        if !list.is_empty() {
-            words.push(format!("{key}={}", list.join(",")));
-        }
-    }
-    for (key, value) in [("lessons", member.lessons), ("writes", member.writes)] {
-        if let Some(value) = value {
-            words.push(format!("{key}={value}"));
-        }
-    }
-    if let Some(worktree) = &member.worktree {
-        words.push(format!("worktree={worktree}"));
-    }
     words.join("  ")
 }
 
@@ -653,24 +816,15 @@ pub fn validate(team: &Team, fallback: Cli) -> Result<()> {
             all.effort.as_deref(),
             fallback,
         )?;
-        for (profile, choice) in &workers.profiles {
-            if profile.trim().is_empty() {
-                bail!("workers.profiles has an entry with no Profile name");
-            }
-            let field = format!("workers.profiles.{profile}");
-            check_pick(
-                &field,
-                choice.cli.as_deref(),
-                shared,
-                choice.model.as_deref(),
-                choice.effort.as_deref(),
-                fallback,
-            )?;
-        }
     }
     if let Some(max) = team.rules.as_ref().and_then(|rules| rules.max_workers) {
         if !(1..=16).contains(&max) {
             bail!("rules.maxWorkers is 1 to 16, not {max}");
+        }
+    }
+    if let Some(retries) = team.rules.as_ref().and_then(|rules| rules.verify_retries) {
+        if !(1..=10).contains(&retries) {
+            bail!("rules.verifyRetries is 1 to 10, not {retries}");
         }
     }
     validate_members(team, fallback)
@@ -709,13 +863,7 @@ fn validate_members(team: &Team, fallback: Cli) -> Result<()> {
         if member.profile.trim().is_empty() {
             bail!("{field}: profile is empty; name the Profile it starts from");
         }
-        if let Some(worktree) = &member.worktree {
-            if !["current", "new"].contains(&worktree.as_str()) {
-                bail!("{field}: worktree is current or new, not {worktree:?}");
-            }
-        }
-        let (all, own) = team.worker_levels(&member.profile);
-        let inherited = own.cli.or(all.cli);
+        let inherited = team.workers_choice().cli;
         check_pick(
             &field,
             member.cli.as_deref(),
@@ -1151,13 +1299,15 @@ mod tests {
         assert!(problem("t", r#"{"rules":{"maxWorkers":0}}"#).contains("rules.maxWorkers"));
         assert!(problem("t", r#"{"rules":{"maxWorkers":17}}"#).contains("rules.maxWorkers"));
         assert!(problem("t", r#"{"orchestrator":{"rotateAt":9999}}"#).contains("rotateAt"));
-        assert!(problem("t", r#"{"workers":{"profiles":{" ":{}}}}"#).contains("Profile name"));
         assert!(problem("t", r#"{"workers":{"model":""}}"#).contains("workers.model"));
-        let profile = problem(
-            "t",
-            r#"{"workers":{"cli":"kiro","profiles":{"lee":{"model":"openai/gpt-5"}}}}"#,
-        );
-        assert!(profile.contains("workers.profiles.lee.model"), "{profile}");
+        validate(
+            &named(
+                "t",
+                r#"{"workers":{"cli":"kiro","profiles":{"lee":{"model":"openai/gpt-5"}}}}"#,
+            ),
+            Cli::Claude,
+        )
+        .expect("a workers.profiles entry is not checked; it is only moved (features/0094)");
     }
 
     #[test]
@@ -1184,10 +1334,9 @@ mod tests {
         );
         let own = r#"{"orchestrator":{"cli":"claude","model":"anthropic/claude-opus-5-5"}}"#;
         validate(&named("t", own), Cli::Kiro).unwrap();
-        let workers =
-            r#"{"workers":{"cli":"kiro","model":"claude-haiku-5.5","profiles":{"lee":{"model":"claude-haiku-5.5"}}}}"#;
+        let workers = r#"{"workers":{"cli":"kiro","model":"claude-haiku-5.5"}}"#;
         validate(&named("t", workers), Cli::Claude).unwrap();
-        let wrong = r#"{"workers":{"cli":"kiro","profiles":{"lee":{"model":"anthropic/claude-haiku-5-5"}}}}"#;
+        let wrong = r#"{"workers":{"cli":"kiro","model":"anthropic/claude-haiku-5-5"}}"#;
         assert!(validate(&named("t", wrong), Cli::Claude).is_err());
     }
 
@@ -1242,7 +1391,7 @@ mod tests {
         let mut team = named(
             "mine",
             r#"{"description":"d","orchestrator":{"cli":"kiro","model":"claude-sonnet-5.5","effort":"low","rotateAt":0},
-                "workers":{"cli":"kiro","model":"claude-haiku-5.5","profiles":{"lee":{"effort":"high"}}},
+                "workers":{"cli":"kiro","model":"claude-haiku-5.5","effort":"high"},
                 "rules":{"maxWorkers":2,"review":false},"instructions":"line one\nline two"}"#,
         );
         let dir = level_dir(&state, Some(&repo), Origin::User).unwrap();
@@ -1327,10 +1476,9 @@ mod tests {
         "workers": {"cli": "claude"},
         "members": [
             {"id": "build", "action": "execute", "profile": "naruto", "model": "claude-sonnet-5-5", "effort": "high"},
-            {"id": "check", "action": "verify", "profile": "sasuke", "parent": "build",
-             "instructions": "Run the suite.", "replaceRole": true, "tools": ["Read", "Bash"], "lessons": false},
-            {"id": "docs", "action": "scribe", "profile": "ino", "after": [{"from": "build", "auto": true}], "writes": true,
-             "worktree": "current", "x": 120, "y": 240}
+            {"id": "check", "action": "verify", "profile": "sasuke", "parent": "build", "effort": "low"},
+            {"id": "docs", "action": "scribe", "profile": "ino", "after": [{"from": "build", "auto": true}],
+             "x": 120, "y": 240}
         ]
     }"#;
 
@@ -1361,19 +1509,41 @@ mod tests {
                 }][..]
             )
         );
-        assert!(check.replace_role);
-        assert_eq!(check.tools, ["Read", "Bash"]);
-        assert_eq!(check.lessons, Some(false));
+        assert_eq!(check.effort.as_deref(), Some("low"));
         let docs = &team.members[2];
-        assert_eq!(docs.writes, Some(true));
-        assert_eq!(docs.worktree.as_deref(), Some("current"));
         assert_eq!((docs.x, docs.y), (Some(120), Some(240)));
         assert!(docs.hand_offs()[0].auto);
 
         let text = serde_json::to_string_pretty(&team).unwrap();
-        assert!(!text.contains("null") && !text.contains("\"skills\""), "{text}");
+        assert!(!text.contains("null"), "{text}");
         assert!(!text.contains("parent") && text.contains(r#""after""#), "{text}");
         assert_eq!(named("t", &text), team);
+    }
+
+    #[test]
+    fn a_members_moved_fields_and_workers_profiles_are_read_but_never_written() {
+        let team = named(
+            "t",
+            r#"{"workers": {"cli": "claude", "profiles": {"naruto": {"model": "claude-opus-5-5"}}},
+                "members": [{"id": "build", "action": "execute", "profile": "naruto",
+                "instructions": "Only src/api.", "replaceRole": true, "tools": ["Read"], "skills": ["tdd"],
+                "context": ["a.md"], "lessons": false, "writes": true, "worktree": "new"}]}"#,
+        );
+        let build = &team.members[0];
+        assert!(build.replace_role && build.instructions.is_some());
+        assert_eq!(
+            (build.lessons, build.writes, build.worktree.as_deref()),
+            (Some(false), Some(true), Some("new"))
+        );
+        assert_eq!(team.workers.as_ref().unwrap().profiles.len(), 1);
+        let text = serde_json::to_string(&team).unwrap();
+        for key in MOVED.iter().chain(&["profiles"]) {
+            assert!(!text.contains(&format!("\"{key}\"")), "{key}: {text}");
+        }
+        assert_eq!(
+            text,
+            r#"{"workers":{"cli":"claude"},"members":[{"id":"build","action":"execute","profile":"naruto"}]}"#
+        );
     }
 
     #[test]
@@ -1540,8 +1710,6 @@ mod tests {
 
         let empty = members_problem(r#"[{"id": "a", "action": "scan", "profile": " "}]"#);
         assert!(empty.contains("members.a") && empty.contains("profile"), "{empty}");
-        let tree = members_problem(r#"[{"id": "a", "action": "scan", "profile": "x", "worktree": "far"}]"#);
-        assert!(tree.contains("members.a") && tree.contains("worktree"), "{tree}");
     }
 
     #[test]
@@ -1561,7 +1729,7 @@ mod tests {
             validate(&named("t", bare), Cli::Kiro).is_err(),
             "the fallback cli applies"
         );
-        let shared = r#"{"workers": {"profiles": {"hinata": {"cli": "claude"}}},
+        let shared = r#"{"workers": {"cli": "claude"},
             "members": [{"id": "a", "action": "scan", "profile": "hinata", "model": "anthropic/claude-opus-5-5"}]}"#;
         validate(&named("t", shared), Cli::Kiro).unwrap();
     }
@@ -1655,8 +1823,8 @@ mod tests {
             "workers.cli: claude\n\
              members:\n  \
              build  execute  naruto  claude-sonnet-5-5  high  after orchestrator\n  \
-             check  verify  sasuke  instructions (replace role)  tools=Read,Bash  lessons=false  after build\n  \
-             docs  scribe  ino  writes=true  worktree=current  after build (automatic)"
+             check  verify  sasuke  low  after build\n  \
+             docs  scribe  ino  after build (automatic)"
         );
         assert_eq!(
             summary(&team),
@@ -1691,5 +1859,157 @@ mod tests {
             details(&team),
             "members:\n  a  scan  hinata  after gone\n  b  scan  hinata  after c\n  c  scan  hinata  after nothing"
         );
+    }
+
+    /// A hub folder with naruto and sasuke as Echo's own Profiles, and no Teams.
+    fn hub_with_profiles(root: &Path) -> PathBuf {
+        let hub = root.join("hub");
+        std::fs::create_dir_all(hub.join("profiles")).unwrap();
+        for (name, writes) in [("naruto", true), ("sasuke", false)] {
+            std::fs::write(
+                hub.join(format!("profiles/{name}.md")),
+                format!(
+                    "---\nname: {name}\ndescription: {name} works\ncli: claude\nmodel: claude-sonnet-5-5\neffort: high\n\
+                     tools: Bash, Read, Edit\nskills:\ncontext: AGENTS.md\nwrites: {writes}\n---\n\nYou are {name}.\n"
+                ),
+            )
+            .unwrap();
+        }
+        hub
+    }
+
+    const OLD_TEAM: &str = r#"{
+        "description": "from before",
+        "workers": {"cli": "claude", "model": "claude-haiku-5-5",
+            "profiles": {"naruto": {"model": "claude-opus-5-5", "effort": "max"}, "lee": {"effort": "low"}}},
+        "members": [
+            {"id": "build", "action": "execute", "profile": "naruto", "instructions": "Only touch src/api.",
+             "tools": ["Read", "Grep"], "worktree": "new", "x": 40, "y": 80},
+            {"id": "build-ui", "action": "execute", "profile": "naruto", "effort": "medium"},
+            {"id": "check", "action": "verify", "profile": "sasuke", "parent": "build",
+             "instructions": "Only run the suite.", "replaceRole": true, "lessons": false, "tools": []}
+        ]
+    }"#;
+
+    #[test]
+    fn a_user_teams_moved_fields_go_into_profiles_of_their_own_once() {
+        let root = scratch("migrate");
+        let hub = hub_with_profiles(&root);
+        let (state, repo) = (root.join("state"), root.join("repo"));
+        put(&state.join("teams"), "shop", OLD_TEAM);
+
+        let team = load(&hub, &state, Some(&repo), "shop").unwrap();
+        let by = |id: &str| team.members.iter().find(|m| m.id == id).unwrap();
+        assert_eq!(by("build").profile, "shop-build");
+        assert_eq!(by("check").profile, "shop-check");
+        assert_eq!(
+            by("build-ui").profile,
+            "naruto",
+            "nothing moved, so it keeps its Profile"
+        );
+        assert_eq!(
+            (by("build").model.as_deref(), by("build").effort.as_deref()),
+            (Some("claude-opus-5-5"), Some("max")),
+            "the workers.profiles entry moved onto the Member"
+        );
+        assert_eq!(
+            (by("build-ui").model.as_deref(), by("build-ui").effort.as_deref()),
+            (Some("claude-opus-5-5"), Some("medium")),
+            "a field the Member set is kept, the rest come from the entry"
+        );
+        assert_eq!((by("build").x, by("build").y), (Some(40), Some(80)));
+        assert_eq!(by("check").after.as_ref().unwrap()[0].from, "build");
+
+        let build = profile::load(&hub, &state, None, "shop-build").unwrap();
+        assert_eq!(
+            build.role,
+            "You are naruto.\n\n# This Team's instructions for you\n\nOnly touch src/api."
+        );
+        assert_eq!(build.tools, ["Read", "Grep"]);
+        assert_eq!(
+            (build.worktree.as_deref(), build.writes, build.lessons),
+            (Some("new"), true, true)
+        );
+        assert_eq!(
+            (build.cli.as_deref(), build.model.as_deref()),
+            (Some("claude"), Some("claude-sonnet-5-5"))
+        );
+        assert_eq!(build.description, "naruto works");
+        let check = profile::load(&hub, &state, None, "shop-check").unwrap();
+        assert_eq!(check.role, "Only run the suite.");
+        assert_eq!(
+            (check.lessons, check.tools.len()),
+            (false, 3),
+            "an empty list leaves the Profile's"
+        );
+        assert!(state.join("profiles/shop-build.md").exists() && !repo.join(".echo").exists());
+
+        let text = std::fs::read_to_string(state.join("teams/shop.json")).unwrap();
+        for key in MOVED.iter().chain(&["profiles", "parent"]) {
+            assert!(!text.contains(&format!("\"{key}\"")), "{key}: {text}");
+        }
+        assert!(text.contains("\"description\": \"from before\""), "{text}");
+
+        let profiles = std::fs::read_dir(state.join("profiles")).unwrap().count();
+        let again = load(&hub, &state, Some(&repo), "shop").unwrap();
+        assert_eq!(again, team, "a second read moves nothing");
+        assert_eq!(std::fs::read_to_string(state.join("teams/shop.json")).unwrap(), text);
+        assert_eq!(std::fs::read_dir(state.join("profiles")).unwrap().count(), profiles);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_repo_teams_profiles_are_written_in_the_repo_and_names_never_clash() {
+        let root = scratch("migrate-repo");
+        let hub = hub_with_profiles(&root);
+        let (state, repo) = (root.join("state"), root.join("repo"));
+        std::fs::create_dir_all(state.join("profiles")).unwrap();
+        std::fs::write(state.join("profiles/shop-build.md"), profile::blank("shop-build")).unwrap();
+        put(
+            &repo.join(".echo/teams"),
+            "shop",
+            r#"{"members": [{"id": "build", "action": "execute", "profile": "naruto", "writes": false}]}"#,
+        );
+        let team = load(&hub, &state, Some(&repo), "shop").unwrap();
+        assert_eq!(team.members[0].profile, "shop-build-2");
+        let made = profile::load(&hub, &state, Some(&repo), "shop-build-2").unwrap();
+        assert!(!made.writes);
+        assert!(repo.join(".echo/profiles/shop-build-2.md").exists());
+        assert!(!state.join("profiles/shop-build-2.md").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nothing_moves_while_a_members_profile_is_missing_and_a_shipped_team_is_never_written() {
+        let root = scratch("migrate-missing");
+        let hub = hub_with_profiles(&root);
+        let state = root.join("state");
+        let old = r#"{"members": [{"id": "a", "action": "execute", "profile": "naruto", "tools": ["Read"]},
+            {"id": "b", "action": "execute", "profile": "gone", "tools": ["Read"]}]}"#;
+        put(&state.join("teams"), "mine", old);
+        put(&hub.join("teams"), "echo", old);
+        list(&hub, &state, None);
+        assert_eq!(std::fs::read_to_string(state.join("teams/mine.json")).unwrap(), old);
+        assert_eq!(std::fs::read_to_string(hub.join("teams/echo.json")).unwrap(), old);
+        assert!(!state.join("profiles").exists(), "no Profile is half moved");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_moved_profiles_name_fits_32_characters_and_takes_the_next_free_number() {
+        let taken = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        assert_eq!(unique_profile_name("shop-build", &[]), "shop-build");
+        assert_eq!(
+            unique_profile_name("shop-build", &taken(&["shop-build", "shop-build-2"])),
+            "shop-build-3"
+        );
+        let long = format!("{}-{}", "t".repeat(30), "member");
+        let name = unique_profile_name(&long, &[]);
+        assert_eq!(name, "t".repeat(30) + "-m");
+        let cut = unique_profile_name(&format!("{}-x", "t".repeat(31)), &[]);
+        assert_eq!(cut, "t".repeat(31), "never ends in a dash");
+        let again = unique_profile_name(&long, &[name.clone()]);
+        assert!(again.len() <= 32 && again.ends_with("-2") && again != name, "{again}");
+        assert!(profile::valid_name(&again));
     }
 }

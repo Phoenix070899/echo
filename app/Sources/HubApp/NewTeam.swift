@@ -220,6 +220,7 @@ private struct StartCard: View {
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(picked ? (focused ? Ledger.chosen : Ledger.selected) : hover.on ? Ledger.selected : Ledger.wash)
+            .pickedEdge(picked)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

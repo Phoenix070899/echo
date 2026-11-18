@@ -5,13 +5,14 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
@@ -20,6 +21,7 @@ use crate::action;
 use crate::chat;
 use crate::cli;
 use crate::db::{self, kind, state, Worker};
+use crate::draft;
 use crate::holder;
 use crate::kiro_chat;
 use crate::kiro_usage;
@@ -34,6 +36,7 @@ use crate::remote::{self, Remote};
 use crate::repo;
 use crate::screen::{self, Look};
 use crate::settings;
+use crate::skills;
 use crate::stats;
 use crate::team;
 
@@ -49,6 +52,8 @@ const KEEP_SETTLED_SECONDS: i64 = 10 * 60;
 const KEEP_REPORTS_SECONDS: i64 = 5 * 60;
 /// Each CLI's model list is listed again after this (features/0091).
 const MODELS_FOR: Duration = Duration::from_secs(10 * 60);
+/// Each CLI's skills are listed again after this, so one just installed shows soon (features/0099).
+const SKILLS_FOR: Duration = Duration::from_secs(60);
 /// A done Worker still in its turn after this is closed anyway (features/0090).
 const CLOSE_DONE_WITHIN: Duration = Duration::from_secs(30);
 /// A blocked or lost Worker still needs the human, so Echo keeps it this long unless dismissed.
@@ -56,8 +61,6 @@ const KEEP_NEEDS_SECONDS: i64 = 7 * 24 * 60 * 60;
 const SCREEN_LINES: usize = 25;
 /// How long `wait` holds a message that woke it, for others to arrive with it.
 const COALESCE: Duration = Duration::from_secs(5);
-/// How many times a failed verification sends a writer back to fix its change.
-const MAX_RETRIES: i64 = 1;
 /// An Orchestrator is renewed only after it sat unchanged at its input box this long, and only
 /// once its session has made this many requests (a new one is never renewed at once).
 const RENEW_QUIET: Duration = Duration::from_secs(120);
@@ -80,6 +83,10 @@ pub struct Hub {
     logins: Mutex<HashMap<String, Arc<Live>>>,
     /// Each CLI's models, as last listed, and when (features/0091).
     models: Mutex<Option<(Instant, Value)>>,
+    /// Each CLI's skills for a repo (empty for none), as last listed, and when (features/0099).
+    skills: Mutex<HashMap<String, (Instant, Value)>>,
+    /// The Profile drafts running, by the app's id, and whether each was cancelled (features/0101).
+    drafts: Mutex<HashMap<String, bool>>,
     /// When each Normal session's waiting permission prompt was first seen, by agent id.
     agent_prompts: Mutex<HashMap<i64, i64>>,
     tick: Mutex<u64>,
@@ -159,7 +166,15 @@ fn kiro_usage_program(test_agent: Option<&str>) -> Option<String> {
 fn run_usage(program: &str) -> Result<Vec<Value>> {
     let mut command = std::process::Command::new(program);
     command
-        .args(["-p", "/usage"])
+        // Every 5 minutes: saved, each run was a session in the human's history, and it fired
+        // their SessionStart hooks (docs/bugs/0097).
+        .args([
+            "-p",
+            "/usage",
+            "--no-session-persistence",
+            "--settings",
+            r#"{"disableAllHooks":true}"#,
+        ])
         // The limits of the account agents run on: Echo's own while it is signed in.
         .envs(accounts::env(&paths::state_dir()))
         .current_dir(paths::state_dir())
@@ -237,6 +252,8 @@ pub fn run() -> Result<()> {
         side_shells: Mutex::new(HashMap::new()),
         logins: Mutex::new(HashMap::new()),
         models: Mutex::new(None),
+        skills: Mutex::new(HashMap::new()),
+        drafts: Mutex::new(HashMap::new()),
         agent_prompts: Mutex::new(HashMap::new()),
         tick: Mutex::new(0),
         changed: Condvar::new(),
@@ -390,6 +407,50 @@ fn team_save(hub: &Path, state: &Path, repo: Option<&Path>, p: &Value) -> Result
     }))
 }
 
+/// The frontmatter fields of `profile.set` as the file writes them: a list as `a, b`, a switch as
+/// `true` or `false`, and an empty or null value empties the field. Fields it does not name are
+/// left as they are.
+fn profile_fields(fields: &serde_json::Map<String, Value>) -> Result<Vec<(&'static str, Option<String>)>> {
+    const KEYS: [&str; 11] = [
+        "description",
+        "face",
+        "cli",
+        "model",
+        "effort",
+        "tools",
+        "skills",
+        "context",
+        "writes",
+        "lessons",
+        "worktree",
+    ];
+    let mut set = Vec::new();
+    for key in KEYS {
+        let Some(value) = fields.get(key) else { continue };
+        let text = match value {
+            Value::Null => None,
+            Value::String(text) => Some(text.trim().to_string()),
+            Value::Bool(on) => Some(on.to_string()),
+            Value::Array(items) => Some(
+                items
+                    .iter()
+                    .map(|item| item.as_str().map(str::trim).context("a list holds text"))
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .filter(|item| !item.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            other => bail!("{key} cannot be {other}"),
+        };
+        if text.as_deref().is_some_and(|text| text.contains('\n')) {
+            bail!("{key} is one line");
+        }
+        set.push((key, text.filter(|text| !text.is_empty())));
+    }
+    Ok(set)
+}
+
 /// `team.delete`: removes the user or repo copy of `name`, so the level below is in force again.
 fn team_delete(state: &Path, repo: Option<&Path>, p: &Value) -> Result<Value> {
     let origin = team::Origin::parse(str_param(p, "level")?)?;
@@ -508,17 +569,16 @@ impl Hub {
         Some(cli::recovered(&state, Some(repo), profile.as_ref(), &picked))
     }
 
-    /// What names a Worker's CLI, lowest first: its Orchestrator's Team for all Workers and for its
-    /// Profile, then its Member (as of now, when readable), then what was picked for it.
+    /// What names a Worker's CLI, lowest first: its Orchestrator's Team for all Workers, then its
+    /// Member (as of now, when readable), then what was picked for it.
     fn worker_choices(&self, worker: &Worker) -> Vec<cli::Choice> {
         let team = self.worker_team(&self.db(), worker.agent_id).ok().flatten();
         let member = stored_member(team.as_ref(), worker)
             .map(profile::member_choice)
             .unwrap_or_default();
-        let (all, own) = team.map(|team| team.worker_levels(&worker.profile)).unwrap_or_default();
+        let all = team.map(|team| team.workers_choice()).unwrap_or_default();
         vec![
             all.runs(),
-            own.runs(),
             member.runs(),
             cli::Choice {
                 cli: worker.cli.clone(),
@@ -1427,6 +1487,14 @@ impl Hub {
             "side.status" => self.side_status(p),
             "providers" => Ok(self.providers()),
             "models" => Ok(self.models()),
+            "skills.list" => Ok(self.skills(repo_param(p)?.as_deref())),
+            "profile.draft" => self.draft_profile(p),
+            "profile.draft.cancel" => {
+                if let Some(cancelled) = self.drafts.lock().unwrap().get_mut(str_param(p, "id")?) {
+                    *cancelled = true;
+                }
+                Ok(json!({}))
+            }
             "providers.signout" => self.sign_out(p),
             // Whether the sign-in terminal still runs.
             "providers.login.live" => {
@@ -1689,8 +1757,8 @@ impl Hub {
                         ),
                     };
                     profiles.push(json!({
-                        "name": p.name, "description": p.description, "writes": p.writes,
-                        // What the Member inspector shows when a Member leaves a field to its Profile.
+                        "name": p.name, "description": p.description, "face": p.face, "writes": p.writes,
+                        "lessons": p.lessons, "worktree": p.worktree,
                         "tools": p.tools, "skills": p.skills, "context": p.context, "role": p.role,
                         // What it runs with here, and what its own file says.
                         "cli": cli, "model": model.unwrap_or_else(|| format!("{cli} default")),
@@ -1723,7 +1791,20 @@ impl Hub {
             "team.actions" => Ok(json!({ "actions": action::list(&self.hub_dir) })),
             "team.save" => team_save(&self.hub_dir, &paths::state_dir(), repo_param(p)?.as_deref(), p),
             "team.delete" => team_delete(&paths::state_dir(), repo_param(p)?.as_deref(), p),
-            "profile.copy" | "profile.new" | "profile.reset" | "profile.set" => {
+            "profile.rename" => {
+                let repo = repo_param(p)?;
+                let level = profile::Level::parse(p.get("level").and_then(Value::as_str).unwrap_or("yours"))?;
+                let (path, teams) = profile::rename(
+                    &self.hub_dir,
+                    &paths::state_dir(),
+                    repo.as_deref(),
+                    str_param(p, "name")?,
+                    str_param(p, "to")?,
+                    level,
+                )?;
+                Ok(json!({ "path": path, "teams": teams }))
+            }
+            "profile.copy" | "profile.new" | "profile.reset" | "profile.set" | "profile.delete" => {
                 let repo = p
                     .get("repo")
                     .and_then(Value::as_str)
@@ -1734,9 +1815,16 @@ impl Hub {
                 let level = profile::Level::parse(p.get("level").and_then(Value::as_str).unwrap_or("yours"))?;
                 let path = match method {
                     "profile.copy" => profile::copy(&self.hub_dir, &state, repo.as_deref(), name, level)?.0,
-                    "profile.new" => profile::create(&self.hub_dir, &state, repo.as_deref(), name, level)?,
+                    "profile.new" => {
+                        let from = p.get("from").and_then(Value::as_str).filter(|from| !from.is_empty());
+                        profile::create(&self.hub_dir, &state, repo.as_deref(), name, level, from)?
+                    }
                     "profile.reset" => {
                         profile::reset(&state, repo.as_deref(), name, level)?;
+                        PathBuf::new()
+                    }
+                    "profile.delete" => {
+                        profile::delete(&self.hub_dir, &state, repo.as_deref(), name, level)?;
                         PathBuf::new()
                     }
                     _ => {
@@ -1747,13 +1835,14 @@ impl Hub {
                             profile::copy(&self.hub_dir, &state, repo.as_deref(), name, level)?;
                         }
                         let fields = param(p, "fields")?.as_object().context("fields must be an object")?;
-                        let mut set = Vec::new();
-                        for key in ["cli", "model", "effort", "description"] {
-                            if let Some(value) = fields.get(key) {
-                                set.push((key, value.as_str().filter(|v| !v.is_empty())));
-                            }
+                        let set = profile_fields(fields)?;
+                        let set: Vec<(&str, Option<&str>)> =
+                            set.iter().map(|(key, value)| (*key, value.as_deref())).collect();
+                        let role = fields.get("role").and_then(Value::as_str);
+                        if role.is_some_and(|role| role.trim().is_empty()) {
+                            bail!("a Profile's role cannot be empty: it is what its Worker is told to be");
                         }
-                        profile::set_fields(&path, &set)?;
+                        profile::set_fields(&path, &set, role)?;
                         path
                     }
                 };
@@ -1915,15 +2004,18 @@ impl Hub {
                 if !new.is_empty() {
                     let today: String = db.query_row("select date('now', 'localtime')", [], |row| row.get(0))?;
                     let state = paths::state_dir();
-                    let count = lessons::add(&state, &worker.repo, &format!("w{id}"), &today, &new)?;
+                    let size = lessons::add(&state, &worker.repo, &format!("w{id}"), &today, &new)?;
                     body = format!("{}\n\nLessons added:\n", body.trim_end());
                     for lesson in &new {
                         body += &format!("- {lesson}\n");
                     }
-                    if count > lessons::LIMIT {
+                    if size.over() {
                         body += &format!(
-                            "The repo now has {count} Lessons, over {}: have an ino Worker merge {}.\n",
+                            "The repo now has {} Lessons in {} characters, over {} or {}: have an ino Worker merge and shorten {}.\n",
+                            size.count,
+                            size.chars,
                             lessons::LIMIT,
+                            lessons::SIZE_LIMIT,
                             lessons::lessons_path(&state, &worker.repo).display()
                         );
                     }
@@ -1998,10 +2090,14 @@ impl Hub {
             }
             "inbox" => {
                 let repo = str_param(p, "repo")?;
+                // With an `agent`, only the questions of that Orchestrator's Workers (ADR 0006).
+                let agent = p.get("agent").and_then(Value::as_i64);
                 let db = self.db();
                 let mut open = Vec::new();
                 for worker in db::workers(&db, repo)? {
-                    open.extend(db::open_questions(&db, worker.id)?);
+                    if agent.is_none_or(|agent| worker.agent_id == Some(agent)) {
+                        open.extend(db::open_questions(&db, worker.id)?);
+                    }
                 }
                 Ok(json!({ "open_questions": open }))
             }
@@ -2053,9 +2149,8 @@ impl Hub {
 
     /// A Worker's Profile, with the effort picked for it, and the CLI and model picked for it. Its
     /// Orchestrator's Team is read now, so an edited Team applies at a resume (features/0081); a
-    /// Member the Team no longer has leaves the Profile's own resolution (features/0085). A Member
-    /// is laid over the Profile (features/0084), so its instructions, tools, skills and context
-    /// reach the Worker's prompt.
+    /// Member the Team no longer has leaves the Profile's own resolution (features/0085). Everything
+    /// else about the Worker is its Profile's (features/0094).
     fn pick_for(&self, worker: &Worker) -> Result<(profile::Profile, cli::Cli, Option<String>)> {
         let repo = Path::new(&worker.repo);
         let profile = profile::load(&self.hub_dir, &paths::state_dir(), Some(repo), &worker.profile)?;
@@ -2073,10 +2168,7 @@ impl Hub {
             member,
             &picked,
         )?;
-        let mut profile = match member {
-            Some(member) => profile.with_member(member),
-            None => profile,
-        };
+        let mut profile = profile;
         profile.effort = effort;
         Ok((profile, worker_cli, model))
     }
@@ -2223,6 +2315,168 @@ impl Hub {
             *self.models.lock().unwrap() = Some((Instant::now(), models.clone()));
         }
         models
+    }
+
+    /// Each CLI's skills for Settings > Profiles' checklist, with `repo`'s own among them, listed
+    /// again once `SKILLS_FOR` has passed. A CLI that fails to list them has none until the next
+    /// call, and its error is logged.
+    fn skills(&self, repo: Option<&Path>) -> Value {
+        let key = repo.map(|repo| repo.display().to_string()).unwrap_or_default();
+        if let Some((at, skills)) = self.skills.lock().unwrap().get(&key) {
+            if at.elapsed() < SKILLS_FOR {
+                return skills.clone();
+            }
+        }
+        let state = paths::state_dir();
+        let reads: Vec<_> = accounts::ALL
+            .into_iter()
+            .map(|cli| {
+                let (state, program, repo) = (state.clone(), self.account_program(cli), repo.map(Path::to_path_buf));
+                std::thread::spawn(move || (cli, skills::list(&state, cli, &program, repo.as_deref())))
+            })
+            .collect();
+        let mut out = serde_json::Map::new();
+        let mut failed = false;
+        for (cli, listed) in reads.into_iter().filter_map(|read| read.join().ok()) {
+            let listed = listed.unwrap_or_else(|error| {
+                eprintln!("hubd: listing {}'s skills: {error:#}", cli.name());
+                failed = true;
+                Vec::new()
+            });
+            out.insert(cli.name().to_string(), Value::Array(listed));
+        }
+        let skills = json!({ "skills": out });
+        if !failed {
+            self.skills
+                .lock()
+                .unwrap()
+                .insert(key, (Instant::now(), skills.clone()));
+        }
+        skills
+    }
+
+    /// A Profile's fields drafted by the agent the human picked (features/0101): one headless call
+    /// with no tools, shown the request, the form as it stands, the Worker Contract, the other
+    /// Profiles and the skills of the Profile's own CLI. Gives up after `draft::TIMEOUT_SECS`, or
+    /// once `profile.draft.cancel` names its id.
+    fn draft_profile(&self, p: &Value) -> Result<Value> {
+        let repo = repo_param(p)?;
+        let state = paths::state_dir();
+        let id = str_param(p, "id")?.to_string();
+        let cli = cli::Cli::parse(str_param(p, "cli")?)?;
+        let model = p.get("model").and_then(Value::as_str);
+        let form = param(p, "form")?.as_object().context("form must be an object")?;
+        let profile_cli = p.get("profileCli").and_then(Value::as_str).unwrap_or("claude");
+        let tools: Vec<String> = param(p, "tools")?
+            .as_array()
+            .context("tools must be a list")?
+            .iter()
+            .filter_map(|t| t.as_str().map(String::from))
+            .collect();
+        let skills: Vec<(String, String)> = self.skills(repo.as_deref())["skills"][profile_cli]
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|s| {
+                        let about = s["description"].as_str().unwrap_or("").to_string();
+                        Some((s["name"].as_str()?.to_string(), about))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let name = form.get("name").and_then(Value::as_str).unwrap_or("");
+        let others: Vec<(String, String)> = profile::entries(&self.hub_dir, &state, repo.as_deref())
+            .into_iter()
+            .filter(|entry| entry.name != name)
+            .filter_map(|entry| Some((entry.name, entry.profile.ok()?.description)))
+            .collect();
+        let contract = std::fs::read_to_string(self.hub_dir.join("worker-contract.md")).unwrap_or_default();
+        let example = profile::own_role(&self.hub_dir, "hinata").unwrap_or_default();
+        let prompt = draft::prompt(&draft::Ask {
+            request: str_param(p, "request")?,
+            form,
+            profile_cli,
+            tools: &tools,
+            skills: &skills,
+            others: &others,
+            contract: &contract,
+            example: &example,
+        });
+
+        let out = state.join(format!("draft-{}.txt", uuid::Uuid::new_v4()));
+        let program = self.account_program(cli);
+        let mut command = std::process::Command::new(&program);
+        command
+            .args(draft::args(cli, model, &prompt, &out)?)
+            // The account agents run on: Echo's own while it is signed in.
+            .envs(accounts::env(&state))
+            .current_dir(&state)
+            .stdin(if draft::takes_stdin(cli) {
+                std::process::Stdio::piped()
+            } else {
+                std::process::Stdio::null()
+            })
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            // Its own group, so a cancel stops whatever it started too.
+            .process_group(0);
+        for key in inherited_agent_vars() {
+            command.env_remove(key);
+        }
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("running {} to draft the Profile", cli.program()))?;
+        self.drafts.lock().unwrap().insert(id.clone(), false);
+        if let Some(mut stdin) = child.stdin.take() {
+            let prompt = prompt.clone();
+            std::thread::spawn(move || stdin.write_all(prompt.as_bytes()));
+        }
+        // Read on their own threads, so a long reply never fills the pipe while this waits.
+        let read = |pipe: Option<Box<dyn Read + Send>>| {
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                if let Some(mut pipe) = pipe {
+                    let _ = pipe.read_to_string(&mut text);
+                }
+                text
+            })
+        };
+        let stdout = read(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+        let stderr = read(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+        let deadline = Instant::now() + Duration::from_secs(draft::TIMEOUT_SECS);
+        let ended = loop {
+            if let Some(status) = child.try_wait()? {
+                break Ok(status);
+            }
+            let cancelled = self.drafts.lock().unwrap().get(&id).copied().unwrap_or(false);
+            if cancelled || Instant::now() >= deadline {
+                // SAFETY: kill(2) on the group this child leads; it touches no memory.
+                unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+                let _ = child.wait();
+                break Err(if cancelled {
+                    anyhow!("the draft was cancelled")
+                } else {
+                    anyhow!("the agent took over {} seconds; nothing changed", draft::TIMEOUT_SECS)
+                });
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        };
+        self.drafts.lock().unwrap().remove(&id);
+        let written = std::fs::read_to_string(&out).ok();
+        let _ = std::fs::remove_file(&out);
+        let status = ended?;
+        let (stdout, stderr) = (stdout.join().unwrap_or_default(), stderr.join().unwrap_or_default());
+        let reply = written.filter(|text| !text.trim().is_empty()).unwrap_or(stdout);
+        if !status.success() && reply.trim().is_empty() {
+            let why = stderr
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("no output");
+            bail!("{} could not draft it: {}", cli.program(), why.trim());
+        }
+        let known: Vec<String> = skills.into_iter().map(|(name, _)| name).collect();
+        draft::parse(&reply, form, &tools, &known)
     }
 
     /// The terminal signing Echo's own login for `cli` in: the CLI's own sign-in, on Echo's config
@@ -2851,19 +3105,10 @@ impl Hub {
         }
         let db = self.db();
         let mut out = Vec::new();
-        let mut to_close = Vec::new();
+        // Delivering a report closes nothing: a done Worker closes once its turn ends, and a
+        // blocked one stays open for the human (features/0090).
         for message in messages.unwrap_or_default() {
             let worker = db::worker(&db, message.worker_id)?;
-            // Its Final Report reached the Orchestrator: a Worker with no branch of its own and
-            // not asked to stay is done for good (features/0056).
-            if message.kind == kind::DONE
-                && worker.branch.is_none()
-                && !worker.keep
-                && !state::is_live(&worker.state)
-                && worker.closed_at.is_none()
-            {
-                to_close.push(worker.id);
-            }
             out.push(json!({
                 "id": message.id,
                 "kind": message.kind,
@@ -2874,13 +3119,10 @@ impl Hub {
                 "state": worker.state,
                 "branch": worker.branch,
                 "body": message.body,
-                "closed": worker.closed_at.is_some() || to_close.contains(&worker.id),
+                "closed": worker.closed_at.is_some(),
             }));
         }
         drop(db);
-        for id in to_close {
-            self.close_worker(id)?;
-        }
         Ok(json!({ "messages": out }))
     }
 
@@ -2930,11 +3172,20 @@ impl Hub {
         Ok(())
     }
 
-    /// The verifier's report is in: a pass, a failure the writer gets one retry for, or anything
-    /// else, which the Orchestrator decides. Only then does the Orchestrator hear of the writer.
+    /// The verifier's report is in: a pass, a failure the writer gets a retry for while its Team's
+    /// `verifyRetries` (1 when unset, features/0104) allows, or anything else, which the
+    /// Orchestrator decides. Only then does the Orchestrator hear of the writer.
     fn verified(self: &Arc<Self>, verifier: i64, writer_id: i64, final_state: &str, report: &str) {
         let outcome = (|| -> Result<()> {
             let writer = db::worker(&self.db(), writer_id)?;
+            let mut rules = settings::Rules::from(&settings::read(&paths::state_dir()).unwrap_or_default());
+            if let Some(setup) = self
+                .worker_team(&self.db(), writer.agent_id)?
+                .and_then(|team| team.rules)
+            {
+                rules = rules.with_team(&setup);
+            }
+            let retries = rules.verify_retries as i64;
             let verdict = if final_state == state::DONE {
                 verdict(report)
             } else {
@@ -2952,7 +3203,7 @@ impl Hub {
                     self.deliver(writer_id, &format!("Verified by {who}: pass."), report);
                     self.hand_off(writer_id);
                 }
-                Some(false) if writer.retries < MAX_RETRIES => {
+                Some(false) if writer.retries < retries => {
                     db::add_retry(&self.db(), writer_id)?;
                     let task = format!(
                         "w{verifier} ({named}) verified your change and it failed. Fix every P0 and P1 finding \
@@ -2968,8 +3219,8 @@ impl Hub {
                     }
                 }
                 Some(false) => {
-                    let note =
-                        format!("Verification by {who} failed again after {MAX_RETRIES} retry: needs the human.");
+                    let tries = if retries == 1 { "retry" } else { "retries" };
+                    let note = format!("Verification by {who} failed again after {retries} {tries}: needs the human.");
                     self.deliver(writer_id, &note, report)
                 }
                 None => {
@@ -3053,7 +3304,15 @@ impl Hub {
             id = source.id,
             title = source.title,
         );
-        let hint = next.worktree.clone().or_else(|| {
+        let hint = profile::load(
+            &self.hub_dir,
+            &paths::state_dir(),
+            Some(Path::new(&source.repo)),
+            &next.profile,
+        )
+        .ok()
+        .and_then(|profile| profile.worktree)
+        .or_else(|| {
             action::list(&self.hub_dir)
                 .into_iter()
                 .find(|action| action.id == next.action)
@@ -3263,6 +3522,8 @@ impl Hub {
             let mut row = json!({
                 "id": format!("w{}", worker.id),
                 "profile": worker.profile,
+                // Its Profile's face, read each snapshot, so a new face shows on Workers already out.
+                "face": profile.as_ref().and_then(|p| p.face.clone()),
                 "member": worker.member,
                 "title": worker.title,
                 "state": row_state,
@@ -3460,6 +3721,7 @@ impl Hub {
                     "multiplexer",
                     "teams",
                     "agents",
+                    "profiles",
                     "providers",
                     "worktrees",
                     "memory",

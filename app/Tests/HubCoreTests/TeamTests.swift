@@ -18,7 +18,8 @@ private func team(_ json: String) throws -> Team {
     """)
     #expect(decoded.name == "kiro-lean")
     #expect(decoded.orchestrator == Team.Setup(cli: "kiro", model: "claude-sonnet-5.5", effort: "medium", rotateAt: 150000))
-    #expect(decoded.workers?.profiles?["naruto"]?.effort == "high")
+    #expect(decoded.workers == Team.Workers(cli: "kiro", model: "claude-haiku-5.5", effort: "low"),
+            "workers.profiles from before features/0094 is not read")
     #expect(decoded.rules == Team.Rules(maxWorkers: 3, planApproval: true, review: false, mergeWithoutAsking: false))
     #expect(decoded.instructions == "Keep reports short.")
     #expect(decoded.usable)
@@ -59,7 +60,7 @@ private func team(_ json: String) throws -> Team {
     {"name":"kiro-lean","orchestrator":{"cli":"kiro","model":"claude-sonnet-5.5","effort":"medium"},
      "workers":{"cli":"kiro","model":"claude-haiku-5.5","effort":"low","profiles":{"naruto":{},"sasuke":{}}}}
     """)
-    #expect(kiro.summary == "Orchestrator: kiro, claude-sonnet-5.5, medium. Workers: kiro, claude-haiku-5.5, low, 2 Profiles set apart.")
+    #expect(kiro.summary == "Orchestrator: kiro, claude-sonnet-5.5, medium. Workers: kiro, claude-haiku-5.5, low.")
 }
 
 @Test func theAgentCarriesItsTeam() throws {
@@ -126,13 +127,12 @@ private func team(_ json: String) throws -> Team {
     let build = decoded.members[0]
     #expect(build.action == "execute" && build.profile == "naruto" && build.after == nil)
     #expect(build.handOffs == [Team.HandOff(from: "orchestrator")], "no after hangs it from the Orchestrator")
-    #expect(build.instructions == "Small commits." && build.replaceRole == true)
     #expect(build.cli == "kiro" && build.model == "claude-sonnet-5.5" && build.effort == "high")
-    #expect(build.tools == ["read", "write"] && build.skills == ["tdd"] && build.context == ["CONTEXT.md"])
-    #expect(build.lessons == false && build.writes == true && build.worktree == "new")
+    #expect(build == Team.Member(id: "build", action: "execute", profile: "naruto", cli: "kiro",
+                                 model: "claude-sonnet-5.5", effort: "high"),
+            "the fields that moved into Profiles are not read")
     let check = decoded.members[1]
     #expect(check.after == [Team.HandOff(from: "build")], "a parent is read as one Hand-off")
-    #expect(check.instructions == nil && check.replaceRole == nil && check.tools.isEmpty && check.lessons == nil)
     let test = decoded.members[2]
     #expect(test.after == [Team.HandOff(from: "build", auto: true), Team.HandOff(from: "orchestrator")])
     #expect(test.x == -96 && test.y == 272 && check.x == nil)

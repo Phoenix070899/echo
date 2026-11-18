@@ -1,6 +1,7 @@
 ---
 name: hinata
 description: Codebase analyst. Read-only analysis of how the current code works, for planning.
+face: r06c05
 cli: claude
 model: anthropic/claude-sonnet-5-5
 effort: high

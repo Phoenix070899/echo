@@ -5,7 +5,7 @@ import SwiftUI
 // and small reports alike. The sheet grey in a 2 pt ink frame casting one hard 6 pt ink block; no
 // radius, no blur, no arrow. A mono capital head over a 1 pt rule; menu rows with a 36 pt framed
 // icon, a bold title over a one-line note and a key box; the picked row sunk with the accent
-// square; a body for reports; a quiet foot line. Echo draws it in the window itself, never in an
+// edge; a body for reports; a quiet foot line. Echo draws it in the window itself, never in an
 // NSPopover, whose frame and arrow cannot be taken off.
 
 // MARK: - The panel and its parts
@@ -124,8 +124,9 @@ public struct FoundryPopoverItem: View {
             .padding(.trailing, 14)
             .padding(.vertical, icon == nil ? 7 : 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // A menu row has no square: under the pointer or the arrows only its fill changes (ui-ux/0127).
+            // A menu row has no square: under the pointer or the arrows it sinks and shows the accent edge (ui-ux/0152).
             .background(picked && enabled ? Ledger.selected : Color.clear)
+            .pickedEdge(picked && enabled)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

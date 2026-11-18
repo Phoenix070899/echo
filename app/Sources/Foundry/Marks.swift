@@ -67,6 +67,16 @@ extension View {
     public func listRowHover() -> some View { modifier(ListRowHover()) }
 }
 
+extension View {
+    /// The picked row of a list without squares (ui-ux/0152): a 3 pt accent edge laid over the row's
+    /// leading side, so nothing in the row moves when it shows.
+    public func pickedEdge(_ on: Bool) -> some View {
+        overlay(alignment: .leading) {
+            if on { Rectangle().fill(Ledger.accent).frame(width: 3).accessibilityHidden(true) }
+        }
+    }
+}
+
 /// A control or row with no square shows the pointer by its fill alone (ui-ux/0127, ui-ux/0131).
 private struct HoverFill: ViewModifier {
     public let fill: Color

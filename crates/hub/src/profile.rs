@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 use crate::cli::{Cli, Start};
 use crate::{lessons, paths};
@@ -22,10 +22,14 @@ pub struct Profile {
     pub context: Vec<String>,
     pub role: String,
     pub description: String,
+    /// The face Echo draws for it: a picture in Echo's `Faces/` (`r01c01`); none draws none.
+    pub face: Option<String>,
     /// It edits files, so its tries of a Task differ and are worth comparing.
     pub writes: bool,
-    /// Its prompt carries the repo's Lessons; a Member may leave them out (features/0084).
+    /// Its prompt carries the repo's Lessons; `lessons: false` leaves them out.
     pub lessons: bool,
+    /// `current` or `new`: where its Worker should work, a hint printed to the Orchestrator.
+    pub worktree: Option<String>,
 }
 
 /// Where a Profile comes from; a later level wins.
@@ -105,6 +109,12 @@ pub fn entries(hub: &Path, state: &Path, repo: Option<&Path>) -> Vec<Entry> {
         .collect()
 }
 
+/// The role of Echo's own Profile `name`, as the shape a drafted role follows (features/0101).
+pub fn own_role(hub: &Path, name: &str) -> Option<String> {
+    let text = std::fs::read_to_string(hub.join("profiles").join(format!("{name}.md"))).ok()?;
+    parse(name, &text).ok().map(|profile| profile.role)
+}
+
 /// The Profile a Worker in `repo` starts as.
 pub fn load(hub: &Path, state: &Path, repo: Option<&Path>, name: &str) -> Result<Profile> {
     let all = entries(hub, state, repo);
@@ -142,8 +152,16 @@ pub fn copy(hub: &Path, state: &Path, repo: Option<&Path>, name: &str, level: Le
     Ok((to, entry.level))
 }
 
-/// Writes a blank Profile into `level`; the name must be new at every level.
-pub fn create(hub: &Path, state: &Path, repo: Option<&Path>, name: &str, level: Level) -> Result<PathBuf> {
+/// Writes a new Profile into `level`: blank, or a copy of the Profile `from` under this name. The
+/// name must be new at every level.
+pub fn create(
+    hub: &Path,
+    state: &Path,
+    repo: Option<&Path>,
+    name: &str,
+    level: Level,
+    from: Option<&str>,
+) -> Result<PathBuf> {
     if !valid_name(name) {
         bail!("a Profile name is lowercase letters, digits, and -, like code-reviewer");
     }
@@ -153,10 +171,18 @@ pub fn create(hub: &Path, state: &Path, repo: Option<&Path>, name: &str, level: 
             entry.level.label()
         );
     }
+    let text = match from {
+        Some(from) => {
+            let mut source = load(hub, state, repo, from)?;
+            source.name = name.to_string();
+            source.file_text()
+        }
+        None => blank(name),
+    };
     let dir = level_dir(state, repo, level)?;
     let to = dir.join(format!("{name}.md"));
     std::fs::create_dir_all(&dir)?;
-    std::fs::write(&to, blank(name))?;
+    std::fs::write(&to, text)?;
     Ok(to)
 }
 
@@ -170,8 +196,124 @@ pub fn reset(state: &Path, repo: Option<&Path>, name: &str, level: Level) -> Res
     Ok(())
 }
 
-/// Sets frontmatter fields in a Profile file, keeping the rest as it is; `None` empties one.
-pub fn set_fields(path: &Path, fields: &[(&str, Option<&str>)]) -> Result<()> {
+/// Deletes the Profile's file at `level` (features/0096): refused while a Member of a Team the repo
+/// can use names it and no other level has that name, so every Member still has a Profile after.
+pub fn delete(hub: &Path, state: &Path, repo: Option<&Path>, name: &str, level: Level) -> Result<()> {
+    let path = level_dir(state, repo, level)?.join(format!("{name}.md"));
+    if !valid_name(name) || !path.exists() {
+        bail!("{name} has no {} file to delete", level.label());
+    }
+    let others = dirs(hub, state, repo)
+        .into_iter()
+        .any(|(other, dir)| other != level && dir.join(format!("{name}.md")).exists());
+    if !others {
+        let users = users(hub, state, repo, name);
+        if !users.is_empty() {
+            bail!(
+                "{name} is not deleted: {} start from it; point them at another Profile first",
+                users.join(", ")
+            );
+        }
+    }
+    std::fs::remove_file(path)?;
+    Ok(())
+}
+
+/// Renames the Profile's file at `level` to `to` (features/0103), and moves every Member of your
+/// Teams and the repo's that starts from `name` onto `to`; returns the new file and those Teams.
+/// Refused when `to` is taken at any level, and while one of Echo's own Teams starts from `name`
+/// and no other level has that name, as `delete` is.
+pub fn rename(
+    hub: &Path,
+    state: &Path,
+    repo: Option<&Path>,
+    name: &str,
+    to: &str,
+    level: Level,
+) -> Result<(PathBuf, Vec<String>)> {
+    let dir = level_dir(state, repo, level)?;
+    let from = dir.join(format!("{name}.md"));
+    if !valid_name(name) || !from.exists() {
+        bail!("{name} has no {} file to rename", level.label());
+    }
+    if !valid_name(to) {
+        bail!("a Profile name is lowercase letters, digits, and -, like code-reviewer");
+    }
+    if let Some(entry) = entries(hub, state, repo).iter().find(|e| e.name == to) {
+        bail!("{to} already exists ({}); pick another name", entry.level.label());
+    }
+    let teams = crate::team::list(hub, state, repo);
+    let others = dirs(hub, state, repo)
+        .into_iter()
+        .any(|(other, dir)| other != level && dir.join(format!("{name}.md")).exists());
+    if !others {
+        let echos: Vec<&str> = teams
+            .iter()
+            .filter(|entry| entry.origin == crate::team::Origin::Shipped)
+            .filter(|entry| {
+                entry
+                    .team
+                    .as_ref()
+                    .is_some_and(|team| team.members.iter().any(|m| m.profile == name))
+            })
+            .map(|entry| entry.name.as_str())
+            .collect();
+        if !echos.is_empty() {
+            bail!(
+                "{name} is not renamed: Echo's own {} start from it; duplicate {} into yours first",
+                echos.join(", "),
+                if echos.len() == 1 { "it" } else { "them" }
+            );
+        }
+    }
+    let path = dir.join(format!("{to}.md"));
+    std::fs::copy(&from, &path)?;
+    if let Err(e) = set_fields(&path, &[("name", Some(to))], None) {
+        let _ = std::fs::remove_file(&path);
+        return Err(e);
+    }
+    let fallback = crate::team::default_cli(state, repo);
+    let mut moved = Vec::new();
+    for entry in teams
+        .into_iter()
+        .filter(|entry| entry.origin != crate::team::Origin::Shipped)
+    {
+        let Some(mut team) = entry.team else { continue };
+        if !team.members.iter().any(|member| member.profile == name) {
+            continue;
+        }
+        for member in team.members.iter_mut().filter(|member| member.profile == name) {
+            member.profile = to.to_string();
+        }
+        let dir = entry.path.parent().context("a Team file has a folder")?;
+        crate::team::save(dir, &team, fallback)?;
+        moved.push(entry.name);
+    }
+    std::fs::remove_file(&from)?;
+    Ok((path, moved))
+}
+
+/// The Teams the repo can use whose Members start from the Profile `name`, as `team (member, ...)`.
+pub fn users(hub: &Path, state: &Path, repo: Option<&Path>, name: &str) -> Vec<String> {
+    crate::team::list(hub, state, repo)
+        .iter()
+        .filter_map(|entry| {
+            let members: Vec<&str> = entry
+                .team
+                .as_ref()?
+                .members
+                .iter()
+                .filter(|member| member.profile == name)
+                .map(|member| member.id.as_str())
+                .collect();
+            (!members.is_empty()).then(|| format!("{} ({})", entry.name, members.join(", ")))
+        })
+        .collect()
+}
+
+/// Sets frontmatter fields in a Profile file, keeping the rest as it is; `None` empties one. A
+/// `role` replaces the text after the frontmatter.
+pub fn set_fields(path: &Path, fields: &[(&str, Option<&str>)], role: Option<&str>) -> Result<()> {
     let text = std::fs::read_to_string(path)?;
     let Some(rest) = text.strip_prefix("---\n") else {
         bail!("{}: missing --- frontmatter", path.display());
@@ -190,7 +332,11 @@ pub fn set_fields(path: &Path, fields: &[(&str, Option<&str>)]) -> Result<()> {
             None => lines.push(line),
         }
     }
-    let text = format!("---\n{}{}", lines.join("\n"), &rest[end..]);
+    let after = &rest[end..];
+    let text = match role {
+        Some(role) => format!("---\n{}\n---\n\n{}\n", lines.join("\n"), role.trim()),
+        None => format!("---\n{}{after}", lines.join("\n")),
+    };
     parse("check", &text)?;
     std::fs::write(path, text)?;
     Ok(())
@@ -232,6 +378,9 @@ pub fn valid_name(name: &str) -> bool {
         && !name.starts_with('-')
 }
 
+/// The worktree hints a Profile may give.
+pub const WORKTREES: [&str; 2] = ["current", "new"];
+
 fn parse(name: &str, text: &str) -> Result<Profile> {
     let mut parts = text.splitn(3, "---");
     let (_, front, body) = match (parts.next(), parts.next(), parts.next()) {
@@ -257,6 +406,12 @@ fn parse(name: &str, text: &str) -> Result<Profile> {
     if let Some(cli) = &cli {
         crate::cli::Cli::parse(cli).map_err(|e| anyhow::anyhow!("profile {name}: {e}"))?;
     }
+    let worktree = field("worktree").filter(|v| !v.is_empty());
+    if let Some(worktree) = &worktree {
+        if !WORKTREES.contains(&worktree.as_str()) {
+            bail!("profile {name}: worktree is current or new, not {worktree:?}");
+        }
+    }
     Ok(Profile {
         name: field("name").unwrap_or_else(|| name.to_string()),
         cli,
@@ -267,8 +422,10 @@ fn parse(name: &str, text: &str) -> Result<Profile> {
         context: list("context"),
         role: body.trim().to_string(),
         description: field("description").unwrap_or_default(),
+        face: field("face").filter(|v| !v.is_empty()),
         writes: field("writes").as_deref() == Some("true"),
-        lessons: true,
+        lessons: field("lessons").as_deref() != Some("false"),
+        worktree,
     })
 }
 
@@ -340,12 +497,34 @@ pub enum Launch<'a> {
 const MEMBER_INSTRUCTIONS: &str = "# This Team's instructions for you";
 
 impl Profile {
-    /// This Profile with `member` laid over it, for the Worker that starts as that Member
-    /// (features/0084). Its `instructions` follow the role under their own heading, or take the
-    /// role's place when `replace_role`; a `tools`, `skills` or `context` list that is not empty
-    /// replaces the Profile's; `lessons` and `writes` replace the Profile's when the Member sets
-    /// them. Instructions that are blank leave the role as it is, so a Worker never starts with
-    /// no role. The CLI, model and effort are not laid over here; `resolve` picks them.
+    /// Its whole file: every field in the frontmatter, then the role.
+    pub fn file_text(&self) -> String {
+        let opt = |value: &Option<String>| value.clone().unwrap_or_default();
+        format!(
+            "---\nname: {}\ndescription: {}\nface: {}\ncli: {}\nmodel: {}\neffort: {}\ntools: {}\nskills: {}\n\
+             context: {}\nwrites: {}\nlessons: {}\nworktree: {}\n---\n\n{}\n",
+            self.name,
+            self.description,
+            opt(&self.face),
+            opt(&self.cli),
+            opt(&self.model),
+            opt(&self.effort),
+            self.tools.join(", "),
+            self.skills.join(", "),
+            self.context.join(", "),
+            self.writes,
+            self.lessons,
+            opt(&self.worktree),
+            self.role.trim()
+        )
+    }
+
+    /// This Profile with `member`'s old fields laid over it, as features/0084 laid them, for the
+    /// Profile the migration of features/0095 writes for that Member. Its `instructions` follow the
+    /// role under their own heading, or take the role's place when `replace_role`; a `tools`,
+    /// `skills` or `context` list that is not empty replaces the Profile's; `lessons`, `writes` and
+    /// a valid `worktree` replace the Profile's when the Member sets them. Instructions that are
+    /// blank leave the role as it is. The CLI, model and effort stay on the Member.
     pub fn with_member(&self, member: &crate::team::Member) -> Profile {
         let mut profile = self.clone();
         let instructions = member.instructions.as_deref().map(str::trim).unwrap_or_default();
@@ -367,6 +546,9 @@ impl Profile {
         }
         profile.lessons = member.lessons.unwrap_or(self.lessons);
         profile.writes = member.writes.unwrap_or(self.writes);
+        if let Some(worktree) = member.worktree.as_ref().filter(|w| WORKTREES.contains(&w.as_str())) {
+            profile.worktree = Some(worktree.clone());
+        }
         profile
     }
 
@@ -379,11 +561,10 @@ impl Profile {
 }
 
 /// A Worker's CLI, model and effort, from the highest: what was picked for it (`picked`), its
-/// Member (features/0085), its Orchestrator's Team for its Profile, its Team for all Workers, then
-/// its Profile's own and the levels below (features/0081, 0036). `forceCli` (features/0075) puts a
-/// Profile's own cli and model aside but never what a Team names, a Member included, so it applies
-/// only where the Team names nothing. Without a Team this is `cli::pick`, and the effort is the
-/// Profile's.
+/// Member, its Orchestrator's Team for all Workers, then its Profile's own and the levels below
+/// (features/0094, 0036). `forceCli` (features/0075) puts a Profile's own cli and model aside but
+/// never what a Team names, a Member included, so it applies only where the Team names nothing.
+/// Without a Team this is `cli::pick`, and the effort is the Profile's.
 pub fn resolve(
     state: &Path,
     repo: Option<&Path>,
@@ -392,19 +573,15 @@ pub fn resolve(
     member: Option<&crate::team::Member>,
     picked: &crate::cli::Choice,
 ) -> Result<(Cli, Option<String>, Option<String>)> {
-    let (all, own) = team.map(|team| team.worker_levels(&profile.name)).unwrap_or_default();
+    let all = team.map(crate::team::Team::workers_choice).unwrap_or_default();
     let member = member.map(member_choice).unwrap_or_default();
     let (cli, model) = crate::cli::pick(
         state,
         repo,
         Some(&profile.choice()),
-        &[&all.runs(), &own.runs(), &member.runs(), picked],
+        &[&all.runs(), &member.runs(), picked],
     )?;
-    let effort = member
-        .effort
-        .or(own.effort)
-        .or(all.effort)
-        .or_else(|| profile.effort.clone());
+    let effort = member.effort.or(all.effort).or_else(|| profile.effort.clone());
     Ok((cli, model, effort))
 }
 
@@ -415,6 +592,17 @@ pub fn member_choice(member: &crate::team::Member) -> crate::team::Choice {
         model: member.model.clone(),
         effort: member.effort.clone(),
     }
+}
+
+/// The tools a Worker is limited to. On Claude Code a skill runs through the Skill tool, so a
+/// Profile that names skills gets it, or `--tools` would leave every skill out of reach.
+fn tools(cli: Cli, profile: &Profile) -> Vec<String> {
+    let mut tools = profile.tools.clone();
+    let skill = "Skill".to_string();
+    if cli == Cli::Claude && !tools.is_empty() && !profile.skills.is_empty() && !tools.contains(&skill) {
+        tools.push(skill);
+    }
+    tools
 }
 
 /// What a Worker starts with, whatever its CLI; `picked` is the CLI and model already picked for it.
@@ -440,7 +628,7 @@ pub fn start(
         dirs: vec![hub.to_path_buf(), lessons::memory_dir(&state)],
         model,
         effort: profile.effort.clone(),
-        tools: profile.tools.clone(),
+        tools: tools(cli, profile),
         worker: true,
         session_id: session_id.to_string(),
         resume,
@@ -628,6 +816,7 @@ mod tests {
                 ("model", Some("openai/gpt-5.6-terra")),
                 ("effort", None),
             ],
+            None,
         )
         .unwrap();
         let mine = load(&hub, &state, None, "naruto").unwrap();
@@ -637,7 +826,7 @@ mod tests {
         );
         assert_eq!(mine.role, "You implement.", "the role is kept");
         assert!(
-            set_fields(&path, &[("cli", Some("vim"))]).is_err(),
+            set_fields(&path, &[("cli", Some("vim"))], None).is_err(),
             "a field that breaks the Profile is not written"
         );
         assert_eq!(
@@ -649,10 +838,220 @@ mod tests {
             load(&hub, &state, None, "naruto").unwrap().cli.as_deref(),
             Some("claude")
         );
-        assert!(create(&hub, &state, None, "naruto", Level::Yours).is_err());
-        assert!(create(&hub, &state, None, "scout", Level::Yours)
+        assert!(create(&hub, &state, None, "naruto", Level::Yours, None).is_err());
+        assert!(create(&hub, &state, None, "scout", Level::Yours, None)
             .unwrap()
             .ends_with("profiles/scout.md"));
+    }
+
+    #[test]
+    fn lessons_and_worktree_are_read_from_the_file_and_a_bad_worktree_is_refused() {
+        let plain = naruto();
+        assert!(plain.lessons, "left out, the Lessons are in");
+        assert_eq!(plain.worktree, None);
+        let text = NARUTO.replace("writes: true\n", "writes: true\nlessons: false\nworktree: new\n");
+        let set = parse("naruto", &text).unwrap();
+        assert!(!set.lessons);
+        assert_eq!(set.worktree.as_deref(), Some("new"));
+        let on = parse(
+            "naruto",
+            &NARUTO.replace("writes: true\n", "writes: true\nlessons: true\n"),
+        )
+        .unwrap();
+        assert!(on.lessons);
+        let far = NARUTO.replace("writes: true\n", "writes: true\nworktree: far\n");
+        let why = parse("naruto", &far).unwrap_err().to_string();
+        assert!(why.contains("worktree") && why.contains("far"), "{why}");
+    }
+
+    #[test]
+    fn a_profiles_file_text_loads_back_the_same_profile() {
+        let mut profile = naruto();
+        profile.lessons = false;
+        profile.worktree = Some("current".into());
+        profile.skills = vec!["tdd".into(), "review".into()];
+        profile.role = "You implement.\n\n---\n\nA rule under a line.".into();
+        profile.face = Some("r01c01".into());
+        let back = parse("naruto", &profile.file_text()).unwrap();
+        assert_eq!(back.face.as_deref(), Some("r01c01"));
+        assert_eq!(
+            (&back.name, &back.cli, &back.model, &back.effort),
+            (&profile.name, &profile.cli, &profile.model, &profile.effort)
+        );
+        assert_eq!(
+            (&back.tools, &back.skills, &back.context),
+            (&profile.tools, &profile.skills, &profile.context)
+        );
+        assert_eq!(
+            (back.writes, back.lessons, &back.worktree),
+            (true, false, &profile.worktree)
+        );
+        assert_eq!((&back.description, &back.role), (&profile.description, &profile.role));
+        let bare = parse("x", &blank("x")).unwrap();
+        let again = parse("x", &bare.file_text()).unwrap();
+        assert_eq!((again.cli, again.model, again.worktree), (bare.cli, bare.model, None));
+        assert_eq!((bare.face, again.face), (None, None), "a new Profile has no face");
+    }
+
+    #[test]
+    fn echos_own_profiles_each_have_a_face_echo_ships() {
+        let hub = crate::paths::hub_dir();
+        let faces = hub.join("app/bundle/Faces");
+        for entry in entries(&hub, Path::new("/nonexistent"), None) {
+            let face = entry.profile.unwrap().face.expect("a face");
+            assert!(
+                faces.join(format!("{face}.png")).is_file(),
+                "{}: no picture {face}",
+                entry.name
+            );
+        }
+    }
+
+    #[test]
+    fn set_fields_replaces_the_role_and_keeps_every_other_field() {
+        let root = std::env::temp_dir().join(format!("hub-role-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (hub, state) = (root.join("hub"), root.join("state"));
+        std::fs::create_dir_all(hub.join("profiles")).unwrap();
+        std::fs::write(hub.join("profiles/naruto.md"), NARUTO).unwrap();
+        let (path, _) = copy(&hub, &state, None, "naruto", Level::Yours).unwrap();
+        set_fields(
+            &path,
+            &[
+                ("lessons", Some("false")),
+                ("worktree", Some("new")),
+                ("tools", Some("Read, Grep")),
+            ],
+            Some("  You only review.\n\nNever edit.  "),
+        )
+        .unwrap();
+        let mine = load(&hub, &state, None, "naruto").unwrap();
+        assert_eq!(mine.role, "You only review.\n\nNever edit.");
+        assert_eq!((mine.lessons, mine.worktree.as_deref()), (false, Some("new")));
+        assert_eq!(mine.tools, ["Read", "Grep"]);
+        assert_eq!(
+            mine.model.as_deref(),
+            Some("claude-sonnet-5-5"),
+            "untouched fields stay"
+        );
+        assert!(set_fields(&path, &[("worktree", Some("far"))], None).is_err());
+        assert_eq!(
+            load(&hub, &state, None, "naruto").unwrap().worktree.as_deref(),
+            Some("new")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_new_profile_can_start_as_a_copy_of_another_under_its_own_name() {
+        let root = std::env::temp_dir().join(format!("hub-dup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (hub, state, repo) = (root.join("hub"), root.join("state"), root.join("repo"));
+        std::fs::create_dir_all(hub.join("profiles")).unwrap();
+        std::fs::write(hub.join("profiles/naruto.md"), NARUTO).unwrap();
+        let to = create(&hub, &state, Some(&repo), "naruto-api", Level::Repo, Some("naruto")).unwrap();
+        assert_eq!(to, repo.join(".echo/profiles/naruto-api.md"));
+        let copy = load(&hub, &state, Some(&repo), "naruto-api").unwrap();
+        assert_eq!(copy.name, "naruto-api");
+        assert_eq!(
+            (copy.role.as_str(), copy.tools.len(), copy.writes),
+            ("You implement.", 3, true)
+        );
+        assert!(create(&hub, &state, None, "other", Level::Yours, Some("nobody")).is_err());
+        assert!(!state.join("profiles/other.md").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_profile_a_member_starts_from_is_not_deleted_unless_another_level_has_it() {
+        let root = std::env::temp_dir().join(format!("hub-delete-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (hub, state, repo) = (root.join("hub"), root.join("state"), root.join("repo"));
+        std::fs::create_dir_all(hub.join("profiles")).unwrap();
+        std::fs::write(hub.join("profiles/naruto.md"), NARUTO).unwrap();
+        create(&hub, &state, Some(&repo), "mine", Level::Yours, Some("naruto")).unwrap();
+        create(&hub, &state, Some(&repo), "spare", Level::Yours, None).unwrap();
+        copy(&hub, &state, Some(&repo), "naruto", Level::Repo).unwrap();
+        std::fs::create_dir_all(repo.join(".echo/teams")).unwrap();
+        std::fs::write(
+            repo.join(".echo/teams/shop.json"),
+            r#"{"members": [{"id": "build", "action": "execute", "profile": "mine"},
+                {"id": "api", "action": "execute", "profile": "mine"},
+                {"id": "impl", "action": "execute", "profile": "naruto"}]}"#,
+        )
+        .unwrap();
+
+        let why = delete(&hub, &state, Some(&repo), "mine", Level::Yours)
+            .unwrap_err()
+            .to_string();
+        assert!(why.contains("shop (build, api)"), "{why}");
+        assert!(state.join("profiles/mine.md").exists());
+        assert!(
+            delete(&hub, &state, None, "mine", Level::Yours).is_ok(),
+            "no Team outside the repo uses it"
+        );
+        delete(&hub, &state, Some(&repo), "naruto", Level::Repo).expect("Echo's own naruto stays");
+        delete(&hub, &state, Some(&repo), "spare", Level::Yours).unwrap();
+        assert!(
+            delete(&hub, &state, Some(&repo), "spare", Level::Yours).is_err(),
+            "nothing left"
+        );
+        assert!(delete(&hub, &state, Some(&repo), "naruto", Level::BuiltIn).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_renamed_profile_takes_your_teams_members_with_it_but_not_echos() {
+        let root = std::env::temp_dir().join(format!("hub-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (hub, state, repo) = (root.join("hub"), root.join("state"), root.join("repo"));
+        std::fs::create_dir_all(hub.join("profiles")).unwrap();
+        std::fs::create_dir_all(hub.join("teams")).unwrap();
+        std::fs::write(hub.join("profiles/naruto.md"), NARUTO).unwrap();
+        create(&hub, &state, Some(&repo), "mine", Level::Yours, Some("naruto")).unwrap();
+        copy(&hub, &state, Some(&repo), "naruto", Level::Yours).unwrap();
+        std::fs::create_dir_all(repo.join(".echo/teams")).unwrap();
+        std::fs::write(
+            repo.join(".echo/teams/shop.json"),
+            r#"{"members": [{"id": "build", "action": "execute", "profile": "mine"},
+                {"id": "impl", "action": "execute", "profile": "naruto"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            hub.join("teams/lean.json"),
+            r#"{"members": [{"id": "impl", "action": "execute", "profile": "naruto"}]}"#,
+        )
+        .unwrap();
+
+        let (path, teams) = rename(&hub, &state, Some(&repo), "mine", "builder", Level::Yours).unwrap();
+        assert_eq!(path, state.join("profiles/builder.md"));
+        assert_eq!(teams, ["shop"]);
+        assert!(!state.join("profiles/mine.md").exists());
+        assert_eq!(
+            load(&hub, &state, Some(&repo), "builder").unwrap().role,
+            "You implement."
+        );
+        let shop = crate::team::load(&hub, &state, Some(&repo), "shop").unwrap();
+        assert_eq!(shop.members[0].profile, "builder");
+        assert_eq!(shop.members[1].profile, "naruto", "another Profile's Member stays");
+
+        let taken = rename(&hub, &state, Some(&repo), "builder", "naruto", Level::Yours).unwrap_err();
+        assert!(taken.to_string().contains("already exists"), "{taken}");
+        // Your naruto renamed: Echo's own naruto still serves Echo's lean Team.
+        rename(&hub, &state, Some(&repo), "naruto", "naruto-strict", Level::Yours).unwrap();
+        assert_eq!(
+            crate::team::load(&hub, &state, Some(&repo), "shop").unwrap().members[1].profile,
+            "naruto-strict"
+        );
+        assert_eq!(
+            crate::team::load(&hub, &state, Some(&repo), "lean").unwrap().members[0].profile,
+            "naruto"
+        );
+        assert!(
+            rename(&hub, &state, Some(&repo), "naruto", "x", Level::BuiltIn).is_err(),
+            "Echo's own stay"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The Member `id` of a Team of one Profile's Members, from the JSON of its fields.
@@ -804,7 +1203,35 @@ mod tests {
         .unwrap();
         assert_eq!(started.tools, ["Read", "Grep"]);
         assert!(started.prompt.contains("# Your role: naruto"));
+        let skilled = Profile {
+            skills: vec!["matt:tdd".into()],
+            ..read_only.clone()
+        };
+        assert_eq!(
+            tools(Cli::Claude, &skilled),
+            ["Read", "Grep", "Skill"],
+            "its skills stay in reach"
+        );
+        assert_eq!(tools(Cli::Codex, &skilled), ["Read", "Grep"]);
+        let all = Profile {
+            tools: vec![],
+            ..skilled
+        };
+        assert!(tools(Cli::Claude, &all).is_empty(), "no list keeps the CLI's own set");
         assert!(profile.with_member(&member("")).writes, "left out, the Profile's stays");
+    }
+
+    #[test]
+    fn a_members_worktree_is_laid_over_when_it_is_current_or_new() {
+        assert_eq!(
+            naruto()
+                .with_member(&member(r#", "worktree": "new""#))
+                .worktree
+                .as_deref(),
+            Some("new")
+        );
+        assert_eq!(naruto().with_member(&member(r#", "worktree": "far""#)).worktree, None);
+        assert_eq!(naruto().with_member(&member("")).worktree, None);
     }
 
     /// What `resolve` gives naruto (claude, claude-sonnet-5-5, high in its file) under the settings
@@ -855,139 +1282,96 @@ mod tests {
     #[test]
     fn every_step_of_the_order_for_a_worker() {
         let sonnet = "claude-sonnet-5-5";
-        let team = r#"{"workers": {"model": "claude-haiku-5-5", "effort": "low",
-            "profiles": {"naruto": {"model": "claude-opus-5-5", "effort": "max"}}}}"#;
-        let all_only = r#"{"workers": {"model": "claude-haiku-5-5", "effort": "low"}}"#;
+        let team = r#"{"workers": {"model": "claude-haiku-5-5", "effort": "low"}}"#;
         let effort_only = r#"{"workers": {"effort": "medium"}}"#;
-        let kiro = r#"{"workers": {"cli": "kiro", "model": "claude-haiku-5.5", "effort": "low",
-            "profiles": {"naruto": {"model": "claude-sonnet-5.5"}}}}"#;
+        let kiro = r#"{"workers": {"cli": "kiro", "model": "claude-haiku-5.5", "effort": "low"}}"#;
         let none = (None, None);
-        let cases: [(&str, Option<&str>, &str, (Option<&str>, Option<&str>), _); 11] = [
+        let cases: [(&str, Option<&str>, (Option<&str>, Option<&str>), _); 7] = [
             (
                 "no Team: the Profile's own",
                 None,
-                "naruto",
                 none,
                 runs(Cli::Claude, sonnet, "high"),
             ),
             (
                 "an empty Team changes nothing",
                 Some("{}"),
-                "naruto",
                 none,
                 runs(Cli::Claude, sonnet, "high"),
             ),
             (
                 "Team workers over the Profile",
-                Some(all_only),
-                "naruto",
+                Some(team),
                 none,
                 runs(Cli::Claude, "claude-haiku-5-5", "low"),
             ),
             (
                 "a Team's effort alone leaves the Profile's model",
                 Some(effort_only),
-                "naruto",
                 none,
                 runs(Cli::Claude, sonnet, "medium"),
             ),
             (
-                "Team profile entry over Team workers",
+                "picked over the Team's workers",
                 Some(team),
-                "naruto",
-                none,
-                runs(Cli::Claude, "claude-opus-5-5", "max"),
-            ),
-            (
-                "another Profile's entry does not apply",
-                Some(team),
-                "naruto-two",
-                none,
-                runs(Cli::Claude, "claude-haiku-5-5", "low"),
-            ),
-            (
-                "picked over the Team's profile entry",
-                Some(team),
-                "naruto",
                 (None, Some("claude-fable-5-1")),
-                runs(Cli::Claude, "claude-fable-5-1", "max"),
+                runs(Cli::Claude, "claude-fable-5-1", "low"),
             ),
             (
                 "the Team's cli carries its model",
                 Some(kiro),
-                "naruto-two",
                 none,
                 runs(Cli::Kiro, "claude-haiku-5.5", "low"),
             ),
             (
-                "an entry mixes its own fields with the Team's",
-                Some(kiro),
-                "naruto",
-                none,
-                runs(Cli::Kiro, "claude-sonnet-5.5", "low"),
-            ),
-            (
                 "picked cli and model over a Team",
                 Some(kiro),
-                "naruto",
                 (Some("claude"), Some("claude-opus-5-5")),
                 runs(Cli::Claude, "claude-opus-5-5", "low"),
             ),
-            (
-                "a Team with workers for other Profiles only",
-                Some(r#"{"workers": {"profiles": {"lee": {"model": "claude-haiku-5-5"}}}}"#),
-                "naruto",
-                none,
-                runs(Cli::Claude, sonnet, "high"),
-            ),
         ];
-        for (what, team, profile, picked, want) in cases {
-            assert_eq!(resolved("{}", team, profile, picked).unwrap(), want, "{what}");
+        for (what, team, picked, want) in cases {
+            assert_eq!(resolved("{}", team, "naruto", picked).unwrap(), want, "{what}");
         }
+        let old = r#"{"workers": {"profiles": {"naruto": {"model": "claude-opus-5-5", "effort": "max"}}}}"#;
+        assert_eq!(
+            resolved("{}", Some(old), "naruto", none).unwrap(),
+            runs(Cli::Claude, sonnet, "high"),
+            "a workers.profiles entry is read only to move it (features/0094)"
+        );
     }
 
     #[test]
     fn forcecli_applies_only_where_the_team_names_nothing() {
         let force = r#"{"cli": "kiro", "model": "claude-haiku-5.5", "forceCli": true}"#;
         let kiro = |model: &str, effort: &str| runs(Cli::Kiro, model, effort);
-        let entry =
-            r#"{"workers": {"profiles": {"naruto": {"cli": "kiro", "model": "claude-sonnet-5.5", "effort": "low"}}}}"#;
+        let all = r#"{"workers": {"cli": "kiro", "model": "claude-sonnet-5.5", "effort": "low"}}"#;
         let model_only = r#"{"workers": {"model": "claude-sonnet-5.5"}}"#;
         let effort_only = r#"{"workers": {"effort": "low"}}"#;
-        let cases: [(&str, Option<&str>, &str, _); 5] = [
+        let cases: [(&str, Option<&str>, _); 4] = [
             (
                 "no Team: force puts the Profile's cli and model aside",
                 None,
-                "naruto",
                 kiro("claude-haiku-5.5", "high"),
             ),
             (
-                "a Team entry beats force",
-                Some(entry),
-                "naruto",
+                "the Team's workers beat force",
+                Some(all),
                 kiro("claude-sonnet-5.5", "low"),
-            ),
-            (
-                "no entry for this Profile: force applies",
-                Some(entry),
-                "lee",
-                kiro("claude-haiku-5.5", "high"),
             ),
             (
                 "a Team's model alone beats the forced model, the forced cli stays",
                 Some(model_only),
-                "naruto",
                 kiro("claude-sonnet-5.5", "high"),
             ),
             (
                 "a Team's effort alone leaves cli and model to force",
                 Some(effort_only),
-                "naruto",
                 kiro("claude-haiku-5.5", "low"),
             ),
         ];
-        for (what, team, profile, want) in cases {
-            assert_eq!(resolved(force, team, profile, (None, None)).unwrap(), want, "{what}");
+        for (what, team, want) in cases {
+            assert_eq!(resolved(force, team, "naruto", (None, None)).unwrap(), want, "{what}");
         }
     }
 
@@ -998,28 +1382,23 @@ mod tests {
         assert!(error.to_string().contains("kiro runs its own model ids"), "{error}");
     }
 
-    /// A Team with Workers entries and Members for naruto: `build` names a model and an effort,
+    /// A Team with Workers defaults and Members for naruto: `build` names a model and an effort,
     /// `plain` names nothing, `swap` names a CLI with its model, `mine` names a model alone.
-    const MEMBERS: &str = r#"{"workers": {"model": "claude-haiku-5-5", "effort": "low",
-        "profiles": {"naruto": {"model": "claude-opus-5-5", "effort": "max"}}},
+    const MEMBERS: &str = r#"{"workers": {"model": "claude-haiku-5-5", "effort": "low"},
         "members": [
             {"id": "build", "action": "execute", "profile": "naruto", "model": "claude-fable-5-1", "effort": "medium"},
             {"id": "plain", "action": "execute", "profile": "naruto"},
             {"id": "swap", "action": "execute", "profile": "naruto", "cli": "kiro", "model": "claude-sonnet-5.5"},
-            {"id": "mine", "action": "execute", "profile": "naruto", "model": "claude-haiku-5-5"}]}"#;
+            {"id": "mine", "action": "execute", "profile": "naruto", "model": "claude-opus-5-5"}]}"#;
 
     #[test]
     fn every_step_of_the_order_for_a_member() {
-        let sonnet = "claude-sonnet-5-5";
-        let no_entry = r#"{"workers": {"model": "claude-haiku-5-5", "effort": "low"},
-            "members": [{"id": "plain", "action": "execute", "profile": "naruto"},
-                        {"id": "build", "action": "execute", "profile": "naruto", "model": "claude-fable-5-1"}]}"#;
         let only_members = r#"{"members": [{"id": "build", "action": "execute", "profile": "naruto",
             "model": "claude-fable-5-1", "effort": "medium"}]}"#;
         let none = (None, None);
-        let cases: [(&str, &str, &str, &str, (Option<&str>, Option<&str>), _); 10] = [
+        let cases: [(&str, &str, &str, &str, (Option<&str>, Option<&str>), _); 8] = [
             (
-                "a Member's model and effort over the Team's entry for its Profile",
+                "a Member's model and effort over the Team's workers",
                 MEMBERS,
                 "naruto",
                 "build",
@@ -1027,12 +1406,12 @@ mod tests {
                 runs(Cli::Claude, "claude-fable-5-1", "medium"),
             ),
             (
-                "a Member naming nothing leaves the Team's entry for its Profile",
+                "a Member naming nothing leaves the Team's workers",
                 MEMBERS,
                 "naruto",
                 "plain",
                 none,
-                runs(Cli::Claude, "claude-opus-5-5", "max"),
+                runs(Cli::Claude, "claude-haiku-5-5", "low"),
             ),
             (
                 "a Member's model alone leaves the Team's effort",
@@ -1040,7 +1419,7 @@ mod tests {
                 "naruto",
                 "mine",
                 none,
-                runs(Cli::Claude, "claude-haiku-5-5", "max"),
+                runs(Cli::Claude, "claude-opus-5-5", "low"),
             ),
             (
                 "a Member's cli carries its model",
@@ -1048,7 +1427,7 @@ mod tests {
                 "naruto",
                 "swap",
                 none,
-                runs(Cli::Kiro, "claude-sonnet-5.5", "max"),
+                runs(Cli::Kiro, "claude-sonnet-5.5", "low"),
             ),
             (
                 "picked over the Member, field by field",
@@ -1064,26 +1443,10 @@ mod tests {
                 "naruto",
                 "swap",
                 (Some("claude"), Some("claude-opus-5-5")),
-                runs(Cli::Claude, "claude-opus-5-5", "max"),
+                runs(Cli::Claude, "claude-opus-5-5", "low"),
             ),
             (
-                "no Profile entry: a Member over the Team's workers",
-                no_entry,
-                "naruto",
-                "build",
-                none,
-                runs(Cli::Claude, "claude-fable-5-1", "low"),
-            ),
-            (
-                "no Profile entry, a Member naming nothing: the Team's workers",
-                no_entry,
-                "naruto",
-                "plain",
-                none,
-                runs(Cli::Claude, "claude-haiku-5-5", "low"),
-            ),
-            (
-                "no Workers entries: a Member over the Profile",
+                "no Workers default: a Member over the Profile",
                 only_members,
                 "naruto",
                 "build",
@@ -1108,8 +1471,8 @@ mod tests {
         }
         assert_eq!(
             resolved_as("{}", Some(MEMBERS), "naruto", None, none).unwrap(),
-            runs(Cli::Claude, "claude-opus-5-5", "max"),
-            "no Member: the order of features/0081"
+            runs(Cli::Claude, "claude-haiku-5-5", "low"),
+            "no Member: the Team's workers"
         );
     }
 

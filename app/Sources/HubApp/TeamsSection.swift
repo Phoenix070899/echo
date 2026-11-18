@@ -110,7 +110,7 @@ private struct TeamsList: View {
                         .disabled(teams.form.isNew || teams.team == nil)
                         .help("Copy the picked Team under a new name; nothing is written until you save")
                     if teams.canDelete {
-                        Button("Delete…", action: teams.delete)
+                        Button("Delete", action: teams.delete)
                     }
                 }
                 .buttonStyle(.ledgerLink)
@@ -126,7 +126,7 @@ private struct TeamsList: View {
 }
 
 /// An entry in the list: the name in bold over its one line of description, over a 1 pt rule; the
-/// picked one on the sheet's grey with no square (ui-ux/0132), a square accent dot while it has
+/// picked one on the sheet's grey with the accent edge and no square (ui-ux/0152), a square accent dot while it has
 /// edits not saved, and its problem in red under it where it has one.
 private struct TeamRow: View {
     let name: String
@@ -171,8 +171,9 @@ private struct TeamRow: View {
             .padding(.trailing, 12)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // The list has no squares, so picked or hovered only the fill changes (ui-ux/0132).
+            // The list has no squares: hovered, only the fill changes; picked, the accent edge shows too (ui-ux/0152).
             .background(picked || hover.on ? Ledger.paper : .clear)
+            .pickedEdge(picked)
             .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
             .contentShape(Rectangle())
         }
@@ -235,26 +236,38 @@ private struct TeamSaveBar: View {
     }
 
     private func line(_ lead: String, _ rest: String) -> some View {
-        (Text(lead).font(Ledger.font(14, .bold)).foregroundStyle(Ledger.ink)
-            + Text(" · \(rest)").font(Ledger.font(14)).foregroundStyle(Ledger.ink3))
+        Text("\(Text(lead).font(Ledger.font(14, .bold)).foregroundStyle(Ledger.ink))\(Text(" · \(rest)").font(Ledger.font(14)).foregroundStyle(Ledger.ink3))")
+    }
+}
+
+/// The card that asks what to do with a Team's edits that are not saved (ui-ux/0103).
+struct UnsavedTeamModal: View {
+    @ObservedObject var teams: TeamSettingsModel
+
+    var body: some View {
+        UnsavedEditsCard(asking: teams.asking, name: teams.form.name.isEmpty ? "this Team" : teams.form.name,
+                         answer: teams.answer)
     }
 }
 
 /// The card that asks what to do with edits that are not saved: Return saves, Esc cancels
 /// (ui-ux/0103, ui-ux/0006).
-struct UnsavedTeamModal: View {
-    @ObservedObject var teams: TeamSettingsModel
+struct UnsavedEditsCard: View {
+    let asking: Bool
+    /// What holds the edits: the Team's or the Profile's name.
+    let name: String
+    let answer: (UnsavedAnswer) -> Void
     @FocusState private var focused: Bool
 
     var body: some View {
-        if teams.asking {
+        if asking {
             ZStack {
                 Color.black.opacity(0.28)
                     .ignoresSafeArea()
-                    .onTapGesture { teams.answer(.cancel) }
+                    .onTapGesture { answer(.cancel) }
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Save changes to \(teams.form.name.isEmpty ? "this Team" : teams.form.name)?")
+                    Text("Save changes to \(name)?")
                         .font(Ledger.font(18, .bold))
                         .accessibilityAddTraits(.isHeader)
                         .padding(.horizontal, 24)
@@ -267,12 +280,12 @@ struct UnsavedTeamModal: View {
                         .padding(.horizontal, 24)
                     HStack(spacing: 8) {
                         Spacer()
-                        Button("Discard") { teams.answer(.discard) }
+                        Button("Discard") { answer(.discard) }
                             .buttonStyle(.settings)
-                        Button("Cancel") { teams.answer(.cancel) }
+                        Button("Cancel") { answer(.cancel) }
                             .buttonStyle(.settings)
                             .keyboardShortcut(.cancelAction)
-                        Button("Save") { teams.answer(.save) }
+                        Button("Save") { answer(.save) }
                             .buttonStyle(.settingsPrimary)
                             .keyboardShortcut(.defaultAction)
                     }
@@ -292,7 +305,7 @@ struct UnsavedTeamModal: View {
             .focusEffectDisabled()
             .focused($focused)
             .onAppear { DispatchQueue.main.async { focused = true } }
-            .onExitCommand { teams.answer(.cancel) }
+            .onExitCommand { answer(.cancel) }
         }
     }
 }

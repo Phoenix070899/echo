@@ -601,6 +601,41 @@ public struct SquareColorWell: View {
     }
 }
 
+/// A colour as a bare square, for a grid of them like a terminal palette: clicking opens the colour
+/// panel; its name and hex show in the tooltip.
+public struct SquareSwatch: View {
+    @Binding public var selection: Color
+    public var label = ""
+    public var side: CGFloat = 22
+    @StateObject private var hover = Flag()
+
+    public init(selection: Binding<Color>, label: String = "", side: CGFloat = 22) {
+        self._selection = selection
+        self.label = label
+        self.side = side
+    }
+
+    public var body: some View {
+        Button { ColorPanelTarget.shared.open(selection) { selection = $0 } } label: {
+            Rectangle()
+                .fill(selection)
+                .frame(width: side, height: side)
+                .overlay(Rectangle().strokeBorder(hover.on ? Ledger.accent : .clear, lineWidth: Ledger.ruleStrong))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover.on = $0 }
+        .help("\(label) \(hex)")
+        .accessibilityLabel(label)
+        .accessibilityValue(hex)
+    }
+
+    private var hex: String {
+        guard let rgb = NSColor(selection).usingColorSpace(.sRGB) else { return "" }
+        return TerminalTheme.hex(red: rgb.redComponent, green: rgb.greenComponent, blue: rgb.blueComponent).uppercased()
+    }
+}
+
 /// The shared colour panel, pointed at the well clicked last.
 @MainActor
 private final class ColorPanelTarget: NSObject {

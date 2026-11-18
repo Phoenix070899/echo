@@ -93,7 +93,7 @@ struct CreateFromSection: View {
                 note(text, color: warn ? Ledger.failInk : Ledger.ink2)
             }
         }
-        // Where the dialog starts typing, as Orca's does; after the terminal lets go of the keyboard.
+        // Where the dialog starts typing; after the terminal lets go of the keyboard.
         .onAppear { DispatchQueue.main.async { fieldFocused = true } }
     }
 
@@ -309,7 +309,7 @@ private struct BaseBranchSearch: View {
     }
 
     /// A branch as a compact popover row: its name in mono, "base" at the right of the one new
-    /// branches start from now; the picked row sunk, with no square (ui-ux/0127).
+    /// branches start from now; the picked row sunk, with the accent edge and no square (ui-ux/0152).
     private func row(_ name: String, picked: Bool) -> some View {
         Button { pick(name) } label: {
             HStack(spacing: 10) {
@@ -325,8 +325,9 @@ private struct BaseBranchSearch: View {
             .padding(.trailing, 14)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // A popover row has no square; picked, only its fill changes (ui-ux/0127).
+            // A popover row has no square; picked, it sinks and shows the accent edge (ui-ux/0152).
             .background(picked ? Ledger.selected : Color.clear)
+            .pickedEdge(picked)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

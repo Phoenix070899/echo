@@ -36,8 +36,7 @@ private func shape(_ members: [Team.Member]) -> [String] {
 
 @Test func aTemplateMemberCarriesOnlyItsActionAndProfile() {
     for member in TeamTemplate.researchHeavy.members {
-        #expect(member.instructions == nil && member.model == nil && member.effort == nil && member.cli == nil)
-        #expect(member.tools.isEmpty && member.skills.isEmpty && member.context.isEmpty)
+        #expect(member.model == nil && member.effort == nil && member.cli == nil)
     }
 }
 

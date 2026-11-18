@@ -45,6 +45,11 @@ struct ChatView: View {
     let shown: Bool
     /// Kept by the model per agent, so showing the agent again draws what it read before.
     @ObservedObject var feed: ChatFeed
+    /// Scrolled up from the newest message, so Jump to bottom shows (ui-ux/0157).
+    @StateObject private var scrolledUp = Flag()
+
+    /// The end of the chat, which Jump to bottom scrolls to.
+    private static let end = "chat-end"
 
     /// How long the daemon holds a shown chat's read with nothing new (features/0088).
     private static let wait = Duration.seconds(15)
@@ -116,8 +121,27 @@ struct ChatView: View {
                 .padding(.bottom, 24)
                 .frame(maxWidth: ChatBottom.width, alignment: .leading)
                 .frame(maxWidth: .infinity)
+                .overlay(alignment: .bottom) { Color.clear.frame(height: 1).id(Self.end) }
             }
             .defaultScrollAnchor(.bottom)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentSize.height - geometry.visibleRect.maxY > 200
+            } action: { _, up in
+                withAnimation(.easeOut(duration: 0.15)) { scrolledUp.on = up }
+            }
+            // Centred on the message box's top edge, over the messages.
+            .overlay(alignment: .bottom) {
+                if scrolledUp.on {
+                    Button("↓ Jump to bottom") {
+                        withAnimation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.25)) {
+                            scroll.scrollTo(Self.end, anchor: .bottom)
+                        }
+                    }
+                    .buttonStyle(.ledgerPrimary)
+                    .padding(.bottom, 12)
+                    .transition(.opacity)
+                }
+            }
             }
         }
     }
@@ -590,13 +614,16 @@ private struct ChatBottom: View {
     }
 }
 
-/// While a turn runs: what the agent is doing, from its screen; nothing otherwise.
+/// While a turn runs: what the agent is doing, from its screen. Otherwise the same row, hidden, so
+/// the screen flicking between working and idle mid-turn never moves the messages (ui-ux/0159).
 private struct WorkingRow: View {
     @ObservedObject var live: ChatLive
 
     var body: some View {
         if let step = live.state.working {
             row(step: step, spinner: live.state.spinner)
+        } else {
+            row(step: " ", spinner: nil).hidden().accessibilityHidden(true)
         }
     }
 
@@ -976,6 +1003,7 @@ private struct CommandList: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(index == pick ? Ledger.selected : .clear)
+                    .pickedEdge(index == pick)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

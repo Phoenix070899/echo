@@ -16,6 +16,8 @@ app: ghostty
 	cp bundle/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
 	# Archivo and JetBrains Mono (SIL OFL), registered at launch by Ledger.registerFonts (ui-ux/0104).
 	cp -R bundle/Fonts $(APP)/Contents/Resources/
+	# The faces a Profile can wear, read by ProfileFaces (ui-ux/0158).
+	cp -R bundle/Faces $(APP)/Contents/Resources/
 	# Highlightr's themes and highlight.js, found through Bundle.main.resourceURL.
 	cp -R .build/release/Highlightr_Highlightr.bundle $(APP)/Contents/Resources/
 	codesign --force --sign - $(APP)

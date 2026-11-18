@@ -317,20 +317,3 @@ extension SectionHeader where Trailing == EmptyView {
     }
 }
 
-/// Echo's mark for the top bar: a solid ink square casting the accent's hard offset, Foundry's own
-/// block (ui-ux/0110). It takes 3 pt more than its square, right and down, for the offset.
-public struct EchoMark: View {
-    public init() {}
-
-
-    public var body: some View {
-        GeometryReader { proxy in
-            let side = min(proxy.size.width, proxy.size.height) - 3
-            ZStack(alignment: .topLeading) {
-                Rectangle().fill(Ledger.accent).frame(width: side, height: side).offset(x: 3, y: 3)
-                Rectangle().fill(Ledger.ink).frame(width: side, height: side)
-            }
-        }
-        .accessibilityHidden(true)
-    }
-}

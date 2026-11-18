@@ -8,6 +8,7 @@ mod chat;
 mod cli;
 mod daemon;
 mod db;
+mod draft;
 mod holder;
 mod kiro_chat;
 mod kiro_usage;
@@ -23,6 +24,7 @@ mod remote;
 mod repo;
 mod screen;
 mod settings;
+mod skills;
 mod stats;
 mod team;
 
@@ -99,7 +101,7 @@ enum Command {
         #[arg(long)]
         repo: Option<PathBuf>,
     },
-    /// Unanswered questions in this repo (Orchestrator).
+    /// Unanswered questions from this Orchestrator's Workers (Orchestrator).
     Inbox {
         #[arg(long)]
         repo: Option<PathBuf>,
@@ -199,6 +201,24 @@ enum ProfileCommand {
     /// Start a new Profile from a blank one, in yours (or this repo's).
     New {
         name: String,
+        /// Start it as a copy of this Profile instead of a blank one.
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        repo: bool,
+    },
+    /// Delete your (or this repo's) file of a Profile; refused while a Team's Member starts from it
+    /// and no other level has that name.
+    Delete {
+        name: String,
+        #[arg(long)]
+        repo: bool,
+    },
+    /// Rename your (or this repo's) Profile; the Members of your Teams and this repo's that start
+    /// from it move to the new name.
+    Rename {
+        name: String,
+        to: String,
         #[arg(long)]
         repo: bool,
     },
@@ -222,8 +242,8 @@ enum UiCommand {
     Show { target: String },
     /// Show a Worker's diff, ready for review.
     Diff { worker: String },
-    /// Show a part of Settings (window, theme, background, font, multiplexer, teams, providers, worktrees,
-    /// memory, remote),
+    /// Show a part of Settings (window, theme, background, font, multiplexer, teams, profiles, providers,
+    /// worktrees, memory, remote),
     /// for a change only the human makes there, like which model Profiles run with.
     Settings {
         #[arg(default_value = "teams")]
@@ -288,7 +308,8 @@ enum WorkerCommand {
         #[arg(long)]
         keep: bool,
         /// Have the daemon verify its Final Report with its verifier (its Team's `verify` Member, else a
-        /// sasuke), send it back once on a fail, and tell you only the outcome.
+        /// sasuke), send it back on a fail (once, or as often as its Team's `verifyRetries` says), and
+        /// tell you only the outcome.
         #[arg(long)]
         verify: bool,
     },
@@ -476,17 +497,46 @@ fn profile_command(command: ProfileCommand) -> Result<()> {
                 }
             );
         }
-        ProfileCommand::New { name, repo: to_repo } => {
+        ProfileCommand::New {
+            name,
+            from,
+            repo: to_repo,
+        } => {
             let level = if to_repo {
                 profile::Level::Repo
             } else {
                 profile::Level::Yours
             };
-            let to = profile::create(&hub, &state, repo.as_deref(), &name, level)?;
+            let to = profile::create(&hub, &state, repo.as_deref(), &name, level, from.as_deref())?;
             println!(
                 "Wrote {}.\nFill in its description and role; Workers can start as {name} now.",
                 to.display()
             );
+        }
+        ProfileCommand::Delete { name, repo: to_repo } => {
+            let level = if to_repo {
+                profile::Level::Repo
+            } else {
+                profile::Level::Yours
+            };
+            profile::delete(&hub, &state, repo.as_deref(), &name, level)?;
+            println!("Deleted {} {name}.", level.label());
+        }
+        ProfileCommand::Rename {
+            name,
+            to,
+            repo: to_repo,
+        } => {
+            let level = if to_repo {
+                profile::Level::Repo
+            } else {
+                profile::Level::Yours
+            };
+            let (path, teams) = profile::rename(&hub, &state, repo.as_deref(), &name, &to, level)?;
+            println!("Renamed {name} to {to}: {}", path.display());
+            if !teams.is_empty() {
+                println!("Their Members now start from {to}: {}", teams.join(", "));
+            }
         }
     }
     Ok(())
@@ -751,13 +801,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Brief { repo } => {
             let repo = repo_arg(repo)?;
             let list = proto::call("worker.list", json!({ "repo": repo, "agent": agent_env() }))?;
-            let inbox = proto::call("inbox", json!({ "repo": repo }))?;
+            let inbox = proto::call("inbox", json!({ "repo": repo, "agent": agent_env() }))?;
             let workers = list["workers"].as_array().cloned().unwrap_or_default();
             let questions = inbox["open_questions"].as_array().cloned().unwrap_or_default();
             print!("{}", brief::brief(&workers, &questions));
         }
         Command::Inbox { repo } => {
-            let result = proto::call("inbox", json!({ "repo": repo_arg(repo)? }))?;
+            let result = proto::call("inbox", json!({ "repo": repo_arg(repo)?, "agent": agent_env() }))?;
             let open = result["open_questions"].as_array().cloned().unwrap_or_default();
             if open.is_empty() {
                 println!("No unanswered questions.");
