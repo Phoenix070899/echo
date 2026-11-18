@@ -15,13 +15,11 @@ private func standard() -> TeamForm {
     return form
 }
 
-private func profile(_ name: String, cli: String? = nil, model: String? = nil, effort: String? = nil,
-                     tools: [String]? = nil, writes: Bool = false) -> WorkerProfile {
-    var found = WorkerProfile(name: name, description: "", model: model ?? "claude default", writes: writes)
+private func profile(_ name: String, cli: String? = nil, model: String? = nil, effort: String? = nil) -> WorkerProfile {
+    var found = WorkerProfile(name: name, description: "", model: model ?? "claude default", writes: false)
     found.ownCli = cli
     found.ownModel = model
     found.ownEffort = effort
-    found.tools = tools
     return found
 }
 
@@ -100,31 +98,26 @@ private func profile(_ name: String, cli: String? = nil, model: String? = nil, e
 @Test func clearingAFieldTakesOnlyThatValueOut() {
     var form = standard()
     form.updateMember("build") {
-        $0.instructions = "Keep diffs small."
-        $0.replaceRole = true
-        $0.model = "claude-opus-5-5"
-        $0.tools = ["Read"]
-        $0.skills = ["a"]
-        $0.context = ["CLAUDE.md"]
-        $0.lessons = false
-        $0.writes = true
-        $0.worktree = "new"
+        $0.cli = "kiro"
+        $0.model = "claude-opus-5.5"
+        $0.effort = "high"
     }
     let build = { form.member("build")! }
-    #expect(MemberField.allCases.allSatisfy { build().isSet($0) || $0 == .cli || $0 == .effort })
+    #expect(MemberField.allCases.allSatisfy { build().isSet($0) })
     form.clearMember("build", .model)
     #expect(build().model == nil)
-    #expect(build().isSet(.instructions) && build().isSet(.tools))
-    form.clearMember("build", .instructions)
-    #expect(build().instructions == nil && build().replaceRole == nil, "The replace choice goes with the instruction")
-    form.clearMember("build", .tools)
-    form.clearMember("build", .skills)
-    form.clearMember("build", .context)
-    form.clearMember("build", .lessons)
-    form.clearMember("build", .writes)
-    form.clearMember("build", .worktree)
+    #expect(build().isSet(.cli) && build().isSet(.effort))
+    form.clearMember("build", .cli)
+    form.clearMember("build", .effort)
     #expect(MemberField.allCases.allSatisfy { !build().isSet($0) })
     #expect(build() == Team.Member(id: "build", action: "execute", profile: "naruto"))
+}
+
+@Test func aMemberHoldsOnlyItsFlowAndWhatItRunsOn() throws {
+    let text = #"{"id":"build","action":"execute","profile":"naruto","instructions":"x","tools":["Read"],"worktree":"new","model":"m"}"#
+    let member = try JSONDecoder().decode(Team.Member.self, from: Data(text.utf8))
+    #expect(member == Team.Member(id: "build", action: "execute", profile: "naruto", model: "m"),
+            "the fields that moved into Profiles are not read (features/0094)")
 }
 
 @Test func clearingEditsTheDraftAndNothingElse() {
@@ -172,8 +165,6 @@ private func profile(_ name: String, cli: String? = nil, model: String? = nil, e
 @Test func aMembersOwnChoiceComesFirst() {
     var form = standard()
     form.workersCli = "kiro"
-    form.addOverride(from: ["naruto"])
-    form.overrides[0].cli = "codex"
     form.updateMember("build") { $0.cli = "claude" }
     let build = form.member("build")!
     let found = profile("naruto", cli: "claude", model: "anthropic/claude-sonnet-5-5", effort: "high")
@@ -185,11 +176,6 @@ private func profile(_ name: String, cli: String? = nil, model: String? = nil, e
     #expect(cli.isOwn)
 
     form.clearMember("build", .cli)
-    let apart = form.resolve(.cli, for: form.member("build")!, profile: found, defaults: defaults)
-    #expect(apart == MemberValue("codex", from: .teamProfile("naruto")))
-    #expect(apart.sourceText == "this Team, set apart for naruto")
-
-    form.overrides.removeAll()
     let workers = form.resolve(.cli, for: form.member("build")!, profile: found, defaults: defaults)
     #expect(workers == MemberValue("kiro", from: .teamWorkers))
     #expect(workers.sourceText == "this Team's Workers")
@@ -227,46 +213,6 @@ private func profile(_ name: String, cli: String? = nil, model: String? = nil, e
     #expect(form.resolve(.model, for: build, profile: found, defaults: defaults) == MemberValue("claude-sonnet-5.5", from: .teamWorkers))
 }
 
-@Test func aListIsTheMembersOwnOrTheProfiles() {
-    var form = standard()
-    let found = profile("naruto", tools: ["Read", "Grep", "Edit"])
-    let build = form.member("build")!
-    #expect(build.listValue(.tools, profile: found) == MemberValue(["Read", "Grep", "Edit"], from: .profile("naruto")))
-    form.updateMember("build") { $0.tools = ["Read"] }
-    let own = form.member("build")!.listValue(.tools, profile: found)
-    #expect(own == MemberValue(["Read"], from: .member))
-    #expect(own.sourceText == "this Member")
-    #expect(build.listValue(.skills, profile: nil) == MemberValue([], from: .profile("naruto")))
-}
-
-@Test func theOtherFieldsSayWhereTheyComeFrom() {
-    var build = Team.Member(id: "build", action: "execute", profile: "naruto")
-    #expect(build.lessonsValue == MemberValue(true, from: .standard))
-    #expect(build.lessonsValue.sourceText == "the default")
-    build.lessons = false
-    #expect(build.lessonsValue == MemberValue(false, from: .member))
-
-    #expect(build.writesValue(profile: profile("naruto", writes: true)) == MemberValue(true, from: .profile("naruto")))
-    build.writes = false
-    #expect(build.writesValue(profile: profile("naruto", writes: true)) == MemberValue(false, from: .member))
-
-    #expect(build.worktreeValue() == MemberValue("new", from: .action("execute")))
-    #expect(build.worktreeValue().sourceText == "from the execute Action")
-    build.worktree = "current"
-    #expect(build.worktreeValue() == MemberValue("current", from: .member))
-    let custom = Team.Member(id: "x", action: "custom", profile: "x")
-    #expect(custom.worktreeValue() == MemberValue("current", from: .standard))
-}
-
-@Test func theInstructionNoteSaysWhatItDoesToTheRole() {
-    var build = Team.Member(id: "build", action: "execute", profile: "naruto")
-    #expect(build.instructionNote(roleOf: "naruto") == "Empty: naruto's role is used as it is.")
-    build.instructions = "Keep diffs small."
-    #expect(build.instructionNote(roleOf: "naruto") == "Added after naruto's role.")
-    build.replaceRole = true
-    #expect(build.instructionNote(roleOf: "naruto") == "Replaces naruto's role.")
-}
-
 @Test func yourDefaultsReadFromTheSettings() throws {
     let settings = try JSONDecoder().decode(AgentSettings.self, from: Data("""
     {"cli":"kiro","model":"claude-sonnet-5.5","forceCli":true,
@@ -276,74 +222,21 @@ private func profile(_ name: String, cli: String? = nil, model: String? = nil, e
     #expect(MemberDefaults(settings: nil) == MemberDefaults())
 }
 
-// MARK: Tools
-
-@Test func checkingAToolKeepsTheChecklistsOrder() {
-    #expect(MemberTools.toggled(["Read", "Edit"], "Grep", on: true) == ["Read", "Grep", "Edit"])
-    #expect(MemberTools.toggled(["Read", "Grep", "Edit"], "Grep", on: false) == ["Read", "Edit"])
-    #expect(MemberTools.toggled(["Edit", "Read"], "Bash", on: true) == ["Read", "Edit", "Bash"])
-    #expect(MemberTools.toggled(["Read"], "Read", on: true) == ["Read"])
-}
-
-@Test func theLastToolStaysChecked() {
-    #expect(MemberTools.toggled(["Read"], "Read", on: false) == ["Read"],
-            "An empty list would hand the choice back to the Profile")
-}
-
-@Test func aToolTheChecklistDoesNotKnowIsKept() {
-    #expect(MemberTools.toggled(["Read", "NotebookEdit"], "Bash", on: true) == ["Read", "Bash", "NotebookEdit"])
-    #expect(MemberTools.toggled(["Read", "NotebookEdit"], "Read", on: false) == ["NotebookEdit"])
-}
-
-@Test func codexIgnoresTheListAndClaudeUsesIt() {
-    #expect(MemberTools.note(tools: ["Read", "Edit"], cli: "codex") == "Codex ignores a tool list and uses its own tools.")
-    #expect(MemberTools.note(tools: [], cli: "codex") == nil)
-    #expect(MemberTools.note(tools: ["Read", "Grep", "Glob"], cli: "claude") == nil)
-}
-
-@Test func kiroNamesTheToolsItCannotMap() {
-    #expect(MemberTools.note(tools: ["Read", "Edit", "Bash"], cli: "kiro") == nil)
-    #expect(MemberTools.note(tools: ["Read", "Grep"], cli: "kiro") == "Kiro has no Grep and leaves it out.")
-    #expect(MemberTools.note(tools: ["Read", "Grep", "Glob", "Edit"], cli: "kiro") == "Kiro has no Grep and Glob and leaves them out.")
-    #expect(MemberTools.note(tools: ["Grep", "Glob"], cli: "kiro") == "Kiro has no Grep and Glob, so it gets its whole set of tools.")
-    #expect(MemberTools.note(tools: ["Glob"], cli: "kiro") == "Kiro has no Glob, so it gets its whole set of tools.")
-}
-
-@Test func theChecklistIsTheEightToolsTheRolesName() {
-    #expect(MemberTools.all == ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "WebFetch", "WebSearch"])
-}
-
-// MARK: Comma lists
-
-@Test func aCommaListIsTrimmedWithoutBlanksOrRepeats() {
-    #expect(CommaList.parse(" CONTEXT.md ,, CLAUDE.md,CONTEXT.md , ") == ["CONTEXT.md", "CLAUDE.md"])
-    #expect(CommaList.parse("") == [])
-    #expect(CommaList.parse(" , ") == [])
-    #expect(CommaList.parse("solo") == ["solo"])
-}
-
-@Test func aCommaListFormatsAndParsesBack() {
-    let names = ["a", "b c", "d.md"]
-    #expect(CommaList.format(names) == "a, b c, d.md")
-    #expect(CommaList.parse(CommaList.format(names)) == names)
-    #expect(CommaList.format([]) == "")
-}
-
 // MARK: The draft round trip
 
 @Test func aMemberEditIsOnlyInTheDraftUntilItIsSaved() throws {
     let saved = standard()
     var form = saved
     form.updateMember("build") {
-        $0.instructions = "Keep diffs small."
-        $0.skills = CommaList.parse("a, b")
+        $0.model = "claude-opus-5-5"
+        $0.effort = "max"
     }
     #expect(form != saved)
     let members = try #require(form.fields["members"] as? [[String: Any]])
     let build = try #require(members.first { $0["id"] as? String == "build" })
-    #expect(build["instructions"] as? String == "Keep diffs small.")
-    #expect(build["skills"] as? [String] == ["a", "b"])
-    form.clearMember("build", .instructions)
-    form.clearMember("build", .skills)
+    #expect(build["model"] as? String == "claude-opus-5-5")
+    #expect(build["effort"] as? String == "max")
+    form.clearMember("build", .model)
+    form.clearMember("build", .effort)
     #expect(form == saved, "Clearing what was set puts the draft back to what was saved")
 }

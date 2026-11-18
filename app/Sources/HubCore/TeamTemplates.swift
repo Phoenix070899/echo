@@ -27,7 +27,7 @@ extension Action {
         Action(id: "run", title: "Run commands",
                description: "Run terminal commands such as tests and builds, and report the output.",
                profile: "lee",
-               routing: "Send terminal commands to run, such as tests, builds, installs or git, and get their exit codes and output back.",
+               routing: "Send commands that run long or print a lot, such as a full test suite or a server, and get their exit codes and the output that matters back.",
                writes: false, worktree: "current"),
         Action(id: "scribe", title: "Keep notes",
                description: "Merge stated preferences and lessons into the files that keep them.",

@@ -4,7 +4,7 @@ import SwiftUI
 
 /// One part of Settings, listed down the page's left side.
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case window, theme, background, font, multiplexer, teams, providers, worktrees, memory, remote
+    case window, theme, background, font, multiplexer, teams, profiles, providers, worktrees, memory, remote
 
     var id: String { rawValue }
 
@@ -14,8 +14,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         self.init(rawValue: SettingsSectionName.canonical(name))
     }
 
-    /// Teams fill the whole width beside the list (ui-ux/0101); every other section is one column.
-    var fillsWidth: Bool { self == .teams }
+    /// Teams and Profiles fill the whole width beside the list (ui-ux/0101, ui-ux/0145); every
+    /// other section is one column.
+    var fillsWidth: Bool { self == .teams || self == .profiles }
 
     var title: String {
         switch self {
@@ -25,6 +26,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .font: "Font"
         case .multiplexer: "Multiplexer"
         case .teams: "Teams"
+        case .profiles: "Profiles"
         case .providers: "Providers"
         case .worktrees: "Worktrees"
         case .memory: "Preferences and Lessons"
@@ -40,6 +42,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .font: "textformat"
         case .multiplexer: "rectangle.split.2x1"
         case .teams: "person.3"
+        case .profiles: "person.text.rectangle"
         case .providers: "person.crop.circle"
         case .worktrees: "arrow.triangle.branch"
         case .memory: "text.book.closed"
@@ -95,11 +98,14 @@ struct SettingsPage: View {
         .onReceive(model.teamSettings.$asking) { asking in
             if !asking { DispatchQueue.main.async { focused = true } }
         }
+        .onReceive(model.profileSettings.$asking) { asking in
+            if !asking { DispatchQueue.main.async { focused = true } }
+        }
         .onReceive(model.$newTeamShown) { shown in
             if !shown { DispatchQueue.main.async { focused = true } }
         }
         .onKeyPress(.escape) {
-            guard !model.teamSettings.asking, !model.newTeamShown else { return .ignored }
+            guard !model.settingsAsking, !model.newTeamShown else { return .ignored }
             model.hideSettings()
             return .handled
         }
@@ -110,7 +116,7 @@ struct SettingsPage: View {
         .onKeyPress(keys: [.upArrow, .downArrow]) { press in
             let teams = model.teamSettings
             guard SettingsKeys.pageTakesUpDown(treeFocused: teams.treeFocused,
-                                               asking: teams.asking || model.newTeamShown,
+                                               asking: model.settingsAsking || model.newTeamShown,
                                                hasModifiers: !press.modifiers.isEmpty) else { return .ignored }
             let all = SettingsSection.allCases
             let at = all.firstIndex(of: section) ?? 0
@@ -124,7 +130,7 @@ struct SettingsPage: View {
             let teams = model.teamSettings
             guard focused, SettingsKeys.pageEntersTree(treeShown: section == .teams && teams.pane == .team,
                                               treeFocused: teams.treeFocused,
-                                              asking: teams.asking || model.newTeamShown,
+                                              asking: model.settingsAsking || model.newTeamShown,
                                               hasModifiers: !press.modifiers.isEmpty) else { return .ignored }
             teams.treeFocusRequest += 1
             return .handled
@@ -133,7 +139,7 @@ struct SettingsPage: View {
 }
 
 /// A section in the list (ui-ux/0120): its number in mono and its name, 44 pt tall over a 1 pt rule;
-/// the picked one in ink and bold on the sheet's grey; no row has a square (ui-ux/0132).
+/// the picked one in ink and bold on the sheet's grey with the accent edge; no row has a square (ui-ux/0132).
 private struct SectionRow: View {
     let item: SettingsSection
     let picked: Bool
@@ -159,7 +165,8 @@ private struct SectionRow: View {
             .frame(minHeight: 44)
             .frame(maxWidth: .infinity)
             .background(picked || hover.on ? Ledger.paper : .clear)
-            // The list has no squares, so the picked section shows by its fill alone (ui-ux/0132).
+            .pickedEdge(picked)
+            // The list has no squares: the picked section shows by its fill and the accent edge (ui-ux/0152).
             .overlay(alignment: .bottom) { Rectangle().fill(Ledger.rule).frame(height: Ledger.hairline) }
             .contentShape(Rectangle())
         }

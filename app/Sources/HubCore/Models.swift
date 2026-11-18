@@ -281,6 +281,8 @@ public struct WorkerRow: Decodable, Equatable, Identifiable, Sendable {
     /// `w12`.
     public let id: String
     public let profile: String
+    /// Its Profile's face, a picture in Echo's `Faces/`; nil when the Profile has none.
+    public let face: String?
     public let title: String
     public let state: WorkerState
     /// The Worker's lifecycle state: starting, running, done, ended, blocked, exited, lost.
@@ -397,6 +399,25 @@ public struct ModelOption: Decodable, Equatable, Sendable, Identifiable {
     public init(id: String, name: String) {
         self.id = id
         self.name = name
+    }
+}
+
+/// A skill an agent CLI can use (features/0099): `name` as the CLI invokes it
+/// (`mattpocock-skills:tdd` for a Claude Code plugin's), one line about it, and where it comes from:
+/// `source` is "yours", "repo", "built-in" or "plugin", with `plugin` its name.
+public struct SkillOption: Decodable, Equatable, Sendable, Identifiable {
+    public let name: String
+    public let description: String
+    public let source: String
+    public var plugin: String? = nil
+
+    public var id: String { name }
+
+    public init(name: String, description: String = "", source: String = "yours", plugin: String? = nil) {
+        self.name = name
+        self.description = description
+        self.source = source
+        self.plugin = plugin
     }
 }
 
@@ -644,6 +665,8 @@ public func issueReference(_ typed: String) -> String? {
 public struct WorkerProfile: Decodable, Equatable, Identifiable, Sendable {
     public let name: String
     public let description: String
+    /// The face Echo draws for it, a picture in Echo's `Faces/`; nil when it has none.
+    public var face: String? = nil
     /// The model it runs with here, after the settings: "claude-haiku-5-5", or "claude default".
     public let model: String
     /// It edits files, so tries of one Task by it differ and are worth comparing.
@@ -661,11 +684,17 @@ public struct WorkerProfile: Decodable, Equatable, Identifiable, Sendable {
     public var path: String? = nil
     /// Why it cannot run here, when its CLI and model do not fit.
     public var problem: String? = nil
-    /// The Profile's own lists and role text, which a Member of a Team may replace or add to.
+    /// The Profile's own lists and role text.
     public var tools: [String]? = nil
     public var skills: [String]? = nil
     public var context: [String]? = nil
     public var role: String? = nil
+    /// Its prompt carries the repo's Lessons; nil from an older daemon means they do.
+    public var lessons: Bool? = nil
+    /// "current" or "new", the hint the Orchestrator reads; nil leaves it to the Member's Action.
+    public var worktree: String? = nil
+    /// The levels below that its file replaces.
+    public var replaces: [String]? = nil
 
     public var id: String { name }
 }

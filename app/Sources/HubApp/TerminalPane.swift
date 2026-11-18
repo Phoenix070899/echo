@@ -317,10 +317,10 @@ final class GhosttyRuntime {
             },
             close_surface_cb: { _, _ in }
         )
-        let config = Self.makeConfig(.orca)
+        let config = Self.makeConfig(.standard)
         app = ghostty_app_new(&runtime, config)
         self.config = config
-        applied = .orca
+        applied = .standard
         if let app { ghostty_app_set_focus(app, NSApp.isActive) }
         let center = NotificationCenter.default
         center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in

@@ -33,7 +33,7 @@ A named setup for an Orchestrator, its Workers and its rules: which CLI, model a
 _Avoid_: preset, mode, profile
 
 **Member**:
-One node of a Team's graph: a Worker slot with a name, an Action, the Profile it starts from, and the changes this Team makes to that Profile (instruction, model, tools, context). The Orchestrator starts a Worker by its Member's name; the graph is a plan of Hand-offs, and a Member never starts another Member.
+One node of a Team's graph: a Worker slot with a name, an Action, the Profile it starts from, and the CLI, model and effort it runs on in this Team; everything else about the Worker is its Profile's. The Orchestrator starts a Worker by its Member's name; the graph is a plan of Hand-offs, and a Member never starts another Member.
 _Avoid_: node (alone), slot, subagent, role
 
 **Hand-off**:

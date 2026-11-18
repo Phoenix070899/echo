@@ -20,18 +20,16 @@ public struct Team: Decodable, Equatable, Identifiable, Sendable {
         }
     }
 
+    /// What every Worker whose Member names none runs with (features/0094).
     public struct Workers: Decodable, Equatable, Sendable {
         public var cli: String?
         public var model: String?
         public var effort: String?
-        /// Overrides for single Profiles, by Profile name.
-        public var profiles: [String: Setup]?
 
-        public init(cli: String? = nil, model: String? = nil, effort: String? = nil, profiles: [String: Setup]? = nil) {
+        public init(cli: String? = nil, model: String? = nil, effort: String? = nil) {
             self.cli = cli
             self.model = model
             self.effort = effort
-            self.profiles = profiles
         }
     }
 
@@ -40,13 +38,17 @@ public struct Team: Decodable, Equatable, Identifiable, Sendable {
         public var planApproval: Bool?
         public var review: Bool?
         public var mergeWithoutAsking: Bool?
+        /// Times a writer whose verification fails is sent back before it needs the human
+        /// (features/0104); nil is once.
+        public var verifyRetries: Int?
 
         public init(maxWorkers: Int? = nil, planApproval: Bool? = nil, review: Bool? = nil,
-                    mergeWithoutAsking: Bool? = nil) {
+                    mergeWithoutAsking: Bool? = nil, verifyRetries: Int? = nil) {
             self.maxWorkers = maxWorkers
             self.planApproval = planApproval
             self.review = review
             self.mergeWithoutAsking = mergeWithoutAsking
+            self.verifyRetries = verifyRetries
         }
     }
 
@@ -74,9 +76,9 @@ public struct Team: Decodable, Equatable, Identifiable, Sendable {
         }
     }
 
-    /// One Worker slot of the Team (features/0084): an Action, the Profile it starts from, and the
-    /// changes this Team makes to that Profile. A field left out is nil (or empty, for a list) and
-    /// means the level below.
+    /// One Worker slot of the Team (features/0084, 0094): an Action, the Profile it starts from, its
+    /// Hand-offs and place, and the CLI, model and effort it runs on here. Everything else about its
+    /// Worker is its Profile's. A field left out is nil and means the level below.
     public struct Member: Decodable, Equatable, Identifiable, Sendable {
         public var id: String
         public var action: String
@@ -88,46 +90,25 @@ public struct Team: Decodable, Equatable, Identifiable, Sendable {
         /// Its place on the Teams canvas, in points; nil lets Echo lay it out.
         public var x: Int?
         public var y: Int?
-        public var instructions: String?
-        public var replaceRole: Bool?
         public var cli: String?
         public var model: String?
         public var effort: String?
-        public var tools: [String]
-        public var skills: [String]
-        public var context: [String]
-        public var lessons: Bool?
-        public var writes: Bool?
-        /// "current" or "new".
-        public var worktree: String?
 
-        public init(id: String, action: String, profile: String, after: [HandOff]? = nil,
-                    instructions: String? = nil, replaceRole: Bool? = nil, cli: String? = nil,
-                    model: String? = nil, effort: String? = nil, tools: [String] = [],
-                    skills: [String] = [], context: [String] = [], lessons: Bool? = nil,
-                    writes: Bool? = nil, worktree: String? = nil, x: Int? = nil, y: Int? = nil) {
+        public init(id: String, action: String, profile: String, after: [HandOff]? = nil, cli: String? = nil,
+                    model: String? = nil, effort: String? = nil, x: Int? = nil, y: Int? = nil) {
             self.id = id
             self.action = action
             self.profile = profile
             self.after = after
             self.x = x
             self.y = y
-            self.instructions = instructions
-            self.replaceRole = replaceRole
             self.cli = cli
             self.model = model
             self.effort = effort
-            self.tools = tools
-            self.skills = skills
-            self.context = context
-            self.lessons = lessons
-            self.writes = writes
-            self.worktree = worktree
         }
 
         private enum Key: String, CodingKey {
-            case id, action, profile, parent, after, x, y, instructions, replaceRole, cli, model, effort
-            case tools, skills, context, lessons, writes, worktree
+            case id, action, profile, parent, after, x, y, cli, model, effort
         }
 
         public init(from decoder: Decoder) throws {
@@ -141,17 +122,9 @@ public struct Team: Decodable, Equatable, Identifiable, Sendable {
             }
             x = try values.decodeIfPresent(Int.self, forKey: .x)
             y = try values.decodeIfPresent(Int.self, forKey: .y)
-            instructions = try values.decodeIfPresent(String.self, forKey: .instructions)
-            replaceRole = try values.decodeIfPresent(Bool.self, forKey: .replaceRole)
             cli = try values.decodeIfPresent(String.self, forKey: .cli)
             model = try values.decodeIfPresent(String.self, forKey: .model)
             effort = try values.decodeIfPresent(String.self, forKey: .effort)
-            tools = try values.decodeIfPresent([String].self, forKey: .tools) ?? []
-            skills = try values.decodeIfPresent([String].self, forKey: .skills) ?? []
-            context = try values.decodeIfPresent([String].self, forKey: .context) ?? []
-            lessons = try values.decodeIfPresent(Bool.self, forKey: .lessons)
-            writes = try values.decodeIfPresent(Bool.self, forKey: .writes)
-            worktree = try values.decodeIfPresent(String.self, forKey: .worktree)
         }
 
         /// The Hand-offs into it; a Member without `after` hangs from the Orchestrator.
@@ -224,11 +197,7 @@ public struct Team: Decodable, Equatable, Identifiable, Sendable {
     public var summary: String {
         let orchestratorParts = Self.parts(orchestrator?.cli, orchestrator?.model, orchestrator?.effort)
         let workerParts = Self.parts(workers?.cli, workers?.model, workers?.effort)
-        let overrides = workers?.profiles?.count ?? 0
-        var workersLine = workerParts.isEmpty ? "by their Profiles" : workerParts.joined(separator: ", ")
-        if overrides > 0 {
-            workersLine += ", \(overrides) Profile\(overrides == 1 ? "" : "s") set apart"
-        }
+        let workersLine = workerParts.isEmpty ? "by their Profiles" : workerParts.joined(separator: ", ")
         let first = orchestratorParts.isEmpty ? "the settings" : orchestratorParts.joined(separator: ", ")
         return "Orchestrator: \(first). Workers: \(workersLine)."
     }

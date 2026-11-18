@@ -12,8 +12,10 @@ use crate::accounts;
 use crate::cli::Cli;
 use crate::paths;
 
-/// The models Claude Code's own `/model` picker offers every account, best first.
-const CLAUDE: [(&str, &str); 3] = [
+/// The models Claude Code's own `/model` picker offers every account, best first, after Fable 5.2,
+/// which it runs though no list names it yet (features/0102).
+const CLAUDE: [(&str, &str); 4] = [
+    ("anthropic/claude-fable-5-2", "Fable 5.2"),
     ("anthropic/claude-opus-5-5", "Opus 5.5"),
     ("anthropic/claude-sonnet-5-5", "Sonnet 5.5"),
     ("anthropic/claude-haiku-5-5", "Haiku 5.5"),
@@ -137,13 +139,14 @@ mod tests {
             ids,
             [
                 "anthropic/claude-fable-5-1[1m]",
+                "anthropic/claude-fable-5-2",
                 "anthropic/claude-opus-5-5",
                 "anthropic/claude-sonnet-5-5",
                 "anthropic/claude-haiku-5-5"
             ]
         );
         assert_eq!(claude(&config)[0]["name"], "Fable 5.1");
-        assert_eq!(claude(&dir.join("missing")).len(), 3);
+        assert_eq!(claude(&dir.join("missing")).len(), 4);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

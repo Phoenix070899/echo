@@ -858,6 +858,7 @@ private struct CommitRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // A square fill inset from the column's edges, no bar.
         .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+        .pickedEdge(picked)
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: click)
@@ -911,6 +912,7 @@ private struct ChangedFileRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // A square fill inset from the column's edges, no bar.
         .background(picked ? Ledger.selected : hover.on ? Ledger.wash : Color.clear, in: RoundedRectangle(cornerRadius: Ledger.radiusElement, style: .continuous))
+        .pickedEdge(picked)
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: click)

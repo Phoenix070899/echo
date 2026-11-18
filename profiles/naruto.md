@@ -1,6 +1,7 @@
 ---
 name: naruto
 description: Implementer. Does exactly one coding Task, runs its verify command, reports done or blocked.
+face: r01c01
 cli: claude
 model: anthropic/claude-sonnet-5-5
 effort: high

@@ -56,6 +56,7 @@ impl Hub {
                 format!("{}:{}", bin.parent().unwrap().display(), std::env::var("PATH").unwrap()),
             )
             .env_remove("HUB_WORKER")
+            .env_remove("HUB_AGENT")
             .envs(env.iter().copied())
             .output()
             .unwrap()
@@ -626,6 +627,16 @@ fn a_done_worker_closes_once_its_turn_ends_unless_kept_and_a_next_task_reopens_i
 }
 
 #[test]
+fn a_blocked_worker_stays_open_after_its_report_is_delivered() {
+    let hub = Hub::new("blockopen");
+    hub.ok(&["worker", "start", "lee", "--spec", "block here"]);
+    let told = hub.wait();
+    assert!(told.contains("blocked"), "{told}");
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(hub.ok(&["worker", "list"]).contains("w1"), "blocked, so open");
+}
+
+#[test]
 fn a_status_never_wakes_the_orchestrator_but_comes_with_the_next_message() {
     let hub = Hub::new("quietstatus");
     hub.ok(&["worker", "start", "lee", "--spec", "status"]);
@@ -843,6 +854,38 @@ fn snapshot(hub: &Hub) -> serde_json::Value {
     let mut lines = BufReader::new(stream).lines();
     lines.next();
     serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap()
+}
+
+#[test]
+fn a_workers_row_shows_its_profiles_face_and_a_new_face_shows_at_once() {
+    let hub = Hub::new("faces");
+    hub.ok(&["worker", "start", "lee", "--spec", "status then wait"]);
+    assert_eq!(
+        snapshot(&hub)["workers"][0]["face"],
+        "r01c09",
+        "Echo's own lee wears its face"
+    );
+    let set = hub.call(
+        "profile.set",
+        serde_json::json!({ "name": "lee", "fields": { "face": "r10c10" } }),
+    );
+    assert!(set["error"].is_null(), "{set}");
+    let listed = hub.call("profiles.list", serde_json::json!({ "repo": hub.repo_key() }));
+    let lee = listed["result"]["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "lee")
+        .unwrap()
+        .clone();
+    assert_eq!(lee["face"], "r10c10", "{lee}");
+    assert_eq!(snapshot(&hub)["workers"][0]["face"], "r10c10", "the Worker already out");
+    let cleared = hub.call(
+        "profile.set",
+        serde_json::json!({ "name": "lee", "fields": { "face": "" } }),
+    );
+    assert!(cleared["error"].is_null(), "{cleared}");
+    assert!(snapshot(&hub)["workers"][0]["face"].is_null());
 }
 
 #[test]
@@ -1354,12 +1397,7 @@ fn a_team_with_members_keeps_them_in_order_and_one_on_an_unknown_profile_is_refu
     hub.ok(&["sessions"]);
     let members = serde_json::json!([
         { "id": "scan", "action": "scan", "profile": "hinata" },
-        {
-            "id": "build", "action": "execute", "profile": "naruto",
-            "instructions": "Keep diffs small.", "replaceRole": true, "model": "anthropic/claude-sonnet-5-5",
-            "effort": "low", "tools": ["Read", "Edit"], "skills": ["echo"], "context": ["CONTEXT.md"],
-            "lessons": false, "writes": true, "worktree": "new"
-        },
+        { "id": "build", "action": "execute", "profile": "naruto", "model": "anthropic/claude-sonnet-5-5", "effort": "low" },
         { "id": "check", "action": "verify", "profile": "sasuke", "after": [{ "from": "build" }], "x": 96, "y": 280 },
     ]);
     let saved = hub.call(
@@ -1426,18 +1464,19 @@ fn ui_settings_takes_teams_and_the_old_name_agents_for_it() {
     hub.ok(&["ui", "settings", "agents"]);
     hub.ok(&["ui", "settings"]);
     hub.ok(&["ui", "settings", "memory"]);
+    hub.ok(&["ui", "settings", "profiles"]);
     let refused = hub.fails(&["ui", "settings", "nope"]);
     assert!(
         refused.contains("no Settings section") && refused.contains("teams"),
         "{refused}"
     );
     let mut seen = Vec::new();
-    while seen.len() < 4 {
+    while seen.len() < 5 {
         let snapshot: serde_json::Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
         seen = snapshot["ui"].as_array().cloned().unwrap_or_default();
     }
     let sections: Vec<&str> = seen.iter().map(|r| r["text"].as_str().unwrap()).collect();
-    assert_eq!(sections, ["teams", "teams", "teams", "memory"], "{seen:?}");
+    assert_eq!(sections, ["teams", "teams", "teams", "memory", "profiles"], "{seen:?}");
 }
 
 #[test]
@@ -1510,6 +1549,158 @@ fn settings_and_profile_edits_from_echo_land_in_the_humans_files() {
     assert!(lee["effort"].is_null());
     hub.call("profile.reset", serde_json::json!({ "name": "lee" }));
     assert!(!hub.state.join("profiles/lee.md").exists());
+}
+
+#[test]
+fn every_profile_field_and_its_role_are_set_from_echo_and_a_profile_in_use_is_not_deleted() {
+    let hub = Hub::new("profileedit");
+    hub.ok(&["sessions"]);
+    let made = hub.call(
+        "profile.new",
+        serde_json::json!({ "name": "api-builder", "from": "naruto", "repo": hub.repo_key() }),
+    );
+    assert!(made["error"].is_null(), "{made}");
+    let set = hub.call(
+        "profile.set",
+        serde_json::json!({ "name": "api-builder", "repo": hub.repo_key(), "fields": {
+            "description": "Builds the API.", "cli": "claude", "model": "anthropic/claude-opus-5-5", "effort": "max",
+            "tools": ["Read", "Edit", " "], "skills": ["tdd"], "context": [], "writes": true, "lessons": false,
+            "worktree": "new", "role": "You build src/api only.\n\nKeep diffs small."
+        } }),
+    );
+    assert!(set["error"].is_null(), "{set}");
+    let listed = hub.call("profiles.list", serde_json::json!({ "repo": hub.repo_key() }));
+    let mine = listed["result"]["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "api-builder")
+        .cloned()
+        .unwrap();
+    assert_eq!(mine["role"], "You build src/api only.\n\nKeep diffs small.", "{mine}");
+    assert_eq!(mine["tools"], serde_json::json!(["Read", "Edit"]), "{mine}");
+    assert_eq!(mine["skills"], serde_json::json!(["tdd"]), "{mine}");
+    assert_eq!(mine["context"], serde_json::json!([]), "{mine}");
+    assert_eq!(
+        (&mine["lessons"], &mine["worktree"], &mine["writes"], &mine["ownEffort"]),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!("new"),
+            &serde_json::json!(true),
+            &serde_json::json!("max")
+        )
+    );
+    assert_eq!(mine["description"], "Builds the API.");
+    for bad in [
+        serde_json::json!({ "worktree": "far" }),
+        serde_json::json!({ "role": "  " }),
+        serde_json::json!({ "description": "two\nlines" }),
+    ] {
+        let refused = hub.call(
+            "profile.set",
+            serde_json::json!({ "name": "api-builder", "repo": hub.repo_key(), "fields": bad }),
+        );
+        assert_eq!(refused["ok"], false, "{bad}: {refused}");
+    }
+
+    put_team(
+        &hub,
+        "shop",
+        r#"{"members": [{"id": "api", "action": "execute", "profile": "api-builder"},
+            {"id": "api-2", "action": "execute", "profile": "api-builder"}]}"#,
+    );
+    let refused = hub.call(
+        "profile.delete",
+        serde_json::json!({ "name": "api-builder", "repo": hub.repo_key() }),
+    );
+    let why = refused["error"].as_str().unwrap_or_else(|| panic!("{refused}"));
+    assert!(why.contains("shop (api, api-2)"), "{why}");
+    assert!(hub.state.join("profiles/api-builder.md").exists());
+    let deleted = hub.fails(&["profile", "delete", "api-builder"]);
+    assert!(
+        deleted.contains("shop (api, api-2)"),
+        "the CLI refuses as well: {deleted}"
+    );
+
+    hub.call("profile.copy", serde_json::json!({ "name": "naruto" }));
+    let copy = hub.call(
+        "profile.delete",
+        serde_json::json!({ "name": "naruto", "repo": hub.repo_key() }),
+    );
+    assert!(copy["error"].is_null(), "your copy of Echo's naruto: {copy}");
+    std::fs::remove_file(hub.state.join("teams/shop.json")).unwrap();
+    assert!(hub
+        .ok(&["profile", "delete", "api-builder"])
+        .contains("Deleted yours api-builder"));
+}
+
+#[test]
+fn a_users_old_team_moves_its_members_settings_into_profiles_and_its_workers_run_as_before() {
+    let hub = Hub::new("teammigrate");
+    hub.ok(&["status"]);
+    put_team(
+        &hub,
+        "old",
+        r#"{"workers": {"cli": "kiro", "model": "claude-haiku-5.5",
+                "profiles": {"naruto": {"model": "claude-sonnet-5.5", "effort": "low"}}},
+            "members": [
+                {"id": "build", "action": "execute", "profile": "naruto", "instructions": "Only touch src/api.",
+                 "tools": ["Read", "Edit"], "worktree": "current"},
+                {"id": "scan", "action": "scan", "profile": "hinata"}]}"#,
+    );
+    let listed = hub.call("team.list", serde_json::json!({ "repo": hub.repo_key() }));
+    let old = listed["result"]["teams"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "old")
+        .cloned()
+        .unwrap();
+    assert!(old["problem"].is_null(), "{old}");
+    assert_eq!(
+        old["members"][0],
+        serde_json::json!({ "id": "build", "action": "execute", "profile": "old-build",
+                            "model": "claude-sonnet-5.5", "effort": "low" }),
+        "{old}"
+    );
+    assert!(old["workers"].get("profiles").is_none(), "{old}");
+    let file = std::fs::read_to_string(hub.state.join("teams/old.json")).unwrap();
+    assert!(!file.contains("instructions") && !file.contains("profiles"), "{file}");
+
+    let profiles = hub.call("profiles.list", serde_json::json!({ "repo": hub.repo_key() }));
+    let moved = profiles["result"]["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "old-build")
+        .cloned()
+        .unwrap_or_else(|| panic!("{profiles}"));
+    assert_eq!(moved["level"], "yours");
+    assert_eq!(moved["tools"], serde_json::json!(["Read", "Edit"]));
+    assert_eq!(moved["worktree"], "current");
+    assert!(
+        moved["role"]
+            .as_str()
+            .unwrap()
+            .ends_with("# This Team's instructions for you\n\nOnly touch src/api."),
+        "{moved}"
+    );
+    let log = std::fs::read_to_string(hub.state.join("hubd.log")).unwrap_or_default();
+    assert!(log.contains("old-build"), "the move is logged: {log}");
+
+    let agent = open_orchestrator(&hub, Some("old"));
+    start_under(&hub, agent, &["build", "--spec", "done quickly"]);
+    hub.eventually("w1 to finish", || row_of(&hub, 1)["phase"] == "done");
+    let row = row_of(&hub, 1);
+    assert_eq!(
+        (&row["member"], &row["profile"]),
+        (&serde_json::json!("build"), &serde_json::json!("old-build"))
+    );
+    assert_eq!(
+        runs_of(&row),
+        (serde_json::json!("kiro"), "claude-sonnet-5.5".into(), "low".into()),
+        "the Worker runs on what the old entry gave it"
+    );
 }
 
 #[test]
@@ -1674,8 +1865,9 @@ fn a_repo_runs_several_orchestrators_and_each_hears_only_its_workers() {
     assert!(agents.iter().all(|agent| agent["live"] == true));
 
     // `echoctl worker start` in b's terminal carries HUB_AGENT=b.
+    // `--keep`, so w1 is still listed after it settles instead of closing itself (features/0090).
     let started = hub.run_with(
-        &["worker", "start", "lee", "--spec", "done quickly"],
+        &["worker", "start", "lee", "--spec", "done quickly", "--keep"],
         &[("HUB_AGENT", &b.to_string())],
     );
     assert!(started.status.success(), "{}", String::from_utf8_lossy(&started.stderr));
@@ -1707,6 +1899,44 @@ fn a_repo_runs_several_orchestrators_and_each_hears_only_its_workers() {
     hub.call("agent.forget", serde_json::json!({ "agent": a }));
     let sessions = hub.call("sessions.list", serde_json::json!({}));
     assert_eq!(sessions["result"]["sessions"][0]["agents"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn each_orchestrators_inbox_and_brief_show_only_its_workers_questions() {
+    let hub = Hub::new("inboxes");
+    hub.ok(&["status"]);
+    let repo = hub.repo_key();
+    let open = |name: &str| {
+        hub.call(
+            "agent.open",
+            serde_json::json!({ "repo": repo, "kind": "orchestrator", "name": name }),
+        )["result"]["agent"]
+            .as_i64()
+            .unwrap()
+            .to_string()
+    };
+    let (a, b) = (open("A"), open("B"));
+
+    let started = hub.run_with(
+        &["worker", "start", "lee", "--spec", "ask about color"],
+        &[("HUB_AGENT", &b)],
+    );
+    assert!(started.status.success(), "{}", String::from_utf8_lossy(&started.stderr));
+    hub.eventually("w1 to ask", || hub.ok(&["inbox"]).contains("#1 from w1"));
+
+    let shown = |args: &[&str], agent: &str| {
+        let out = hub.run_with(args, &[("HUB_AGENT", agent)]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let inbox_a = shown(&["inbox"], &a);
+    assert!(inbox_a.contains("No unanswered questions."), "{inbox_a}");
+    let inbox_b = shown(&["inbox"], &b);
+    assert!(inbox_b.contains("#1 from w1"), "{inbox_b}");
+    let brief_a = shown(&["brief"], &a);
+    assert!(!brief_a.contains("#1 from w1"), "{brief_a}");
+    let brief_b = shown(&["brief"], &b);
+    assert!(brief_b.contains("#1 from w1: Which color?"), "{brief_b}");
 }
 
 #[test]
@@ -3399,9 +3629,12 @@ fn echoctl_ui_orchestrator_passes_its_team() {
     assert!(refused.contains("unknown team"), "{refused}");
 }
 
-/// A Team whose Workers run on Kiro: Haiku at medium for all, naruto on Sonnet at low.
-const KIRO_WORKERS: &str = r#"{"workers": {"cli": "kiro", "model": "claude-haiku-5.5", "effort": "medium",
-    "profiles": {"naruto": {"model": "claude-sonnet-5.5", "effort": "low"}}}}"#;
+/// A Team whose Workers run on Kiro: Haiku at medium for all, its naruto Member on Sonnet at low.
+const KIRO_WORKERS: &str = r#"{"workers": {"cli": "kiro", "model": "claude-haiku-5.5", "effort": "medium"},
+    "members": [{"id": "build", "action": "execute", "profile": "naruto", "model": "claude-sonnet-5.5", "effort": "low"}]}"#;
+
+/// KIRO_WORKERS without Members.
+const KIRO_ALL: &str = r#"{"workers": {"cli": "kiro", "model": "claude-haiku-5.5", "effort": "medium"}}"#;
 
 fn open_orchestrator(hub: &Hub, team: Option<&str>) -> i64 {
     let mut params = serde_json::json!({ "repo": hub.repo_key(), "kind": "orchestrator" });
@@ -3464,7 +3697,7 @@ fn workers_run_with_the_team_of_the_orchestrator_that_started_them() {
     assert_eq!(
         runs_of(&row_of(&hub, 2)),
         kiro("claude-sonnet-5.5", "low"),
-        "the Team's entry for naruto"
+        "the Team's naruto Member"
     );
     assert_eq!(
         runs_of(&row_of(&hub, 3)),
@@ -3486,8 +3719,7 @@ fn a_fan_out_and_a_verifier_follow_the_team_of_their_orchestrator() {
     put_team(
         &hub,
         "lean",
-        r#"{"workers": {"cli": "kiro", "model": "claude-haiku-5.5", "effort": "low",
-            "profiles": {"sasuke": {"model": "claude-sonnet-5.5", "effort": "medium"}}}}"#,
+        r#"{"workers": {"cli": "kiro", "model": "claude-haiku-5.5", "effort": "low"}}"#,
     );
     let other = open_orchestrator(&hub, None);
     let with = open_orchestrator(&hub, Some("lean"));
@@ -3509,7 +3741,7 @@ fn a_fan_out_and_a_verifier_follow_the_team_of_their_orchestrator() {
             "{row}"
         );
     }
-    // The verifier the daemon starts for a writer is its Worker too: sasuke, by the Team's entry.
+    // The verifier the daemon starts for a writer is its Worker too: bare sasuke, on the Team's workers.
     start_under(&hub, with, &["lee", "--spec", "next FAILME", "--verify"]);
     hub.eventually("the verifier to start", || {
         snapshot(&hub)["workers"]
@@ -3528,7 +3760,7 @@ fn a_fan_out_and_a_verifier_follow_the_team_of_their_orchestrator() {
     assert_eq!(verifier["agent"], with, "{verifier}");
     assert_eq!(
         runs_of(&verifier),
-        (serde_json::json!("kiro"), "claude-sonnet-5.5".into(), "medium".into()),
+        (serde_json::json!("kiro"), "claude-haiku-5.5".into(), "low".into()),
         "{verifier}"
     );
 }
@@ -3545,7 +3777,7 @@ fn forcecli_applies_to_a_team_worker_only_where_the_team_names_nothing() {
     put_team(
         &hub,
         "naruto-only",
-        r#"{"workers": {"profiles": {"naruto": {"model": "claude-sonnet-5.5"}}}}"#,
+        r#"{"members": [{"id": "build", "action": "execute", "profile": "naruto", "model": "claude-sonnet-5.5"}]}"#,
     );
     let agent = open_orchestrator(&hub, Some("naruto-only"));
     start_under(&hub, agent, &["lee", "--spec", "done quickly"]);
@@ -3562,7 +3794,7 @@ fn forcecli_applies_to_a_team_worker_only_where_the_team_names_nothing() {
     assert_eq!(
         runs_of(&row_of(&hub, 2)),
         kiro("claude-sonnet-5.5", "high"),
-        "the Team's model beats the forced one; the forced cli stays"
+        "the Member's model beats the forced one; the forced cli stays"
     );
 }
 
@@ -3628,7 +3860,10 @@ fn profile_list_shows_what_each_profile_runs_with_under_a_team() {
     let under = hub.ok(&["profile", "list", "--team", "lean"]);
     assert!(lee(&under).contains("kiro claude-haiku-5.5 medium"), "{under}");
     let naruto = under.lines().find(|l| l.starts_with("naruto ")).unwrap();
-    assert!(naruto.contains("kiro claude-sonnet-5.5 low"), "{under}");
+    assert!(
+        naruto.contains("kiro claude-haiku-5.5 medium"),
+        "a Profile's line shows the Team's workers, not one Member's: {under}"
+    );
     assert!(hub
         .fails(&["profile", "list", "--team", "nope"])
         .contains("unknown team"));
@@ -3733,7 +3968,7 @@ fn a_worker_starts_as_the_member_a_name_stands_for_and_runs_with_its_choices() {
 fn a_team_without_members_and_an_unknown_name_start_as_they_always_did() {
     let hub = Hub::new("member-none");
     hub.ok(&["status"]);
-    put_team(&hub, "lean", KIRO_WORKERS);
+    put_team(&hub, "lean", KIRO_ALL);
     put_team(&hub, "crew", CREW);
     let (lean, crew) = (
         open_orchestrator(&hub, Some("lean")),
@@ -3745,7 +3980,7 @@ fn a_team_without_members_and_an_unknown_name_start_as_they_always_did() {
     assert!(row["member"].is_null() && row["profile"] == "naruto", "{row}");
     assert_eq!(
         runs_of(&row),
-        (serde_json::json!("kiro"), "claude-sonnet-5.5".into(), "low".into())
+        (serde_json::json!("kiro"), "claude-haiku-5.5".into(), "medium".into())
     );
 
     // A name that is no Member and no Profile is refused, with or without Members in the Team.
@@ -3942,6 +4177,22 @@ fn a_verify_member_that_gives_no_verdict_or_always_fails_is_reported_by_its_id()
     );
 }
 
+#[test]
+fn a_teams_verify_retries_send_a_failing_writer_back_that_many_times() {
+    let hub = Hub::new("verify-retries");
+    hub.ok(&["status"]);
+    put_team(&hub, "loop", r#"{"rules": {"verifyRetries": 3}}"#);
+    let agent = open_orchestrator(&hub, Some("loop"));
+    start_under(&hub, agent, &["lee", "--spec", "next ALWAYSFAIL", "--verify", "--keep"]);
+    let told = hub.wait();
+    assert!(told.contains("failed again after 3 retries"), "{told}");
+    let verifiers = (2..=5).filter(|n| row_of(&hub, *n)["profile"] == "sasuke").count();
+    assert_eq!(verifiers, 4, "the first check and one after each of the 3 retries");
+    put_team(&hub, "wild", r#"{"rules": {"verifyRetries": 11}}"#);
+    let listed = hub.ok(&["team", "list"]);
+    assert!(listed.contains("rules.verifyRetries is 1 to 10, not 11"), "{listed}");
+}
+
 /// A Team that sets the review rule and nothing else.
 fn review_team(hub: &Hub, name: &str, review: bool) -> i64 {
     put_team(hub, name, &format!(r#"{{"rules": {{"review": {review}}}}}"#));
@@ -4130,12 +4381,127 @@ fn settings_lists_each_clis_models_as_echo_names_them() {
             .collect()
     };
     assert_eq!(
-        ids("claude")[..2],
-        ["anthropic/claude-fable-5-1", "anthropic/claude-opus-5-5"]
+        ids("claude")[..3],
+        [
+            "anthropic/claude-fable-5-1",
+            "anthropic/claude-fable-5-2",
+            "anthropic/claude-opus-5-5"
+        ]
     );
     assert_eq!(models["claude"][0]["name"], "Fable 5.1");
     assert_eq!(ids("codex"), ["openai/gpt-test"]);
     assert_eq!(ids("kiro"), ["claude-haiku-5.5"]);
+}
+
+#[test]
+fn settings_lists_each_clis_skills_with_the_repos_own() {
+    let hub = Hub::new("skills");
+    let claude = hub.state.join("human-claude");
+    let write = |path: PathBuf, text: &str| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write(
+        claude.join("skills/graft/SKILL.md"),
+        "---\nname: graft\ndescription: >-\n  Find code\n  fast.\n---\n",
+    );
+    let plugin = hub.state.join("plugin");
+    write(
+        plugin.join("skills/tdd/SKILL.md"),
+        "---\nname: tdd\ndescription: Test first.\n---\n",
+    );
+    write(
+        claude.join("plugins/installed_plugins.json"),
+        &serde_json::json!({ "plugins": { "matt@official": [{ "scope": "user", "installPath": plugin }] } })
+            .to_string(),
+    );
+    write(
+        claude.join("settings.json"),
+        r#"{"enabledPlugins": {"matt@official": true}}"#,
+    );
+    write(
+        hub.repo.join(".claude/skills/release/SKILL.md"),
+        "---\nname: release\ndescription: Ship it.\n---\n",
+    );
+    write(hub.repo.join(".agents/skills/tidy/SKILL.md"), "---\nname: tidy\n---\n");
+    let out = hub.run_with(&["status"], &[("CLAUDE_CONFIG_DIR", claude.to_str().unwrap())]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let listed = hub.call("skills.list", serde_json::json!({ "repo": hub.repo }));
+    let skills = &listed["result"]["skills"];
+    let names = |cli: &str| -> Vec<String> {
+        skills[cli]
+            .as_array()
+            .unwrap_or_else(|| panic!("no {cli} in {listed}"))
+            .iter()
+            .map(|skill| skill["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(names("claude"), ["graft", "release", "matt:tdd"]);
+    assert_eq!(skills["claude"][0]["description"], "Find code fast.");
+    assert_eq!(skills["claude"][1]["source"], "repo");
+    assert_eq!(skills["claude"][2]["plugin"], "matt");
+    // Codex lists them from the repo it runs in.
+    assert_eq!(names("codex"), ["tidy", "pdf:pdf"]);
+    assert_eq!(skills["codex"][0]["source"], "repo", "{listed}");
+    assert_eq!(names("kiro"), Vec::<String>::new());
+    // Without a repo, only yours and the plugins'.
+    let listed = hub.call("skills.list", serde_json::json!({}));
+    let claude: Vec<&str> = listed["result"]["skills"]["claude"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|skill| skill["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(claude, ["graft", "matt:tdd"]);
+}
+
+#[test]
+fn a_profile_is_drafted_by_the_agent_picked_and_a_draft_can_be_cancelled() {
+    let hub = Hub::new("draft");
+    hub.ok(&["status"]);
+    let params = |request: &str, id: &str| {
+        serde_json::json!({
+            "repo": hub.repo, "id": id, "cli": "claude", "model": "anthropic/claude-sonnet-5-5",
+            "request": request, "profileCli": "claude", "tools": ["Read", "Edit"],
+            "form": { "name": "sai", "description": "", "tools": [], "skills": [], "context": ["CONTEXT.md"],
+                      "writes": false, "role": "You are a starter." },
+        })
+    };
+    let drafted = hub.call("profile.draft", params("a UX designer", "d1"));
+    let result = &drafted["result"];
+    assert_eq!(result["fields"]["description"], "Drafted designer", "{drafted}");
+    assert_eq!(result["fields"]["tools"], serde_json::json!(["Read"]));
+    assert_eq!(
+        result["fields"]["context"],
+        serde_json::json!(["CONTEXT.md"]),
+        "left out, the form's stays"
+    );
+    assert_eq!(result["fields"]["role"], "You are Test.");
+    assert_eq!(result["summary"], "Made a designer.");
+    assert_eq!(result["dropped"], serde_json::json!(["Teleport"]));
+    let prompt = std::fs::read_to_string(hub.state.join("last-draft-prompt")).unwrap();
+    for part in [
+        "a UX designer",
+        "You are a starter.",
+        "# The Worker Contract",
+        "- hinata: ",
+    ] {
+        assert!(prompt.contains(part), "the prompt misses {part:?}");
+    }
+
+    std::thread::scope(|scope| {
+        let slow = scope.spawn(|| hub.call("profile.draft", params("SLOWDRAFT", "d2")));
+        std::thread::sleep(Duration::from_secs(2));
+        let started = Instant::now();
+        hub.call("profile.draft.cancel", serde_json::json!({ "id": "d2" }));
+        let cancelled = slow.join().unwrap();
+        assert!(
+            cancelled["error"].as_str().unwrap().contains("cancelled"),
+            "{cancelled}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+    });
 }
 
 /// A Team whose `build` hands off to `test` and `test` to `notes`, both automatically, and

@@ -5,23 +5,6 @@ import Foundation
 /// here, the same way the daemon checks them (features/0084, 0092); the daemon validates everything
 /// else and its message is shown as it is (features/0081).
 public struct TeamForm: Equatable, Sendable {
-    /// One Profile whose Worker setup differs from the Team's Workers.
-    public struct Override: Equatable, Identifiable, Sendable {
-        public let id: Int
-        public var profile: String
-        public var cli: String
-        public var model: String
-        public var effort: String
-
-        public init(id: Int, profile: String, cli: String = "", model: String = "", effort: String = "") {
-            self.id = id
-            self.profile = profile
-            self.cli = cli
-            self.model = model
-            self.effort = effort
-        }
-    }
-
     /// Where a Team can be kept, as `team.save` names the levels.
     public static let userLevel = "user"
     public static let repoLevel = "repo"
@@ -43,34 +26,21 @@ public struct TeamForm: Equatable, Sendable {
     public var workersCli = ""
     public var workersModel = ""
     public var workersEffort = ""
-    public var overrides: [Override] = []
     /// nil leaves a rule to the human's Orchestrator settings.
     public var maxWorkers: Int?
     public var planApproval: Bool?
     public var review: Bool?
     public var mergeWithoutAsking: Bool?
+    /// nil sends a writer back once after a failed verification (features/0104).
+    public var verifyRetries: Int?
     public var instructions = ""
     /// The Team's Members in file order. The form keeps every field a Member came with, so a Team
     /// saved without edits sends them all back; `team.save` replaces the file with what it gets.
     public var members: [Team.Member] = []
-    private var nextOverrideID = 0
 
     public init() {}
 
-    /// Equal when every field the human can edit is equal; the counter that numbers new rows is
-    /// not one of them, so a form edited and edited back is not changed.
-    public static func == (a: TeamForm, b: TeamForm) -> Bool {
-        a.name == b.name && a.isNew == b.isNew && a.level == b.level && a.description == b.description
-            && a.orchestratorCli == b.orchestratorCli && a.orchestratorModel == b.orchestratorModel
-            && a.orchestratorEffort == b.orchestratorEffort && a.rotateAt == b.rotateAt
-            && a.workersCli == b.workersCli && a.workersModel == b.workersModel
-            && a.workersEffort == b.workersEffort && a.overrides == b.overrides
-            && a.maxWorkers == b.maxWorkers && a.planApproval == b.planApproval && a.review == b.review
-            && a.mergeWithoutAsking == b.mergeWithoutAsking && a.instructions == b.instructions
-            && a.members == b.members
-    }
-
-    /// A saved Team in the fields. Its overrides come in Profile order, so the rows keep still.
+    /// A saved Team in the fields.
     public init(team: Team) {
         name = team.name
         isNew = false
@@ -83,15 +53,11 @@ public struct TeamForm: Equatable, Sendable {
         workersCli = team.workers?.cli ?? ""
         workersModel = team.workers?.model ?? ""
         workersEffort = team.workers?.effort ?? ""
-        for (profile, setup) in (team.workers?.profiles ?? [:]).sorted(by: { $0.key < $1.key }) {
-            overrides.append(Override(id: nextOverrideID, profile: profile, cli: setup.cli ?? "",
-                                      model: setup.model ?? "", effort: setup.effort ?? ""))
-            nextOverrideID += 1
-        }
         maxWorkers = team.rules?.maxWorkers
         planApproval = team.rules?.planApproval
         review = team.rules?.review
         mergeWithoutAsking = team.rules?.mergeWithoutAsking
+        verifyRetries = team.rules?.verifyRetries
         instructions = team.instructions ?? ""
         members = team.members
     }
@@ -116,24 +82,9 @@ public struct TeamForm: Equatable, Sendable {
         }
     }
 
-    /// Adds a row for the first Profile in `profiles` that has none yet; no row when all have one.
-    public mutating func addOverride(from profiles: [String]) {
-        let used = Set(overrides.map(\.profile))
-        guard let profile = profiles.first(where: { !used.contains($0) }) else { return }
-        overrides.append(Override(id: nextOverrideID, profile: profile))
-        nextOverrideID += 1
-    }
-
-    public mutating func removeOverride(_ id: Int) {
-        overrides.removeAll { $0.id == id }
-    }
-
     /// Why the Team cannot be sent yet, in the words for the human; nil when it can.
     public var blocker: String? {
         if trimmed(name).isEmpty { return "Name the Team." }
-        if let named = Dictionary(grouping: overrides, by: \.profile).first(where: { $0.value.count > 1 }) {
-            return "\(named.key) is set twice. Keep one row for each Profile."
-        }
         if !trimmed(rotateAt).isEmpty, rotateAtTokens == nil {
             return "Renew at is a number of tokens, like 150000."
         }
@@ -235,25 +186,22 @@ public struct TeamForm: Equatable, Sendable {
         if let text = present(description) { out["description"] = text }
         let orchestrator = setup(orchestratorCli, orchestratorModel, orchestratorEffort, rotateAt: rotateAtTokens)
         if !orchestrator.isEmpty { out["orchestrator"] = orchestrator }
-        var workers = setup(workersCli, workersModel, workersEffort)
-        if !overrides.isEmpty {
-            workers["profiles"] = Dictionary(
-                overrides.map { ($0.profile, setup($0.cli, $0.model, $0.effort)) },
-                uniquingKeysWith: { _, last in last })
-        }
+        let workers = setup(workersCli, workersModel, workersEffort)
         if !workers.isEmpty { out["workers"] = workers }
         var rules: [String: Any] = [:]
         if let maxWorkers { rules["maxWorkers"] = maxWorkers }
         if let planApproval { rules["planApproval"] = planApproval }
         if let review { rules["review"] = review }
         if let mergeWithoutAsking { rules["mergeWithoutAsking"] = mergeWithoutAsking }
+        if let verifyRetries { rules["verifyRetries"] = verifyRetries }
         if !rules.isEmpty { out["rules"] = rules }
         if let text = present(instructions) { out["instructions"] = text }
         if !members.isEmpty { out["members"] = members.map(memberFields) }
         return out
     }
 
-    /// One Member as the file holds it: `id`, `action` and `profile` always, the rest only when set.
+    /// One Member as the file holds it: `id`, `action` and `profile` always, the rest only when set
+    /// (features/0094).
     private func memberFields(_ member: Team.Member) -> [String: Any] {
         var out: [String: Any] = ["id": member.id, "action": member.action, "profile": member.profile]
         if let after = member.after {
@@ -263,17 +211,9 @@ public struct TeamForm: Equatable, Sendable {
         }
         if let x = member.x { out["x"] = x }
         if let y = member.y { out["y"] = y }
-        if let text = member.instructions, !trimmed(text).isEmpty { out["instructions"] = text }
-        if let flag = member.replaceRole { out["replaceRole"] = flag }
         if let text = member.cli.flatMap(present) { out["cli"] = text }
         if let text = member.model.flatMap(present) { out["model"] = text }
         if let text = member.effort.flatMap(present) { out["effort"] = text }
-        if !member.tools.isEmpty { out["tools"] = member.tools }
-        if !member.skills.isEmpty { out["skills"] = member.skills }
-        if !member.context.isEmpty { out["context"] = member.context }
-        if let flag = member.lessons { out["lessons"] = flag }
-        if let flag = member.writes { out["writes"] = flag }
-        if let text = member.worktree, !text.isEmpty { out["worktree"] = text }
         return out
     }
 

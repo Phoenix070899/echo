@@ -19,6 +19,11 @@ pub const RESUMED: &str = "Your terminal was restarted. Run `echoctl worker list
 pub const RENEWED: &str = "Your session was renewed to clear its context; nothing else changed. Run `echoctl brief`, \
                            give the human a Summary of what is open, and start the listener if Workers are open.";
 
+/// The only tools an Orchestrator's Claude Code gets (features/0108): it plans, runs short commands,
+/// and writes Task specs; everything else goes to a Worker. The rest of Claude Code's set, and the
+/// `Skill` tool listing every skill the human has, would double its context on every request.
+pub const ORCHESTRATOR_TOOLS: [&str; 5] = ["Bash", "Read", "Write", "Edit", "ToolSearch"];
+
 /// What a repo's Orchestrator starts with: a new session, or its saved one resumed. A new session
 /// given a `request` starts on it, as if the human had typed it first. Its `team`'s rules replace
 /// the human's same-named ones and its instructions follow them (features/0081).
@@ -98,9 +103,10 @@ fn start_in(
         title: format!("echo: {name}"),
         prompt,
         dirs: vec![hub.to_path_buf(), lessons::memory_dir(state)],
-        plugins: vec![hub.join("mod"), hub.join("skills")],
+        plugins: vec![hub.join("mod")],
         model: session.model,
         effort: session.effort,
+        tools: ORCHESTRATOR_TOOLS.map(String::from).into(),
         session_id: session.id,
         resume: session.resume,
         first,
@@ -110,19 +116,23 @@ fn start_in(
 }
 
 /// What the "Your Workers" section says about a Member that its file does not: its Profile's
-/// description and the model its Worker will run on.
+/// description and worktree hint, and the model its Worker will run on.
 pub struct MemberFacts {
     pub description: String,
     /// `None` when no level names a model; the CLI then runs its own default.
     pub model: Option<String>,
+    /// The Profile's `current` or `new`; `None` leaves the hint to the Action.
+    pub worktree: Option<String>,
 }
 
-/// A Member's Profile description and resolved model, as the daemon starts its Worker (features/0085).
+/// A Member's Profile description and worktree hint, and its resolved model, as the daemon starts its
+/// Worker (features/0085, 0094).
 fn member_facts(state: &Path, hub: &Path, repo: &Path, team: &Team, member: &Member) -> MemberFacts {
     let Ok(loaded) = profile::load(hub, state, Some(repo), &member.profile) else {
         return MemberFacts {
             description: String::new(),
             model: member.model.clone(),
+            worktree: None,
         };
     };
     let model = profile::resolve(
@@ -138,6 +148,7 @@ fn member_facts(state: &Path, hub: &Path, repo: &Path, team: &Team, member: &Mem
     MemberFacts {
         description: loaded.description,
         model,
+        worktree: loaded.worktree,
     }
 }
 
@@ -197,7 +208,7 @@ fn member_line(member: &Member, action: Option<&Action>, facts: &MemberFacts) ->
         Some(model) => format!("Runs on {model}."),
         None => "Runs on the default model.".to_string(),
     });
-    let worktree = member
+    let worktree = facts
         .worktree
         .as_deref()
         .or(action.map(|action| action.worktree.as_str()))
@@ -344,6 +355,28 @@ mod tests {
         .prompt
     }
 
+    #[test]
+    fn an_orchestrator_starts_with_only_the_tools_it_plans_with() {
+        let state = scratch("tools");
+        let session = Session {
+            id: "s".into(),
+            resume: false,
+            request: None,
+            model: None,
+            effort: None,
+            extra: vec![],
+        };
+        let hub = paths::hub_dir();
+        let start = start_in(&state, &hub, Path::new("/tmp/some-repo"), None, session, None).unwrap();
+        assert_eq!(start.tools, ["Bash", "Read", "Write", "Edit", "ToolSearch"]);
+        assert_eq!(
+            start.plugins,
+            [hub.join("mod")],
+            "no skills plugin, as it has no Skill tool"
+        );
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
     fn team_of(text: &str) -> team::Team {
         team::parse(text).unwrap()
     }
@@ -389,21 +422,22 @@ mod tests {
     }
 
     const THREE: &str = r#"{
-        "workers": {"profiles": {"hinata": {"model": "anthropic/claude-haiku-5-5"}}},
         "members": [
-            {"id": "scan", "action": "scan", "profile": "hinata"},
+            {"id": "scan", "action": "scan", "profile": "hinata", "model": "anthropic/claude-haiku-5-5"},
             {"id": "build", "action": "execute", "profile": "naruto", "after": [{"from": "scan"}],
-             "model": "anthropic/claude-opus-5-5", "worktree": "new"},
+             "model": "anthropic/claude-opus-5-5"},
             {"id": "check", "action": "verify", "profile": "sasuke", "parent": "build"},
             {"id": "test", "action": "run", "profile": "lee", "after": [{"from": "build", "auto": true}, {"from": "scan"}]}
         ],
         "instructions": "Prefer small Tasks."
     }"#;
 
+    /// Each Member's facts as its Profile would give them; only the Profile `mine` names a worktree.
     fn facts(member: &Member) -> MemberFacts {
         MemberFacts {
             description: format!("{} does its part", member.profile),
             model: member.model.clone(),
+            worktree: (member.profile == "mine").then(|| "new".to_string()),
         }
     }
 
@@ -441,10 +475,17 @@ mod tests {
     #[test]
     fn a_member_without_a_verify_child_has_no_verify_sentence_and_custom_has_no_routing() {
         let team = team_of(
-            r#"{"members": [{"id": "scribe-2", "action": "custom", "profile": "mine", "worktree": "current"}]}"#,
+            r#"{"members": [{"id": "scribe-2", "action": "custom", "profile": "mine"}, {"id": "notes", "action": "custom", "profile": "ino"}]}"#,
         );
         let text = workers_section(&team, &action::list(&paths::hub_dir()), &facts);
-        assert!(text.contains("- `scribe-2` (Custom, from Profile `mine`): mine does its part. Runs on the default model. Worktree: current."));
+        assert!(
+            text.contains("- `scribe-2` (Custom, from Profile `mine`): mine does its part. Runs on the default model. Worktree: new."),
+            "the Profile's worktree: {text}"
+        );
+        assert!(
+            text.contains("- `notes` (Custom, from Profile `ino`): ino does its part. Runs on the default model. Worktree: current."),
+            "neither the Profile nor an Action names one: {text}"
+        );
         assert!(!text.contains("--verify") && !text.contains("Hand-offs:"));
     }
 
@@ -465,7 +506,7 @@ mod tests {
         assert!(scan < build && build < check);
         assert!(
             text.contains("Runs on anthropic/claude-haiku-5-5."),
-            "the Team's workers.profiles entry"
+            "the Member's own model"
         );
         assert!(
             text.contains("Runs on anthropic/claude-opus-5-5. Worktree: new."),

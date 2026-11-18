@@ -13,9 +13,10 @@ extension TeamForm {
             a.orchestratorCli != b.orchestratorCli, a.orchestratorModel != b.orchestratorModel,
             a.orchestratorEffort != b.orchestratorEffort, a.rotateAt != b.rotateAt,
             a.workersCli != b.workersCli, a.workersModel != b.workersModel,
-            a.workersEffort != b.workersEffort, a.overrides != b.overrides,
+            a.workersEffort != b.workersEffort,
             a.maxWorkers != b.maxWorkers, a.planApproval != b.planApproval, a.review != b.review,
-            a.mergeWithoutAsking != b.mergeWithoutAsking, a.instructions != b.instructions,
+            a.mergeWithoutAsking != b.mergeWithoutAsking, a.verifyRetries != b.verifyRetries,
+            a.instructions != b.instructions,
         ]
         var count = fields.filter { $0 }.count
         var ids = b.members.map(\.id)

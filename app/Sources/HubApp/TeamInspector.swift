@@ -2,9 +2,10 @@ import Foundry
 import HubCore
 import SwiftUI
 
-/// The picked Member's fields. Each says where its value comes from, and Reset takes the Member's
-/// own value out so the field follows the level below again. Every edit is in the Team's draft
-/// until Save; only "Edit shared role…" reaches a file, the Profile's.
+/// The picked Member's fields (ui-ux/0145, features/0094): its id, Action, Profile, Hand-offs, and the
+/// CLI, model and effort it runs on, each saying where its value comes from, with Reset to follow the
+/// level below again. Every edit is in the Team's draft until Save. The rest of its Profile shows
+/// read-only, with Edit in Profiles.
 struct MemberInspector: View {
     @ObservedObject var teams: TeamSettingsModel
     let member: Team.Member
@@ -19,13 +20,9 @@ struct MemberInspector: View {
             MemberIdentity(teams: teams, member: member, profile: profile)
             MemberAfter(teams: teams, member: member)
             MemberRuns(teams: teams, member: member, setting: setting)
-            MemberRole(teams: teams, member: member, profile: profile)
-            MemberToolList(teams: teams, member: member, profile: profile, cli: setting(.cli).value)
-            MemberLists(teams: teams, member: member, profile: profile)
-            MemberChoices(teams: teams, member: member, profile: profile)
         }
         .disabled(teams.readOnly)
-        MemberSharedRole(teams: teams, member: member, profile: profile)
+        MemberProfile(member: member, profile: profile, cli: setting(.cli).value)
     }
 }
 
@@ -145,32 +142,7 @@ private struct MemberAfter: View {
     }
 }
 
-/// The instruction, added after the Profile's role or in place of it.
-private struct MemberRole: View {
-    @ObservedObject var teams: TeamSettingsModel
-    let member: Team.Member
-    let profile: WorkerProfile?
-
-    var body: some View {
-        InspectorField("Instruction") {
-            TextField("Instruction", text: Binding(
-                get: { member.instructions ?? "" },
-                set: { text in teams.form.updateMember(member.id) { $0.instructions = text.isEmpty ? nil : text } }),
-                      prompt: Text("What this Member should do or avoid, beyond its role"), axis: .vertical)
-                .labelsHidden()
-                .lineLimit(3...12)
-                .squareField(.inspector)
-            Checkbox("Replace the role", isOn: Binding(
-                get: { member.replaceRole ?? false },
-                set: { on in teams.form.updateMember(member.id) { $0.replaceRole = on ? true : nil } }), size: 14)
-                .disabled(!member.isSet(.instructions) && member.replaceRole != true)
-            SourceLine(text: member.instructionNote(roleOf: member.profile),
-                       reset: member.isSet(.instructions) ? { teams.form.clearMember(member.id, .instructions) } : nil)
-        }
-    }
-}
-
-/// CLI, model and effort, which follow the order of features/0085.
+/// CLI, model and effort, which follow the order of features/0094.
 private struct MemberRuns: View {
     @ObservedObject var teams: TeamSettingsModel
     let member: Team.Member
@@ -211,121 +183,56 @@ private struct MemberRuns: View {
     }
 }
 
-/// The tools as a checklist, and what the CLI makes of them.
-private struct MemberToolList: View {
-    @ObservedObject var teams: TeamSettingsModel
+/// The rest of what the Worker is, from its Profile, read-only: one place edits it, Settings >
+/// Profiles, and Edit in Profiles goes there with this Profile picked (ui-ux/0145).
+private struct MemberProfile: View {
+    @EnvironmentObject private var model: AppModel
     let member: Team.Member
     let profile: WorkerProfile?
     let cli: String
 
     var body: some View {
-        let tools = member.listValue(.tools, profile: profile)
-        InspectorGroup("Tools") {
-            LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
-                      alignment: .leading, spacing: 10) {
-                ForEach(MemberTools.all, id: \.self) { tool in
-                    Checkbox(tool, isOn: Binding(
-                        get: { tools.value.contains(tool) },
-                        set: { on in
-                            teams.form.updateMember(member.id) { $0.tools = MemberTools.toggled(tools.value, tool, on: on) }
-                        }), size: 13)
+        InspectorGroup("From \(member.profile)") {
+            if let profile {
+                if !profile.description.isEmpty { fact("Description", profile.description) }
+                fact("Tools", (profile.tools ?? []).isEmpty ? "every tool of its CLI" : CommaList.format(profile.tools ?? []))
+                if let note = ProfileTools.note(tools: profile.tools ?? [], cli: cli) {
+                    InspectorNote(note, problem: true)
+                }
+                fact("Skills", (profile.skills ?? []).isEmpty ? "none" : CommaList.format(profile.skills ?? []))
+                fact("Context", (profile.context ?? []).isEmpty ? "none" : CommaList.format(profile.context ?? []))
+                fact("Lessons", profile.lessons ?? true ? "in its prompt" : "left out")
+                fact("Writes", profile.writes ? "yes" : "no")
+                fact("Worktree", worktree(profile))
+                if let role = profile.role, !role.isEmpty {
+                    fact("Role", role, lines: 6)
                 }
             }
-            SourceLine(text: tools.isOwn || !tools.value.isEmpty ? tools.sourceText : "none named, \(tools.sourceText)",
-                       reset: member.isSet(.tools) ? { teams.form.clearMember(member.id, .tools) } : nil)
-            if let note = MemberTools.note(tools: tools.value, cli: cli) {
-                InspectorNote(note, problem: true)
-            }
-        }
-    }
-}
-
-/// Skills and context: names with commas between, the Member's own list in place of the Profile's.
-private struct MemberLists: View {
-    @ObservedObject var teams: TeamSettingsModel
-    let member: Team.Member
-    let profile: WorkerProfile?
-
-    var body: some View {
-        InspectorGroup("Skills and context") {
-            list("Skills", .skills, member.skills, prompt: "skill names")
-            list("Context", .context, member.context, prompt: "files read first, like CONTEXT.md")
-        }
-    }
-
-    @ViewBuilder
-    private func list(_ title: String, _ field: MemberField, _ own: [String], prompt: String) -> some View {
-        let value = member.listValue(field, profile: profile)
-        InspectorField(title) {
-            CommitField(title: title, value: CommaList.format(own),
-                        prompt: own.isEmpty && !value.value.isEmpty ? CommaList.format(value.value) : prompt) { text in
-                let names = CommaList.parse(text)
-                teams.form.updateMember(member.id) {
-                    if field == .skills { $0.skills = names } else { $0.context = names }
-                }
-                return true
-            }
-            SourceLine(text: value.isOwn ? "\(value.sourceText), in place of \(member.profile)'s"
-                           : "\(value.value.isEmpty ? "none, " : "")\(value.sourceText)",
-                       reset: value.isOwn ? { teams.form.clearMember(member.id, field) } : nil)
-        }
-    }
-}
-
-/// Lessons, Writes and Worktree.
-private struct MemberChoices: View {
-    @ObservedObject var teams: TeamSettingsModel
-    let member: Team.Member
-    let profile: WorkerProfile?
-
-    var body: some View {
-        let lessons = member.lessonsValue
-        let writes = member.writesValue(profile: profile)
-        let worktree = member.worktreeValue()
-        InspectorGroup("Other choices") {
-            VStack(alignment: .leading, spacing: 6) {
-                Checkbox("Give it this repo's Lessons", isOn: Binding(
-                    get: { lessons.value },
-                    set: { on in teams.form.updateMember(member.id) { $0.lessons = on ? nil : false } }), size: 14)
-                SourceLine(text: lessons.sourceText, reset: lessons.isOwn ? { teams.form.clearMember(member.id, .lessons) } : nil)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Checkbox("Writes files", isOn: Binding(
-                    get: { writes.value },
-                    set: { on in
-                        let inherited = profile?.writes ?? false
-                        teams.form.updateMember(member.id) { $0.writes = on == inherited ? nil : on }
-                    }), size: 14)
-                SourceLine(text: "\(writes.sourceText); only tells the Orchestrator what to expect",
-                           reset: writes.isOwn ? { teams.form.clearMember(member.id, .writes) } : nil)
-            }
-            InspectorField("Worktree") {
-                SquarePicker(selection: Binding(
-                    get: { member.worktree ?? "" },
-                    set: { value in teams.form.updateMember(member.id) { $0.worktree = value.isEmpty ? nil : value } }),
-                             options: [("", "Not set"), ("current", "The current checkout"), ("new", "A new worktree")],
-                             weight: .inspector, label: "Worktree")
-                SourceLine(text: worktree.isOwn ? worktree.sourceText : "\(worktree.value == "new" ? "a new worktree" : "the current checkout"), \(worktree.sourceText); a hint for the Orchestrator",
-                           reset: worktree.isOwn ? { teams.form.clearMember(member.id, .worktree) } : nil)
-            }
-        }
-    }
-}
-
-/// The Profile's own file, which every Team that uses the Profile reads.
-private struct MemberSharedRole: View {
-    @ObservedObject var teams: TeamSettingsModel
-    let member: Team.Member
-    let profile: WorkerProfile?
-
-    var body: some View {
-        InspectorGroup("Shared role") {
-            Button("Edit shared role…") { teams.editRole(of: member.profile) }
+            Button("Edit in Profiles") { model.showProfile(member.profile) }
                 .buttonStyle(.settings)
                 .disabled(profile == nil)
-                .help("Opens \(member.profile)'s file in your editor; Echo's own is copied into yours first")
-            InspectorNote("This changes \(member.profile) for every Team, not only this one. "
-                          + "Its own CLI, model and effort are in that file, and apply when a Member leaves them out.")
+                .help("Opens Settings > Profiles on \(member.profile); a change there reaches every Team that starts from it")
+            InspectorNote("Shared by every Member, in any Team, that starts from \(member.profile).")
+        }
+    }
+
+    /// The Profile's hint, else the Action's (features/0094).
+    private func worktree(_ profile: WorkerProfile) -> String {
+        if let own = profile.worktree, !own.isEmpty { return own == "new" ? "a new worktree" : "the current checkout" }
+        let action = Action.shipped.first { $0.id == member.action }?.worktree ?? "current"
+        return "\(action == "new" ? "a new worktree" : "the current checkout"), from the \(member.action) Action"
+    }
+
+    private func fact(_ label: String, _ value: String, lines: Int = 3) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            MonoLabel(label)
+            Text(value)
+                .font(Ledger.font(13))
+                .foregroundStyle(Ledger.ink2)
+                .lineLimit(lines)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
         }
     }
 }

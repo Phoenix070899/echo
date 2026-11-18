@@ -145,10 +145,13 @@ final class AppModel: ObservableObject {
     /// The Teams section's state, kept here so that its unsaved edits outlive the section's views
     /// and are asked about before Settings change or close (ui-ux/0103).
     let teamSettings = TeamSettingsModel()
+    let profileSettings = ProfileSettingsModel()
+    /// A card asks about a Team's or a Profile's edits that are not saved.
+    var settingsAsking: Bool { teamSettings.asking || profileSettings.asking }
     /// The New Team sheet is up, over the Teams section.
     @Published var newTeamShown = false
     /// While a modal is up, terminals hand it the keyboard.
-    var modalShown: Bool { teamSettings.asking || newTeamShown || newSession != nil || renaming != nil || asking || quickOpenShown || fanOutShown || newSessionMenuShown || popoverShown }
+    var modalShown: Bool { settingsAsking || newTeamShown || newSession != nil || renaming != nil || asking || quickOpenShown || fanOutShown || newSessionMenuShown || popoverShown }
     /// Shrinks the ledger to a strip of status marks so the terminal takes almost the whole window.
     @Published var ledgerCollapsed = false
 
@@ -574,7 +577,7 @@ final class AppModel: ObservableObject {
 
     private static func loadAppearance() -> TerminalAppearance {
         guard let data = UserDefaults.standard.data(forKey: appearanceKey),
-              let saved = try? JSONDecoder().decode(TerminalAppearance.self, from: data) else { return .orca }
+              let saved = try? JSONDecoder().decode(TerminalAppearance.self, from: data) else { return .standard }
         return saved
     }
 
@@ -1345,18 +1348,35 @@ final class AppModel: ObservableObject {
         openMainWindow?()
     }
 
-    /// Shows another section; a Team with edits that are not saved asks first (ui-ux/0103).
+    /// Shows another section; a Team or a Profile with edits that are not saved asks first (ui-ux/0103).
     func showSettingsSection(_ section: SettingsSection) {
         guard section != settingsSection else { return }
-        teamSettings.leave { self.settingsSection = section }
+        leaveSettingsEdits { self.settingsSection = section }
     }
 
-    /// Back to the agents; a Team with edits that are not saved asks first (ui-ux/0103).
+    /// Opens Settings > Profiles on the Profile `name`, from a Member's Edit in Profiles (ui-ux/0145).
+    func showProfile(_ name: String) {
+        leaveSettingsEdits {
+            self.profileSettings.wanted = name
+            if self.settingsSection == .profiles {
+                self.profileSettings.refresh()
+            } else {
+                self.settingsSection = .profiles
+            }
+        }
+    }
+
+    /// Back to the agents; a Team or a Profile with edits that are not saved asks first (ui-ux/0103).
     func hideSettings() {
-        teamSettings.leave {
+        leaveSettingsEdits {
             if let section = self.settingsSection { self.lastSettingsSection = section }
             self.settingsSection = nil
         }
+    }
+
+    /// Runs `go` once neither a Team nor a Profile holds edits the human has not answered for.
+    private func leaveSettingsEdits(then go: @escaping @MainActor () -> Void) {
+        teamSettings.leave { self.profileSettings.leave(then: go) }
     }
 
     private var lastSettingsSection = SettingsSection.window

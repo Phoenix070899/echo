@@ -11,6 +11,22 @@ use crate::paths;
 /// Past this many lessons the Orchestrator is asked to have them merged.
 pub const LIMIT: usize = 60;
 
+/// Past this many characters too: every Worker's prompt carries the whole file, so a few merged
+/// Lessons of many kilobytes each cost as much as hundreds of short ones.
+pub const SIZE_LIMIT: usize = 16_000;
+
+/// How full a repo's Lessons file is.
+pub struct Size {
+    pub count: usize,
+    pub chars: usize,
+}
+
+impl Size {
+    pub fn over(&self) -> bool {
+        self.count > LIMIT || self.chars > SIZE_LIMIT
+    }
+}
+
 /// Heads the Lessons in a Worker's or Orchestrator's prompt.
 pub const WORKER_INTRO: &str = "# Lessons for this repo\n\n\
     What earlier Workers learned here. Rely on them, and say in your Final Report when one proved wrong.";
@@ -55,8 +71,8 @@ pub fn lessons(state: &Path, repo: &str) -> String {
 }
 
 /// Adds each lesson as a bullet dated `today` (YYYY-MM-DD) and signed by `worker` (w12), and
-/// returns how many lessons the file holds now.
-pub fn add(state: &Path, repo: &str, worker: &str, today: &str, new: &[String]) -> Result<usize> {
+/// returns how full the file is now.
+pub fn add(state: &Path, repo: &str, worker: &str, today: &str, new: &[String]) -> Result<Size> {
     let path = lessons_path(state, repo);
     let mut text = std::fs::read_to_string(&path).unwrap_or_else(|_| LESSONS_HEAD.to_string());
     for lesson in new {
@@ -71,7 +87,10 @@ pub fn add(state: &Path, repo: &str, worker: &str, today: &str, new: &[String]) 
     }
     std::fs::create_dir_all(path.parent().unwrap())?;
     std::fs::write(&path, &text)?;
-    Ok(count(&text))
+    Ok(Size {
+        count: count(&text),
+        chars: text.chars().count(),
+    })
 }
 
 fn count(text: &str) -> usize {
@@ -207,13 +226,23 @@ mod tests {
             &["Run `make db`\n before the tests".into(), " ".into()],
         )
         .unwrap();
-        assert_eq!(n, 1);
+        assert_eq!(n.count, 1);
         let n = add(&state, "/code/shop", "w4", "2026-10-29", &["Port 5173 is taken".into()]).unwrap();
-        assert_eq!(n, 2);
+        assert_eq!(n.count, 2);
+        assert!(!n.over());
         let text = lessons(&state, "/code/shop");
         assert!(text.starts_with("# Lessons"));
         assert!(text.contains("- Run `make db` before the tests (2026-10-28, w3)\n"));
         assert!(text.ends_with("- Port 5173 is taken (2026-10-29, w4)\n"));
+    }
+
+    #[test]
+    fn a_few_long_lessons_are_over_the_limit_too() {
+        let state = scratch("size");
+        let long = "Run the stack with make up before the browser tests ".repeat(400);
+        let n = add(&state, "/code/shop", "w5", "2026-11-18", &[long]).unwrap();
+        assert_eq!(n.count, 1);
+        assert!(n.chars > SIZE_LIMIT && n.over(), "one Lesson can fill the prompt");
     }
 
     #[test]

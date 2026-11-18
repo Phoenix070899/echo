@@ -27,8 +27,19 @@ case "$1 $2" in
     # As large as the real catalog, more than a pipe holds.
     printf '{"about": "%s", "models": [{"slug": "gpt-test", "display_name": "GPT-Test", "visibility": "list", "priority": 1}]}\n' "$(head -c 300000 /dev/zero | tr '\0' x)"
     exit 0 ;;
+  # The skills Codex lists to its model (skills.rs), one of them from the folder it runs in.
+  "debug prompt-input")
+    printf '[{"type": "message", "content": [{"type": "input_text", "text": "## Skills\\n### Skill roots\\n- `r0` = `%s/.agents/skills`\\n### Available skills\\n- tidy: Tidy the code. (file: r0/tidy/SKILL.md)\\n- pdf:pdf: Read PDFs. (file: /x/pdf/SKILL.md)\\n### How to use skills"}]}]\n' "$PWD"
+    exit 0 ;;
   "chat --list-models") printf '{"models": [{"model_name": "claude-haiku-5.5", "model_id": "claude-haiku-5.5"}]}\n'; exit 0 ;;
 esac
+if [ "$1" = "-p" ] && [ "$2" = "--tools" ]; then
+  # A Profile draft (draft.rs): the prompt comes on stdin and is kept for the test to read.
+  cat > "$HUB_STATE/last-draft-prompt"
+  grep -q SLOWDRAFT "$HUB_STATE/last-draft-prompt" && sleep 30
+  printf 'Sure:\n{"description": "Drafted designer", "tools": ["Read", "Teleport"], "writes": true, "role": "You are Test.", "summary": "Made a designer."}\n'
+  exit 0
+fi
 if [ "$1" = "-p" ] && [ "$2" = "/usage" ] && [ -n "$HUB_FAKE_USAGE_FLAKY" ] && [ ! -e "$HUB_FAKE_USAGE_FLAKY" ]; then
   # The first call fails the way the real one sometimes does: a cost summary, no limits.
   touch "$HUB_FAKE_USAGE_FLAKY"

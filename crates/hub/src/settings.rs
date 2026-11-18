@@ -104,6 +104,9 @@ pub struct Rules {
     pub review: bool,
     /// Merge a verified branch without asking.
     pub merge_without_asking: bool,
+    /// Times a writer whose verification fails is sent back before it needs the human; only a
+    /// Team sets it (features/0104).
+    pub verify_retries: u64,
 }
 
 impl Default for Rules {
@@ -113,6 +116,7 @@ impl Default for Rules {
             plan_approval: true,
             review: true,
             merge_without_asking: false,
+            verify_retries: 1,
         }
     }
 }
@@ -130,6 +134,7 @@ impl Rules {
             plan_approval: flag("planApproval", base.plan_approval),
             review: flag("review", base.review),
             merge_without_asking: flag("mergeWithoutAsking", base.merge_without_asking),
+            verify_retries: base.verify_retries,
         }
     }
 
@@ -139,6 +144,7 @@ impl Rules {
         self.plan_approval = team.plan_approval.unwrap_or(self.plan_approval);
         self.review = team.review.unwrap_or(self.review);
         self.merge_without_asking = team.merge_without_asking.unwrap_or(self.merge_without_asking);
+        self.verify_retries = team.verify_retries.unwrap_or(self.verify_retries);
         self
     }
 
@@ -162,6 +168,12 @@ impl Rules {
         }
         if !self.review {
             lines.push("- Skip the verifier (`sasuke`, or a `verify` Member) after a writing Worker; check its Final Report against the acceptance yourself.".into());
+        }
+        if self.verify_retries != base.verify_retries {
+            lines.push(format!(
+                "- A `--verify` writer whose verification fails is sent back with the findings up to {} times, not once, before it goes to Needs you.",
+                self.verify_retries
+            ));
         }
         if self.merge_without_asking {
             lines.push(

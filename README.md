@@ -62,10 +62,14 @@ Echo ships the ones below in [`profiles/`](profiles/). Yours, in `~/.echo/profil
 ```
 echoctl profile list               every Profile here, and where each comes from
 echoctl profile copy sasuke        your own copy to change ("--repo" for this repo's, shared through git)
-echoctl profile new code-reviewer  a blank Profile to fill in
+echoctl profile new code-reviewer  a blank Profile to fill in ("--from naruto" to start as a copy)
+echoctl profile delete scout       delete yours ("--repo" for this repo's); refused while a Team's Member starts from it
 ```
 
-A Profile is a Worker's role. A Team's Member starts from a Profile and may change it for that Team alone (see Teams below), so two Workers of one Profile can differ without editing the shared file.
+A Profile is everything about a Worker but where it sits in a Team: its description, role, tools, skills, context, whether it writes, whether its prompt carries the repo's Lessons (`lessons: false` leaves them out), and a `worktree` hint (`current` or `new`) printed to the Orchestrator.
+A Team's Member starts from a Profile and sets only its CLI, model and effort; for two differently set Workers, make two Profiles.
+Settings > Profiles edits every field and the role, and shows which Teams' Members start from each Profile.
+Its Skills are a checklist of the skills the Profile's CLI has installed: Claude Code's yours, the repo's and each enabled plugin's (as `<plugin>:<skill>`), and Codex's as it lists them to its model; Kiro has none.
 
 A Profile's `cli` and `model` (`provider/model`) can be left out: they then come from the repo's `.echo/settings.json`, else `~/.echo/settings.json` (`{"cli": "claude", "model": "anthropic/claude-sonnet-5-5"}`), else claude's own default.
 `echoctl worker start --cli --model` overrides all of them for one Worker.
@@ -105,14 +109,11 @@ Every field is optional, and a missing one means the level below:
 {
   "description": "Sonnet plans, Haiku works, on Kiro",
   "orchestrator": { "cli": "kiro", "model": "claude-sonnet-5.5", "effort": "medium", "rotateAt": 150000 },
-  "workers": {
-    "cli": "kiro", "model": "claude-haiku-5.5", "effort": "low",
-    "profiles": { "naruto": { "model": "claude-sonnet-5.5", "effort": "high" } }
-  },
+  "workers": { "cli": "kiro", "model": "claude-haiku-5.5", "effort": "low" },
   "rules": { "maxWorkers": 3, "planApproval": true, "review": true, "mergeWithoutAsking": false },
   "members": [
-    { "id": "build", "action": "execute", "profile": "naruto", "instructions": "Keep changes small." },
-    { "id": "check", "action": "verify", "profile": "sasuke", "parent": "build" },
+    { "id": "build", "action": "execute", "profile": "naruto", "model": "claude-sonnet-5.5", "effort": "high" },
+    { "id": "check", "action": "verify", "profile": "sasuke", "after": [{ "from": "build" }] },
     { "id": "ask-the-web", "action": "research", "profile": "jiraiya", "model": "claude-haiku-5.5" }
   ],
   "instructions": "Text added to the end of the Orchestrator's prompt, after the rules."
@@ -128,11 +129,11 @@ echoctl ui orchestrator --team kiro-lean   open an Orchestrator that starts and 
 
 ### Members and Actions
 
-A Member is one node of a Team's tree: a Worker slot with a name (`id`), an Action, the Profile it starts from, and the changes this Team makes to that Profile.
-A Member's fields are `id`, `action`, `profile`, `parent`, `instructions`, `replaceRole`, `cli`, `model`, `effort`, `tools`, `skills`, `context`, `lessons`, `writes` and `worktree`; only `id`, `action` and `profile` are required, and a field left out means the level below.
-`members` is a flat array in tree order, and `parent` names the Member above, so moving a Member is a small diff in git.
-`instructions` are added after the Profile's role (or replace it with `replaceRole`); `tools`, `skills` and `context` replace the Profile's lists when they are not empty; `lessons: false` leaves the repo's Lessons out of that Worker's prompt.
-The tree is at most 3 levels deep with at most 24 Members, and a `verify` Member sits under an `execute` Member.
+A Member is one node of a Team's graph: a Worker slot with a name (`id`), an Action, the Profile it starts from, its Hand-offs, and the CLI, model and effort it runs on in this Team.
+A Member's fields are `id`, `action`, `profile`, `after`, `x`, `y`, `cli`, `model` and `effort`; only `id`, `action` and `profile` are required, and a field left out means the level below.
+Everything else about the Worker is its Profile's.
+A Team file from before this, whose Members set `instructions`, `replaceRole`, `tools`, `skills`, `context`, `lessons`, `writes` or `worktree`, is moved once when the daemon reads it: each such Member gets a Profile `<team>-<member>` at the Team's level with those fields laid over its old Profile, a `workers.profiles.<Profile>` entry moves onto that Profile's Members, and the file is written again without them.
+A Team holds at most 24 Members, and a `verify` Member comes only after `execute` Members.
 
 An Action is what a Member is for. Echo ships six in [`actions/`](actions/), each with a default Profile, and a Member built on a Profile of your own is `custom`:
 
@@ -149,7 +150,7 @@ The tree is a plan of hand-offs that the Orchestrator and the daemon carry out; 
 A Team with Members gives its Orchestrator a generated "Your Workers" section: each Member, its Action, what it runs on, and what follows it.
 `echoctl worker start <member-or-profile>` takes a Member's `id` first, else the first Member that uses that Profile, else a bare Profile; the Worker records its Member.
 A writer started with `--verify` is verified by its Member's first `verify` child, else by `sasuke`; the Team's `rules.review`, when set, decides whether it is verified at all.
-A Worker's CLI, model and effort come from the first of these that sets them: what was picked for it, its Member, the Team's `workers.profiles.<Profile>`, the Team's `workers`, the Profile, the repo's `.echo/settings.json`, then `~/.echo/settings.json`.
+A Worker's CLI, model and effort come from the first of these that sets them: what was picked for it, its Member, the Team's `workers`, the Profile, the repo's `.echo/settings.json`, then `~/.echo/settings.json`.
 
 ### The Teams section in Echo
 
@@ -157,13 +158,13 @@ Settings has one section for all of this, Teams, in place of the old Agents and 
 Its list holds a Defaults entry (the default CLI and model, "Use for every agent", and the Orchestrators' default rules) and every Team, with where each comes from.
 Picking a Team shows its tree: the Orchestrator at the root and its Members below it.
 Drag a Member to move it, or add one from Add Member under the tree; with the tree focused, ↑ and ↓ select, ⌥↑ and ⌥↓ move among siblings, ⌥→ indents, ⌥← outdents, Return renames, Delete removes, `a` adds and `d` duplicates. The same moves, with their keys, are in the ⋯ menu under the tree.
-Picking a Member opens its inspector: name, Action, Profile, instruction, CLI, model and effort, tools, skills, context, Lessons, writes and worktree, with "Edit shared role..." for the Profile's own file and "New custom Worker..." for a Profile of your own.
+Picking a Member opens its inspector: name, Action, Profile, Hand-offs, CLI, model and effort, then the rest of its Profile read-only with "Edit in Profiles", which opens Settings > Profiles on that Profile.
 "New Team" asks for a starting point and a provider.
 Unsaved edits ask before they are lost.
 Echo's own Teams (`claude-opus`, `claude-lean`, `kiro-lean`) are trees too, and read-only: Duplicate one to change it.
 
 A Team differs from a Profile: a Profile is a Worker's role (its prompt and tools), while a Team says which models the Orchestrator and the Workers run on and under which rules.
-A Team's `workers` choices come before a Profile's own `cli`, `model` and `effort`, and `workers.profiles.<Profile>` before the rest of `workers`.
+A Team's `workers` choices come before a Profile's own `cli`, `model` and `effort`, and a Member's own before `workers`.
 A Team applies when an Orchestrator starts or resumes and when a Worker starts or resumes, so editing a Team's file changes a running session at its next start or resume.
 A Team a model or effort cannot run is refused when it is saved and again when it is used, before any worktree is made.
 Only Orchestrators take a Team: a Normal session and a Terminal have none.

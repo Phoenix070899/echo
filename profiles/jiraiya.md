@@ -1,6 +1,7 @@
 ---
 name: jiraiya
 description: Web researcher. Answers research questions from primary sources with cited findings.
+face: r04c09
 cli: claude
 model: anthropic/claude-sonnet-5-5
 effort: medium

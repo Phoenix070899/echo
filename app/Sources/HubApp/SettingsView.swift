@@ -5,8 +5,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Settings, one section each: the window's look, the terminal theme (a preset, then any colour changed
-/// by hand), its background image, the font, the multiplexer agents run inside, the Teams (with
-/// what agents run with, their Profiles, and the Orchestrator's rules under Defaults), and Echo Remote.
+/// by hand, the palette's included), its background image, the font, the multiplexer agents run inside, the Teams (with
+/// what agents run with and the Orchestrator's rules under Defaults), the Profiles, and Echo Remote.
 struct SettingsView: View {
     let section: SettingsSection
     @EnvironmentObject private var model: AppModel
@@ -77,14 +77,39 @@ struct SettingsView: View {
                     SettingsRow("Text") { SquareColorWell(selection: colour(\.foreground), label: "Text") }
                     SettingsRow("Cursor") { SquareColorWell(selection: colour(\.cursor), label: "Cursor") }
                     SettingsRow("Selection") { SquareColorWell(selection: colour(\.selection), label: "Selection") }
-                    SettingsRow("Palette") {
-                        Swatches(theme: model.appearance.theme)
-                            .alignmentGuide(.firstTextBaseline) { $0[.top] + 19 }
+                    optionalRow("Cursor text", \.cursorText, auto: \.background,
+                                note: "Auto: the terminal picks it.")
+                    optionalRow("Selected text", \.selectionText, auto: \.foreground,
+                                note: "Auto: selected text keeps its own colour.")
+                    optionalRow("Bold", \.bold, auto: \.foreground,
+                                note: "Auto: bold text keeps its own colour.")
+                    SettingsRow("Prompt bar") {
+                        SquareColorWell(selection: ansiColour(8), label: "Prompt bar")
+                        SettingsNote("Bright black in the palette. Claude Code draws your sent prompts on it; their text is the theme's Text, turned black or white below Contrast.")
                     }
-                    SettingsRow("Orca") {
-                        Button("Match Orca") { model.appearance = .orca }
-                            .buttonStyle(.settings)
-                        SettingsNote("Ayu Dark, JetBrainsMono Nerd Font 14.")
+                    SettingsRow("Links") {
+                        SquareColorWell(selection: ansiColour(4), label: "Links")
+                        SettingsNote("Blue in the palette. Claude Code draws links and file paths in it.")
+                    }
+                    SettingsRow("Contrast") {
+                        HStack(spacing: 14) {
+                            SquareSlider(value: $model.appearance.minimumContrast, range: 1...7, label: "Contrast")
+                            readout(model.appearance.minimumContrast < 1.05 ? "Off"
+                                    : String(format: "%.1f:1", model.appearance.minimumContrast))
+                        }
+                        SettingsNote("Text that reads below this against what is behind it is drawn black or white. 4.5:1 is easy to read; Off keeps every colour.")
+                    }
+                    SettingsRow("Dim text") {
+                        HStack(spacing: 14) {
+                            SquareSlider(value: $model.appearance.faintOpacity, range: 0.3...1, label: "Dim text")
+                            readout("\(Int((model.appearance.faintOpacity * 100).rounded()))%")
+                        }
+                        SettingsNote("How much of its colour dim text keeps, like Claude Code's \"Ran 1 shell command\".")
+                    }
+                    SettingsRow("Palette") {
+                        Swatches(theme: model.appearance.theme, colour: ansiColour)
+                            .alignmentGuide(.firstTextBaseline) { $0[.top] + 19 }
+                        SettingsNote("Click a colour to change it. The top row is normal, the bottom row bright.")
                     }
                 }
             }
@@ -98,7 +123,7 @@ struct SettingsView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         HStack(spacing: 10) {
-                            Button("Choose…", action: chooseImage)
+                            Button("Choose", action: chooseImage)
                                 .buttonStyle(.settings)
                             if model.appearance.backgroundImage != nil {
                                 Button("Remove") { model.appearance.backgroundImage = nil }
@@ -185,6 +210,12 @@ struct SettingsView: View {
                 agents.refresh()
                 refreshTeams()
             }
+        case .profiles:
+            ProfilesSection(profiles: model.profileSettings)
+                .onAppear {
+                    model.profileSettings.repo = model.selectedRepo
+                    model.profileSettings.refresh()
+                }
         case .providers:
             page { ProvidersSettings() }
         case .worktrees:
@@ -285,6 +316,52 @@ struct SettingsView: View {
 
     private var isPreset: Bool { TerminalTheme.presets.contains(model.appearance.theme) }
 
+    /// A colour the terminal can also pick by itself: its well shows `auto`'s colour until one is
+    /// picked, then Auto puts it back.
+    private func optionalRow(_ title: String, _ key: WritableKeyPath<TerminalTheme, String?>,
+                             auto: KeyPath<TerminalTheme, String>, note: String) -> some View {
+        let theme = model.appearance.theme
+        return SettingsRow(title) {
+            HStack(spacing: 10) {
+                SquareColorWell(selection: Binding {
+                    TerminalTheme.color(theme[keyPath: key] ?? theme[keyPath: auto])
+                } set: { picked in
+                    guard let hex = Self.hex(picked) else { return }
+                    edit { $0[keyPath: key] = hex }
+                }, label: title)
+                if theme[keyPath: key] != nil {
+                    Button("Auto") { edit { $0[keyPath: key] = nil } }
+                        .buttonStyle(.settings)
+                }
+            }
+            if theme[keyPath: key] == nil { SettingsNote(note) }
+        }
+    }
+
+    private func ansiColour(_ index: Int) -> Binding<Color> {
+        Binding {
+            TerminalTheme.color(model.appearance.theme.ansi[index])
+        } set: { picked in
+            guard let hex = Self.hex(picked) else { return }
+            edit { $0.ansi[index] = hex }
+        }
+    }
+
+    /// Changes the theme; a preset changed by hand becomes Custom.
+    private func edit(_ change: (inout TerminalTheme) -> Void) {
+        var theme = model.appearance.theme
+        change(&theme)
+        if TerminalTheme.presets.contains(where: { $0.name == theme.name && $0 != theme }) {
+            theme.name = "Custom"
+        }
+        model.appearance.theme = theme
+    }
+
+    private static func hex(_ colour: Color) -> String? {
+        guard let rgb = NSColor(colour).usingColorSpace(.sRGB) else { return nil }
+        return TerminalTheme.hex(red: rgb.redComponent, green: rgb.greenComponent, blue: rgb.blueComponent)
+    }
+
     private var presetBinding: Binding<String> {
         Binding {
             isPreset ? model.appearance.theme.name : "Custom"
@@ -300,29 +377,23 @@ struct SettingsView: View {
         Binding {
             TerminalTheme.color(model.appearance.theme[keyPath: key])
         } set: { picked in
-            guard let rgb = NSColor(picked).usingColorSpace(.sRGB) else { return }
-            var theme = model.appearance.theme
-            theme[keyPath: key] = TerminalTheme.hex(red: rgb.redComponent, green: rgb.greenComponent, blue: rgb.blueComponent)
-            if TerminalTheme.presets.contains(where: { $0.name == theme.name && $0 != theme }) {
-                theme.name = "Custom"
-            }
-            model.appearance.theme = theme
+            guard let hex = Self.hex(picked) else { return }
+            edit { $0[keyPath: key] = hex }
         }
     }
 }
 
-/// The 16 ANSI colours, normal over bright.
+/// The 16 ANSI colours, normal over bright, each one a swatch that opens the colour panel.
 struct Swatches: View {
     let theme: TerminalTheme
+    let colour: (Int) -> Binding<Color>
 
     var body: some View {
         VStack(spacing: 3) {
             ForEach([0, 8], id: \.self) { start in
                 HStack(spacing: 3) {
                     ForEach(start..<start + 8, id: \.self) { index in
-                        Rectangle()
-                            .fill(TerminalTheme.color(theme.ansi[index]))
-                            .frame(width: 18, height: 18)
+                        SquareSwatch(selection: colour(index), label: TerminalTheme.ansiNames[index])
                     }
                 }
             }

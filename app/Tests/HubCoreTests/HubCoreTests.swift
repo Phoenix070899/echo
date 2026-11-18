@@ -52,6 +52,14 @@ let snapshotLine = """
     #expect(old.workers[0].quietFor() == 75, "a daemon that sends seconds still reads")
 }
 
+@Test func aWorkerCarriesItsProfilesFaceAndAnOlderDaemonsHasNone() throws {
+    let faced = row("w1", phase: "running", quiet: 0).replacingOccurrences(of: "\"profile\":\"naruto\",",
+                                                                         with: "\"profile\":\"naruto\",\"face\":\"r01c01\",")
+    #expect(try JSONDecoder().decode(WorkerRow.self, from: Data(faced.utf8)).face == "r01c01")
+    let old = try JSONDecoder().decode(Snapshot.self, from: Data(snapshotLine.utf8))
+    #expect(old.workers[0].face == nil)
+}
+
 @Test func agesAreShort() {
     #expect(formatAge(45) == "45s")
     #expect(formatAge(180) == "3m")
@@ -448,19 +456,29 @@ func row(_ id: String, phase: String, quiet: Int, model: String? = nil, effort: 
         #expect(theme.ansi.count == 16, "\(theme.name) has 16 ANSI colours")
         #expect(([theme.background, theme.foreground, theme.cursor, theme.selection] + theme.ansi).allSatisfy { TerminalTheme.rgb($0) != nil })
     }
-    #expect(TerminalAppearance.orca.theme == .ayuDark)
+    #expect(Set(TerminalTheme.presets.map(\.name)).count == TerminalTheme.presets.count, "preset names are unique")
+    #expect(TerminalTheme.ansiNames.count == 16 && TerminalTheme.ansiNames[9] == "Bright red")
+    #expect(TerminalAppearance.standard.theme == .ayuDark)
+    #expect(TerminalTheme.presets.prefix(2).map(\.name) == ["Foundry Light", "Foundry Dark"])
+    #expect(!TerminalTheme.foundryLight.isDark && TerminalTheme.foundryDark.isDark)
 }
 
 @Test func aLookSavedBeforeBackgroundImagesStillLoads() throws {
-    var old = try JSONSerialization.jsonObject(with: JSONEncoder().encode(TerminalAppearance.orca)) as! [String: Any]
+    var old = try JSONSerialization.jsonObject(with: JSONEncoder().encode(TerminalAppearance.standard)) as! [String: Any]
     old.removeValue(forKey: "backgroundImage")
     old.removeValue(forKey: "backgroundImageDim")
     old.removeValue(forKey: "backgroundImageBlur")
+    old.removeValue(forKey: "faintOpacity")
+    old.removeValue(forKey: "minimumContrast")
+    var theme = old["theme"] as! [String: Any]
+    theme.removeValue(forKey: "cursorText")
+    old["theme"] = theme
     let loaded = try JSONDecoder().decode(TerminalAppearance.self, from: JSONSerialization.data(withJSONObject: old))
-    #expect(loaded == .orca)
+    #expect(loaded == .standard)
+    #expect(loaded.theme.cursorText == nil, "a theme saved before the extra colours loads without them")
     #expect(loaded.backgroundImage == nil)
 
-    var withImage = TerminalAppearance.orca
+    var withImage = TerminalAppearance.standard
     withImage.backgroundImage = "/Users/me/Pictures/sea.jpg"
     withImage.backgroundImageDim = 0.5
     withImage.backgroundImageBlur = 12
@@ -740,15 +758,29 @@ private let kiroLimit = #"{"name":"Kiro credits","percent":30,"resets":"Dec 1","
 }
 
 @Test func theLookBecomesAGhosttyConfig() {
-    let plain = TerminalAppearance.orca.ghosttyConfig
+    let plain = TerminalAppearance.standard.ghosttyConfig
     #expect(plain.contains("font-family = JetBrainsMono Nerd Font\n"))
     #expect(plain.contains("background = #0a0e14\n"))
     #expect(plain.contains("palette = 15=#ffffff\n"))
     #expect(plain.contains("background-opacity = 1\n"))
     #expect(plain.contains("keybind = clear\n"), "Ghostty's own shortcuts would take Echo's")
-    var image = TerminalAppearance.orca
+    #expect(plain.contains("minimum-contrast = 3.0\n"), "text a program draws on a fill too close to it flips to black or white")
+    #expect(plain.contains("faint-opacity = 0.7\n"), "dim text stays readable")
+    var faint = TerminalAppearance.standard
+    faint.faintOpacity = 0.9
+    faint.minimumContrast = 4.5
+    #expect(faint.ghosttyConfig.contains("faint-opacity = 0.9\n"))
+    #expect(faint.ghosttyConfig.contains("minimum-contrast = 4.5\n"))
+    #expect(!plain.contains("cursor-text") && !plain.contains("selection-foreground") && !plain.contains("bold-color"),
+            "unset colours are left to the terminal")
+    var image = TerminalAppearance.standard
     image.backgroundImage = "/tmp/a.png"
     #expect(image.ghosttyConfig.contains("background-opacity = 0\n"))
+    var extra = TerminalAppearance.standard
+    extra.theme.cursorText = "#000000"
+    extra.theme.selectionText = "#111111"
+    extra.theme.bold = "#ffffff"
+    #expect(extra.ghosttyConfig.contains("cursor-text = #000000\nselection-foreground = #111111\nbold-color = #ffffff\n"))
 }
 
 @Test func decodesEchoRemotesStatus() throws {
@@ -768,7 +800,7 @@ private let kiroLimit = #"{"name":"Kiro credits","percent":30,"resets":"Dec 1","
     #expect(ayu.background == "#0a0e14" && ayu.text == "#b3b1ad" && ayu.accent == "#59c2ff")
     let tango = CustomLook.from(.tangoLight)
     #expect(!tango.dark && tango.highlighter == "#ffe347" && tango.accent == "#3465a4")
-    #expect(CustomLook.presets.map(\.name) == ["Echo Light", "Echo Dark", "Ayu Dark", "Tango Light", "Hub Dark"])
+    #expect(CustomLook.presets.map(\.name) == ["Echo Light", "Echo Dark"] + TerminalTheme.presets.map(\.name))
 }
 
 @Test func needsComeInTheLedgersOrder() throws {

@@ -263,22 +263,6 @@ final class TeamSettingsModel: ObservableObject {
         memberNotice = form.changeMemberAction(id, to: action)
     }
 
-    /// Opens the Profile's file in the human's editor, copying Echo's own into yours first. The
-    /// file is shared by every Team, so this is not a Member edit and not held in the draft.
-    func editRole(of name: String) {
-        guard let profile = profile(named: name) else { return }
-        let (client, repo) = (client, repo)
-        run({ () -> String in
-            if profile.level == "built-in" {
-                return try client.profile("copy", name: profile.name, repo: repo)
-            }
-            return profile.path ?? ""
-        }) { path in
-            if !path.isEmpty { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
-            self.refreshProfiles()
-        }
-    }
-
     /// Asks for a name, creates a Profile of that name and opens its file to fill in, then adds a
     /// `custom` Member on it to the draft, after `source` or after the Orchestrator, and picks it.
     /// The Profile's file is written at once; the Member is held in the draft until Save.
@@ -320,7 +304,7 @@ final class TeamSettingsModel: ObservableObject {
     /// The CLI a model field is checked against: the one picked above it, else the settings'.
     func effectiveCli(_ picked: String) -> String { picked.isEmpty ? fallbackCli : picked }
 
-    /// The Profiles an override row can name: all of them, and the row's own if no Profile has it.
+    /// The Profiles a Member can start from: all of them, and its own if no Profile has it.
     func profileOptions(including current: String) -> [String] {
         profileNames.contains(current) ? profileNames : profileNames + [current]
     }
@@ -483,7 +467,7 @@ private struct TeamOrchestrator: View {
     }
 }
 
-/// What every Worker runs with, then the Profiles that differ.
+/// What every Worker runs with whose node names none (features/0094).
 private struct TeamWorkers: View {
     @ObservedObject var teams: TeamSettingsModel
 
@@ -495,30 +479,7 @@ private struct TeamWorkers: View {
                             selection: $teams.form.workersModel)
             }
             InspectorField("Effort") { EffortPicker(title: "Effort", selection: $teams.form.workersEffort) }
-            InspectorNote("Set for every Worker, over what its Profile says. Empty leaves it to the Profile.")
-        }
-        InspectorGroup("Profiles set apart") {
-            ForEach($teams.form.overrides) { $row in
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 10) {
-                        SquarePicker(selection: $row.profile,
-                                     options: teams.profileOptions(including: row.profile).map { ($0, $0) },
-                                     weight: .inspector, label: "Profile")
-                        Button("Remove") { teams.form.removeOverride(row.id) }
-                            .buttonStyle(.ledgerLink)
-                            .help("Take this Profile out of the Team's own settings")
-                    }
-                    CliPicker(title: "CLI", selection: $row.cli)
-                    ModelPicker(title: "Model", cli: teams.effectiveCli(row.cli.isEmpty ? teams.form.workersCli : row.cli),
-                                selection: $row.model)
-                    EffortPicker(title: "Effort", selection: $row.effort)
-                }
-                .padding(.bottom, 8)
-            }
-            Button("Add a Profile") { teams.form.addOverride(from: teams.profileNames) }
-                .buttonStyle(.settings)
-                .disabled(teams.form.overrides.count >= teams.profileNames.count)
-            InspectorNote("Each sets one Profile's CLI, model and effort, over the Team's Workers above.")
+            InspectorNote("Set for every Worker whose node sets none, over what its Profile says. Empty leaves it to the Profile.")
         }
     }
 }
@@ -538,6 +499,10 @@ private struct TeamRules: View {
                 Checkbox("Have sasuke review each writing Worker", isOn: rule(\.review, \.review), size: 14)
                 Checkbox("Merge verified branches without asking", isOn: rule(\.mergeWithoutAsking, \.mergeWithoutAsking), size: 14)
             }
+            SquareStepper(text: verifyRetries == 1 ? "Send a failed writer back once" : "Send a failed writer back up to \(verifyRetries) times",
+                          minus: verifyRetries > 1 ? { teams.form.verifyRetries = verifyRetries - 1 } : nil,
+                          plus: verifyRetries < 10 ? { teams.form.verifyRetries = verifyRetries + 1 } : nil,
+                          label: "Verification retries")
             HStack(alignment: .firstTextBaseline) {
                 InspectorNote(isSet ? "These rules are the Team's own." : "Not set here: your Orchestrator settings apply.")
                 if isSet {
@@ -551,10 +516,12 @@ private struct TeamRules: View {
     }
 
     private var maxWorkers: Int { teams.form.maxWorkers ?? teams.fallbackRules?.maxWorkers ?? 3 }
+    private var verifyRetries: Int { teams.form.verifyRetries ?? 1 }
 
     private var isSet: Bool {
         let form = teams.form
         return form.maxWorkers != nil || form.planApproval != nil || form.review != nil || form.mergeWithoutAsking != nil
+            || form.verifyRetries != nil
     }
 
     /// A toggle that shows the Team's value, else the human's, and sets the Team's.
@@ -569,6 +536,7 @@ private struct TeamRules: View {
         teams.form.planApproval = nil
         teams.form.review = nil
         teams.form.mergeWithoutAsking = nil
+        teams.form.verifyRetries = nil
     }
 }
 

@@ -55,6 +55,7 @@ struct ContentView: View {
                 }
                 // Asked while Settings change or close with a Team's edits not saved (ui-ux/0103).
                 UnsavedTeamModal(teams: model.teamSettings)
+                UnsavedProfileModal(profiles: model.profileSettings)
             }
         }
         // Every floating panel, over the modals too (ui-ux/0125).
@@ -118,7 +119,12 @@ struct TitleBar: View {
         // the spacers share the room, which keeps it centred while the sides are about even.
         HStack(spacing: 24) {
             HStack(spacing: 10) {
-                EchoMark().frame(width: 25, height: 25, alignment: .topLeading)
+                // Echo's logo is its app icon (ui-ux/0154); the icon's own margin is cropped by the frame.
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 32, height: 32)
+                    .accessibilityLabel("Echo")
                 Text("Echo").font(Ledger.display(22)).textCase(.uppercase).foregroundStyle(Ledger.ink)
             }
             .fixedSize()
@@ -259,11 +265,14 @@ struct LedgerTree: View {
 }
 
 /// A line of the tree: 32 pt tall, a wash when hovered, the sunk fill when picked, square
-/// everywhere; a Worker's row says it is picked with its marker (ui-ux/0111).
+/// everywhere; a Worker's row says it is picked with its marker (ui-ux/0111), any other row with
+/// the accent edge (ui-ux/0152).
 struct TreeRow<Label: View>: View {
     let selected: Bool
     /// 0 for a repo, 1 for an agent, 2 for a Worker.
     let indent: Int
+    /// The row starts with a `ListMarker`, which shows it picked in place of the edge.
+    var marked = false
     let action: () -> Void
     @ViewBuilder var label: () -> Label
     @StateObject private var hovering = Flag()
@@ -278,6 +287,7 @@ struct TreeRow<Label: View>: View {
                 .frame(height: 32)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(selected ? Ledger.selected : hovering.on ? Ledger.wash : Color.clear)
+                .pickedEdge(selected && !marked)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -575,6 +585,7 @@ struct RailAgent: View {
                 .foregroundStyle(agent.live ? Ledger.ink : Ledger.ink3)
                 .frame(width: 32, height: 28)
                 .background(selected ? Ledger.selected : Color.clear)
+                .pickedEdge(selected)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -595,6 +606,7 @@ struct RailWorker: View {
             WorkerMark(worker: worker)
                 .frame(width: 32, height: 22)
                 .background(selected ? Ledger.selected : Color.clear)
+                .pickedEdge(selected)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1345,12 +1357,14 @@ struct LedgerRow: View {
 
     var body: some View {
         let selected = model.selection == .worker(repo: repo, id: worker.id)
-        TreeRow(selected: selected, indent: 2) {
+        TreeRow(selected: selected, indent: 2, marked: true) {
             model.select(.worker(repo: repo, id: worker.id))
         } label: {
             // A small square starts the row, under the agent's mark: the accent when picked or
             // hovered, grey otherwise; the title lines up with the agent's (ui-ux/0111, ui-ux/0127).
             ListMarker(picked: selected)
+            // Its Profile's face, so who is at work reads before what they work on (ui-ux/0158).
+            ProfileFace(face: worker.face, size: 20)
             Text(worker.title)
                 .fontWeight(worker.state == .needsYou && worker.isActive ? .semibold : .regular)
                 .foregroundStyle(selected || worker.state == .needsYou && worker.isActive ? Ledger.ink : Ledger.ink2)
